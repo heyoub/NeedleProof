@@ -1,0 +1,15 @@
+{
+  "corpus_id": "finance-of-the-future-2026",
+  "display_name": "Finance of the Future — Find and Pull Out",
+  "description": "The supplied model-directed extraction instructions and Northbank Advisors Hamilton Lane memo. Answer-key pages are intentionally excluded.",
+  "documents": [
+    {
+      "path": "data/event-pack/03_B_Find_And_Pull_Out_FINANCE.pdf",
+      "display_name": "Northbank Advisors — Hamilton Lane annual review",
+      "include_pages": [3, 4, 5, 6],
+      "publication_date": "2026-07-24",
+      "file_creation_date": "2026-07-29",
+      "metadata_source": "Finance of the Future event pack"
+    }
+  ]
+}

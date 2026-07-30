@@ -1,0 +1,46 @@
+[project]
+name = "needleproof-api"
+version = "0.1.0"
+description = "Evidence-hunting corpus agent with deterministic receipts"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "aiosqlite>=0.21,<1",
+  "fastapi>=0.116,<1",
+  "numpy>=1.26,<3",
+  "openai==2.45.0",
+  "openai-agents==0.18.3",
+  "pydantic>=2.12.2,<3",
+  "pydantic-settings>=2.10,<3",
+  "pypdf>=6,<7",
+  "turbovec==0.8.0",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.scripts]
+needleproof = "needleproof_api.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["apps/api/src/needleproof_api"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+  "live: requires OPENAI_API_KEY and live OpenAI access",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

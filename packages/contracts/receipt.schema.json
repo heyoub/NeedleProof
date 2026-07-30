@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://needleproof.local/contracts/receipt.schema.json",
+  "title": "NeedleProof sealed investigation receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "status",
+    "corpus_manifest_sha256",
+    "events",
+    "claims",
+    "openai_calls",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 8 },
+    "status": { "enum": ["completed", "incomplete", "cancelled", "failed"] },
+    "question": { "type": "string" },
+    "answer": { "type": ["string", "null"] },
+    "corpus_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "events": { "type": "array", "items": { "type": "object" } },
+    "claims": { "type": "array", "items": { "type": "object" } },
+    "openai_calls": { "type": "array", "items": { "type": "object" } },
+    "receipt_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "additionalProperties": true
+}

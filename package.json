@@ -1,0 +1,21 @@
+{
+  "name": "needleproof",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @needleproof/web build",
+    "corpus:build": "uv run needleproof corpus build",
+    "corpus:ensure": "uv run needleproof corpus ensure",
+    "demo": "pnpm corpus:ensure && concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"uv run uvicorn needleproof_api.main:app --app-dir apps/api/src --host 127.0.0.1 --port 8000\" \"pnpm --filter @needleproof/web dev --host 127.0.0.1 --port 4321\"",
+    "test": "uv run pytest && pnpm --filter @needleproof/web check && pnpm --filter @needleproof/web build",
+    "golden": "uv run needleproof golden",
+    "receipt:rehearsal": "uv run needleproof rehearsal"
+  },
+  "devDependencies": {
+    "concurrently": "9.2.1"
+  }
+}
