@@ -1,11 +1,11 @@
 {
     "schema_version": 1,
-    "commit": "1c878e66dd9b1d997e41e8484cb105367771589d",
-    "indexed_at": "2026-08-01T22:05:04Z",
+    "commit": "1849778cc5392caab66b74f0015b1b0fc65ade41",
+    "indexed_at": "2026-08-01T22:12:45Z",
     "project": "home-heyoub-Code-NeedleProof",
-    "nodes": 966,
-    "edges": 3207,
+    "nodes": 967,
+    "edges": 3155,
     "original_size": 4915200,
-    "compressed_size": 824181,
+    "compressed_size": 823323,
     "compression_level": 3
 }
