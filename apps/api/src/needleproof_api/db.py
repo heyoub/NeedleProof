@@ -200,8 +200,12 @@ class AppDatabase:
             await connection.execute("PRAGMA busy_timeout = 5000")
             await connection.execute("BEGIN IMMEDIATE")
             try:
-                hourly_actual = await self._sum_model_tokens(connection, hourly_cutoff)
-                daily_actual = await self._sum_model_tokens(connection, daily_cutoff)
+                hourly_actual = await self._sum_model_tokens(
+                    connection, hourly_cutoff, exclude_reserved=True
+                )
+                daily_actual = await self._sum_model_tokens(
+                    connection, daily_cutoff, exclude_reserved=True
+                )
                 hourly_reserved = await self._sum_reserved_tokens(connection, hourly_cutoff)
                 daily_reserved = await self._sum_reserved_tokens(connection, daily_cutoff)
                 if hourly_actual + hourly_reserved + reserved_tokens > hourly_limit:
@@ -224,14 +228,29 @@ class AppDatabase:
                 raise
 
     @staticmethod
-    async def _sum_model_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
-        cursor = await connection.execute(
-            """
+    async def _sum_model_tokens(
+        connection: aiosqlite.Connection,
+        started_at: str,
+        *,
+        exclude_reserved: bool = False,
+    ) -> int:
+        query = """
             SELECT c.record_json, r.created_at
             FROM openai_calls c
             JOIN runs r ON r.run_id = c.run_id
+        """
+        parameters: tuple[str, ...] = ()
+        if exclude_reserved:
+            query += """
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM model_token_reservations reservation
+                    WHERE reservation.run_id = c.run_id
+                      AND reservation.created_at >= ?
+                )
             """
-        )
+            parameters = (started_at,)
+        cursor = await connection.execute(query, parameters)
         total = 0
         for record_json, run_created_at in await cursor.fetchall():
             record = json.loads(record_json)
@@ -292,8 +311,12 @@ class AppDatabase:
                     await connection.commit()
                     return None
                 increase = required_reservation - current_reservation
-                hourly_committed = await self._sum_model_tokens(connection, hourly_cutoff)
-                daily_committed = await self._sum_model_tokens(connection, daily_cutoff)
+                hourly_committed = await self._sum_model_tokens(
+                    connection, hourly_cutoff, exclude_reserved=True
+                )
+                daily_committed = await self._sum_model_tokens(
+                    connection, daily_cutoff, exclude_reserved=True
+                )
                 hourly_committed += await self._sum_reserved_tokens(connection, hourly_cutoff)
                 daily_committed += await self._sum_reserved_tokens(connection, daily_cutoff)
                 if hourly_committed + increase > hourly_limit:

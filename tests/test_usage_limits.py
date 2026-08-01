@@ -302,3 +302,95 @@ async def test_next_model_call_expands_reservation_before_request(tmp_path):
 
     assert exceeded is None
     assert await database.get_model_token_reservation(run_id) == 140_000
+
+
+@pytest.mark.asyncio
+async def test_same_run_usage_is_not_double_counted_during_expansion(tmp_path):
+    database = AppDatabase(tmp_path / "same-run-expansion.sqlite3")
+    await database.initialize()
+    limiter = PublicUsageLimiter(
+        Settings(
+            max_model_tokens_per_hour=110,
+            max_model_tokens_per_day=110,
+            model_token_reservation_per_run=100,
+        ),
+        database,
+    )
+    run_id = "run_near_limit"
+    await limiter.admit(
+        run_id=run_id,
+        session_id="near-limit",
+        client_ip="192.0.2.32",
+        rehearsal=False,
+    )
+    await database.create_run(
+        run_id=run_id,
+        session_id="near-limit",
+        rehearsal=False,
+        question="expand without double counting",
+        corpus_id="corpus",
+        corpus_version="version",
+        manifest_sha256="digest",
+    )
+    await database.append_openai_call(
+        run_id,
+        1,
+        {"operation": "model", "token_usage": {"total_tokens": 60}},
+    )
+
+    exceeded = await database.expand_model_token_reservation(
+        run_id=run_id,
+        call_token_ceiling=50,
+        hourly_cutoff="2020-01-01T00:00:00+00:00",
+        daily_cutoff="2020-01-01T00:00:00+00:00",
+        hourly_limit=110,
+        daily_limit=110,
+    )
+
+    assert exceeded is None
+    assert await database.get_model_token_reservation(run_id) == 110
+
+
+@pytest.mark.asyncio
+async def test_active_run_usage_is_not_double_counted_for_new_admission(tmp_path):
+    database = AppDatabase(tmp_path / "active-run-admission.sqlite3")
+    await database.initialize()
+    settings = Settings(
+        max_model_tokens_per_hour=110,
+        max_model_tokens_per_day=110,
+        model_token_reservation_per_run=100,
+    )
+    first_limiter = PublicUsageLimiter(settings, database)
+    await first_limiter.admit(
+        run_id="run_active_usage",
+        session_id="first",
+        client_ip="192.0.2.33",
+        rehearsal=False,
+    )
+    await database.create_run(
+        run_id="run_active_usage",
+        session_id="first",
+        rehearsal=False,
+        question="active usage",
+        corpus_id="corpus",
+        corpus_version="version",
+        manifest_sha256="digest",
+    )
+    await database.append_openai_call(
+        "run_active_usage",
+        1,
+        {"operation": "model", "token_usage": {"total_tokens": 60}},
+    )
+
+    second_limiter = PublicUsageLimiter(
+        settings.model_copy(update={"model_token_reservation_per_run": 10}),
+        database,
+    )
+    await second_limiter.admit(
+        run_id="run_second",
+        session_id="second",
+        client_ip="192.0.2.34",
+        rehearsal=False,
+    )
+
+    assert await database.get_model_token_reservation("run_second") == 10
