@@ -200,18 +200,12 @@ class AppDatabase:
             await connection.execute("PRAGMA busy_timeout = 5000")
             await connection.execute("BEGIN IMMEDIATE")
             try:
-                hourly_actual = await self._sum_model_tokens(
-                    connection, hourly_cutoff, exclude_reserved=True
-                )
-                daily_actual = await self._sum_model_tokens(
-                    connection, daily_cutoff, exclude_reserved=True
-                )
-                hourly_reserved = await self._sum_reserved_tokens(connection, hourly_cutoff)
-                daily_reserved = await self._sum_reserved_tokens(connection, daily_cutoff)
-                if hourly_actual + hourly_reserved + reserved_tokens > hourly_limit:
+                hourly_committed = await self._sum_committed_model_tokens(connection, hourly_cutoff)
+                daily_committed = await self._sum_committed_model_tokens(connection, daily_cutoff)
+                if hourly_committed + reserved_tokens > hourly_limit:
                     await connection.rollback()
                     return "hourly"
-                if daily_actual + daily_reserved + reserved_tokens > daily_limit:
+                if daily_committed + reserved_tokens > daily_limit:
                     await connection.rollback()
                     return "daily"
                 await connection.execute(
@@ -228,29 +222,14 @@ class AppDatabase:
                 raise
 
     @staticmethod
-    async def _sum_model_tokens(
-        connection: aiosqlite.Connection,
-        started_at: str,
-        *,
-        exclude_reserved: bool = False,
-    ) -> int:
-        query = """
+    async def _sum_model_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
+        cursor = await connection.execute(
+            """
             SELECT c.record_json, r.created_at
             FROM openai_calls c
             JOIN runs r ON r.run_id = c.run_id
-        """
-        parameters: tuple[str, ...] = ()
-        if exclude_reserved:
-            query += """
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM model_token_reservations reservation
-                    WHERE reservation.run_id = c.run_id
-                      AND reservation.created_at >= ?
-                )
             """
-            parameters = (started_at,)
-        cursor = await connection.execute(query, parameters)
+        )
         total = 0
         for record_json, run_created_at in await cursor.fetchall():
             record = json.loads(record_json)
@@ -262,17 +241,44 @@ class AppDatabase:
         return total
 
     @staticmethod
-    async def _sum_reserved_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
+    async def _sum_committed_model_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
+        """Count window usage plus every active run's unspent reserved capacity."""
+
+        cursor = await connection.execute(
+            "SELECT run_id, reserved_tokens FROM model_token_reservations"
+        )
+        reservations = {str(run_id): int(tokens) for run_id, tokens in await cursor.fetchall()}
+        total_actual = {run_id: 0 for run_id in reservations}
+        window_actual = {run_id: 0 for run_id in reservations}
+        unreserved_window_actual = 0
+
         cursor = await connection.execute(
             """
-            SELECT COALESCE(SUM(reserved_tokens), 0)
-            FROM model_token_reservations
-            WHERE created_at >= ?
-            """,
-            (started_at,),
+            SELECT c.run_id, c.record_json, r.created_at
+            FROM openai_calls c
+            JOIN runs r ON r.run_id = c.run_id
+            """
         )
-        row = await cursor.fetchone()
-        return int(row[0] or 0)
+        for run_id, record_json, run_created_at in await cursor.fetchall():
+            record = json.loads(record_json)
+            if record.get("operation") != "model":
+                continue
+            tokens = int((record.get("token_usage") or {}).get("total_tokens") or 0)
+            call_started_at = str(record.get("started_at") or run_created_at)
+            run_id = str(run_id)
+            if run_id not in reservations:
+                if call_started_at >= started_at:
+                    unreserved_window_actual += tokens
+                continue
+            total_actual[run_id] += tokens
+            if call_started_at >= started_at:
+                window_actual[run_id] += tokens
+
+        active_commitment = sum(
+            window_actual[run_id] + max(reserved_tokens - total_actual[run_id], 0)
+            for run_id, reserved_tokens in reservations.items()
+        )
+        return unreserved_window_actual + active_commitment
 
     async def release_model_token_reservation(self, run_id: str) -> None:
         async with aiosqlite.connect(self.path) as connection:
@@ -311,14 +317,8 @@ class AppDatabase:
                     await connection.commit()
                     return None
                 increase = required_reservation - current_reservation
-                hourly_committed = await self._sum_model_tokens(
-                    connection, hourly_cutoff, exclude_reserved=True
-                )
-                daily_committed = await self._sum_model_tokens(
-                    connection, daily_cutoff, exclude_reserved=True
-                )
-                hourly_committed += await self._sum_reserved_tokens(connection, hourly_cutoff)
-                daily_committed += await self._sum_reserved_tokens(connection, daily_cutoff)
+                hourly_committed = await self._sum_committed_model_tokens(connection, hourly_cutoff)
+                daily_committed = await self._sum_committed_model_tokens(connection, daily_cutoff)
                 if hourly_committed + increase > hourly_limit:
                     await connection.rollback()
                     return "hourly"

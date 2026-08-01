@@ -394,3 +394,67 @@ async def test_active_run_usage_is_not_double_counted_for_new_admission(tmp_path
     )
 
     assert await database.get_model_token_reservation("run_second") == 10
+
+
+@pytest.mark.asyncio
+async def test_old_active_reservation_keeps_remaining_capacity_in_rolling_window(tmp_path):
+    database = AppDatabase(tmp_path / "old-active-reservation.sqlite3")
+    await database.initialize()
+    old_started_at = "2020-01-01T00:00:00+00:00"
+    cutoff = "2020-01-01T01:00:00+00:00"
+    await database.create_run(
+        run_id="run_old_active",
+        session_id="old",
+        rehearsal=False,
+        question="old active run",
+        corpus_id="corpus",
+        corpus_version="version",
+        manifest_sha256="digest",
+    )
+    assert (
+        await database.reserve_model_tokens(
+            run_id="run_old_active",
+            reserved_tokens=100,
+            created_at=old_started_at,
+            hourly_cutoff=cutoff,
+            daily_cutoff=cutoff,
+            hourly_limit=100,
+            daily_limit=100,
+        )
+        is None
+    )
+    await database.append_openai_call(
+        "run_old_active",
+        1,
+        {
+            "operation": "model",
+            "started_at": old_started_at,
+            "token_usage": {"total_tokens": 60},
+        },
+    )
+
+    assert (
+        await database.reserve_model_tokens(
+            run_id="run_fits_exactly",
+            reserved_tokens=60,
+            created_at="2020-01-01T02:00:00+00:00",
+            hourly_cutoff=cutoff,
+            daily_cutoff=cutoff,
+            hourly_limit=100,
+            daily_limit=100,
+        )
+        is None
+    )
+
+    assert (
+        await database.reserve_model_tokens(
+            run_id="run_exceeds",
+            reserved_tokens=1,
+            created_at="2020-01-01T02:00:00+00:00",
+            hourly_cutoff=cutoff,
+            daily_cutoff=cutoff,
+            hourly_limit=100,
+            daily_limit=100,
+        )
+        == "hourly"
+    )
