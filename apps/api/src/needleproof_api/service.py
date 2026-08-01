@@ -27,10 +27,12 @@ from .retrieval import CorpusStore
 from .util import new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
-VERIFIER_VERSION = "deterministic-v1"
+VERIFIER_VERSION = EvidenceVerifier.version
 
 
-def compose_authoritative_answer(claims: list[VerifiedClaim], searches: int) -> str | None:
+def compose_authoritative_answer(
+    claims: list[VerifiedClaim], searches: int, corpus_version: str
+) -> str | None:
     accepted = [claim for claim in claims if claim.status != ClaimStatus.UNVERIFIED]
     if not accepted:
         return None
@@ -39,7 +41,10 @@ def compose_authoritative_answer(claims: list[VerifiedClaim], searches: int) -> 
     for claim in accepted:
         statement = claim.statement.strip().rstrip(".")
         if claim.status == ClaimStatus.NOT_FOUND:
-            sentences.append(f"{statement}. Not found after {searches} searches.")
+            sentences.append(
+                f"{statement}. Not found after {searches} searches across corpus version "
+                f"{corpus_version}."
+            )
         elif claim.status == ClaimStatus.CONFLICT:
             sentences.append(f"{statement}. The verified sources contain a conflict.")
         elif claim.status == ClaimStatus.DATE_VARIANT:
@@ -148,7 +153,9 @@ class InvestigationService:
                             "verification_notes": claim.verification_notes,
                         },
                     )
-                answer = compose_authoritative_answer(claims, context.searches)
+                answer = compose_authoritative_answer(
+                    claims, context.searches, self.corpus.corpus_version
+                )
                 status = RunStatus.COMPLETED if answer else RunStatus.INCOMPLETE
                 envelope = self._envelope(
                     run_id, request.question, status=status, answer=answer, claims=claims
@@ -228,7 +235,6 @@ class InvestigationService:
         for event in receipt.get("events", []):
             if event.get("type") in {"run.started", "run.completed"}:
                 continue
-            await asyncio.sleep(0.08)
             await ledger.append(event["type"], {**event.get("payload", {}), "replayed": True})
         envelope = self._envelope(
             run_id,

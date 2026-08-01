@@ -20,8 +20,8 @@ export const fontSizeLg = Token.make({
   name: 'font-size-lg',
   category: 'typography',
   axes: ['theme'] as const,
-  values: { light: '1.25rem', dark: '1.25rem' },
-  fallback: '1.25rem',
+  values: { light: '2rem', dark: '2rem' },
+  fallback: '2rem',
 });
 
 export const spacingSm = Token.make({
@@ -52,14 +52,14 @@ export const colorText = Token.make({
   name: 'color-text',
   category: 'color',
   axes: ['theme'] as const,
-  values: { light: '#1a1a2e', dark: '#e8e8f0' },
-  fallback: '#1a1a2e',
+  values: { light: '#171916', dark: '#f2eee4' },
+  fallback: '#171916',
 });
 
 export const colorSurface = Token.make({
   name: 'color-surface',
   category: 'color',
   axes: ['theme'] as const,
-  values: { light: '#ffffff', dark: '#1a1a2e' },
-  fallback: '#ffffff',
+  values: { light: '#f2eee4', dark: '#171916' },
+  fallback: '#f2eee4',
 });

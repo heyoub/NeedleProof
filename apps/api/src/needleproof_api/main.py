@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
@@ -244,3 +245,8 @@ async def quote_challenge(request: Request, body: QuoteChallengeRequest) -> JSON
             "normalization_operations": operations,
         }
     )
+
+
+web_dist = Path(os.getenv("NEEDLEPROOF_WEB_DIST", "apps/web/dist"))
+if web_dist.is_dir():
+    app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")

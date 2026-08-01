@@ -1,9 +1,13 @@
 ---
 interface Props {
   title?: string;
+  description?: string;
 }
 
-const { title = 'czap starter' } = Astro.props;
+const {
+  title = 'NeedleProof — reproducible evidence investigations',
+  description = 'Ask a closed corpus a real question. Watch the agent search, inspect, compare, and prove its answer.',
+} = Astro.props;
 ---
 
 <!doctype html>
@@ -11,11 +15,10 @@ const { title = 'czap starter' } = Astro.props;
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#171916" />
     <title>{title}</title>
-    <style>
-      /* Each named @token block resolves against an export in
-         src/tokens/base.tokens.ts and compiles to a :root custom
-         property (--czap-<token-name>) plus an @property registration. */
+    <style is:global>
       @token fontSizeSm {}
       @token fontSizeMd {}
       @token fontSizeLg {}
@@ -25,23 +28,95 @@ const { title = 'czap starter' } = Astro.props;
       @token colorText {}
       @token colorSurface {}
 
+      :root {
+        --graphite: #171916;
+        --graphite-soft: #3f433d;
+        --ivory: #f2eee4;
+        --paper: #fbf8f0;
+        --rule: #c9c2b3;
+        --rule-dark: #8f897e;
+        --verify: #00a879;
+        --verify-deep: #006b50;
+        --warn: #a4482d;
+        --muted: #706d65;
+        --serif: Iowan Old Style, Baskerville, 'Times New Roman', serif;
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+      }
+
       *,
       *::before,
       *::after {
         box-sizing: border-box;
-        margin: 0;
       }
 
       html {
-        font-family: system-ui, -apple-system, sans-serif;
-        color: var(--czap-color-text);
-        background: var(--czap-color-surface);
-        line-height: 1.6;
+        color: var(--graphite);
+        background: var(--ivory);
+        font-family: var(--sans);
+        line-height: 1.5;
+        scroll-behavior: smooth;
       }
 
       body {
+        min-width: 320px;
         min-height: 100dvh;
-        padding: var(--czap-spacing-md);
+        margin: 0;
+        background:
+          linear-gradient(rgba(23, 25, 22, 0.035) 1px, transparent 1px),
+          var(--ivory);
+        background-size: 100% 44px;
+      }
+
+      button,
+      textarea,
+      input {
+        font: inherit;
+      }
+
+      button,
+      a {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      button:focus-visible,
+      a:focus-visible,
+      textarea:focus-visible,
+      dialog:focus-visible {
+        outline: 3px solid var(--verify);
+        outline-offset: 3px;
+      }
+
+      ::selection {
+        color: var(--paper);
+        background: var(--verify-deep);
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
   </head>

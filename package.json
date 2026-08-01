@@ -8,12 +8,12 @@
   },
   "scripts": {
     "build": "pnpm --filter @needleproof/web build",
-    "corpus:build": "uv run needleproof corpus build",
-    "corpus:ensure": "uv run needleproof corpus ensure",
-    "demo": "pnpm corpus:ensure && concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"uv run uvicorn needleproof_api.main:app --app-dir apps/api/src --host 127.0.0.1 --port 8000\" \"pnpm --filter @needleproof/web dev --host 127.0.0.1 --port 4321\"",
-    "test": "uv run pytest && pnpm --filter @needleproof/web check && pnpm --filter @needleproof/web build",
-    "golden": "uv run needleproof golden",
-    "receipt:rehearsal": "uv run needleproof rehearsal"
+    "corpus:build": "UV_CACHE_DIR=.uv-cache uv run --no-sync needleproof corpus build",
+    "corpus:ensure": "UV_CACHE_DIR=.uv-cache uv run --no-sync needleproof corpus ensure",
+    "demo": "pnpm corpus:ensure && concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"UV_CACHE_DIR=.uv-cache uv run --no-sync uvicorn needleproof_api.main:app --app-dir apps/api/src --host 127.0.0.1 --port 8000\" \"ASTRO_DEV_BACKGROUND=0 pnpm --filter @needleproof/web dev --host 127.0.0.1 --port 4321\"",
+    "test": "UV_CACHE_DIR=.uv-cache uv run --no-sync pytest && pnpm --filter @needleproof/web check && pnpm --filter @needleproof/web build",
+    "golden": "UV_CACHE_DIR=.uv-cache uv run --no-sync needleproof golden",
+    "receipt:rehearsal": "UV_CACHE_DIR=.uv-cache uv run --no-sync needleproof rehearsal"
   },
   "devDependencies": {
     "concurrently": "9.2.1"

@@ -69,6 +69,20 @@ def _distinct_dates(values: Iterable[ReportedValue]) -> set[str]:
     }
 
 
+def _has_explicit_conflict(evidence: list[VerifiedEvidence]) -> bool:
+    conflict_phrases = (
+        "cannot be right",
+        "incompatible",
+        "introduced the error",
+        "unresolved conflict",
+    )
+    return any(
+        item.relation == EvidenceRelation.CONTRADICTS
+        and any(phrase in item.normalized_quote.casefold() for phrase in conflict_phrases)
+        for item in evidence
+    )
+
+
 class EvidenceVerifier:
     version = "deterministic-verifier-v1"
 
@@ -146,6 +160,7 @@ class EvidenceVerifier:
         all_values_found = all(item.value_found for item in evidence)
         distinct_values = _distinct_values(claim.values)
         distinct_dates = _distinct_dates(claim.values)
+        explicit_conflict = _has_explicit_conflict(evidence)
 
         if claim.status == "not_found":
             if completed_searches >= 4 and not references and not claim.values:
@@ -167,7 +182,12 @@ class EvidenceVerifier:
             if not all_values_found:
                 notes.append("At least one reported value was not present in its cited quotation.")
         elif claim.status == "date_variant":
-            if len(distinct_values) >= 2 and len(distinct_dates) >= 2:
+            if explicit_conflict and len(distinct_values) >= 2:
+                status = ClaimStatus.CONFLICT
+                notes.append(
+                    "A verified quotation explicitly characterizes the values as erroneous or incompatible."
+                )
+            elif len(distinct_values) >= 2 and len(distinct_dates) >= 2:
                 status = ClaimStatus.DATE_VARIANT
             else:
                 status = ClaimStatus.POSSIBLE_CONFLICT
@@ -176,6 +196,11 @@ class EvidenceVerifier:
             if len(distinct_values) < 2:
                 status = ClaimStatus.UNVERIFIED
                 notes.append("A conflict requires at least two distinct reported values.")
+            elif explicit_conflict:
+                status = ClaimStatus.CONFLICT
+                notes.append(
+                    "A verified quotation explicitly characterizes the values as erroneous or incompatible."
+                )
             elif len(distinct_dates) >= 2 and len(distinct_dates) == len(claim.values):
                 status = ClaimStatus.DATE_VARIANT
                 notes.append(

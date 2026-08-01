@@ -9,6 +9,7 @@ from typing import Any
 
 from . import __version__
 from .config import Settings
+from .corpus import load_current_manifest
 from .db import AppDatabase
 from .models import LedgerEvent, RunEnvelope
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
@@ -86,6 +87,7 @@ class RunLedger:
     ) -> Path:
         events = await self.database.list_events(self.run_id)
         openai_calls = await self.database.list_openai_calls(self.run_id)
+        corpus_manifest = load_current_manifest(self.settings)
         lock_digests = {}
         for lock_path in (Path("uv.lock"), Path("pnpm-lock.yaml")):
             if lock_path.exists():
@@ -107,6 +109,10 @@ class RunLedger:
                 "reasoning_effort": self.settings.reasoning_effort,
                 "embedding_model": self.settings.embedding_model,
                 "embedding_dimensions": self.settings.embedding_dimensions,
+                "embedding_l2_normalized": corpus_manifest["embedding_l2_normalized"],
+                "turbovec_version": corpus_manifest["turbovec_version"],
+                "turbovec_bit_width": corpus_manifest["turbovec_bit_width"],
+                "retrieval_modes": corpus_manifest["retrieval"],
                 "parallel_tool_calls": False,
                 "max_turns": self.settings.max_turns,
                 "trace_include_sensitive_data": self.settings.trace_include_sensitive_data,
@@ -127,6 +133,8 @@ class RunLedger:
         receipt_sha = sha256_text(canonical_json(receipt))
         receipt["receipt_sha256"] = receipt_sha
         path = self.settings.receipts_dir / f"{self.run_id}.json"
+        if path.exists():
+            raise RuntimeError(f"Receipt {self.run_id} is already sealed")
         atomic_write_text(path, json.dumps(receipt, indent=2, ensure_ascii=False) + "\n")
         return path
 
@@ -159,3 +167,35 @@ def receipt_html(receipt: dict[str, Any]) -> str:
 <dl><dt>Run</dt><dd>{escaped(receipt.get("run_id"))}</dd><dt>Corpus digest</dt><dd><code>{escaped(receipt.get("corpus_manifest_sha256"))}</code></dd><dt>Receipt digest</dt><dd><code>{escaped(receipt.get("receipt_sha256"))}</code></dd></dl>
 <h2>Authoritative answer</h2><p>{escaped(receipt.get("answer"))}</p>{"".join(claim_cards)}
 <h2>Execution ledger</h2><ol>{events}</ol></body></html>"""
+
+
+def validate_receipt(receipt: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    expected_digest = receipt.get("receipt_sha256")
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    actual_digest = sha256_text(canonical_json(unsigned))
+    if expected_digest != actual_digest:
+        errors.append("Receipt digest does not match canonical content.")
+
+    previous_hash = "0" * 64
+    for event in receipt.get("events", []):
+        if event.get("previous_hash") != previous_hash:
+            errors.append(f"Event {event.get('sequence')} has a broken previous-hash link.")
+            break
+        event_body = {
+            "run_id": receipt.get("run_id"),
+            "sequence": event.get("sequence"),
+            "type": event.get("type"),
+            "occurred_at": event.get("occurred_at"),
+            "payload": event.get("payload", {}),
+            "previous_hash": previous_hash,
+        }
+        event_hash = sha256_text(previous_hash + canonical_json(event_body))
+        if event.get("event_hash") != event_hash:
+            errors.append(f"Event {event.get('sequence')} digest does not match its content.")
+            break
+        previous_hash = event_hash
+
+    if receipt.get("provenance", {}).get("event_chain_head") != previous_hash:
+        errors.append("Provenance event-chain head does not match the final ledger event.")
+    return errors

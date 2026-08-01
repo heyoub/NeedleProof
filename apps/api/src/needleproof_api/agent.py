@@ -46,6 +46,11 @@ values for the same metric and reporting period must both be reported as a confl
 relationship cannot be established, use possible_conflict. When evidence is missing, run four
 meaningfully different searches, then use not_found.
 
+Create one claim per metric or evidence relationship. Never combine a conflict conclusion with an
+unrelated period qualification in the same claim. If the source explicitly calls two values
+incompatible, erroneous, or unresolved, preserve them as a conflict even when one value came from
+an earlier call; a source-described error is not a legitimate date variant.
+
 Before completing, call verify_evidence with every factual claim. Treat its result as feedback and
 correct rejected claims. Your structured output is still a draft; application code verifies it again.
 Keep the prose concise and analytical.

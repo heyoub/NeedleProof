@@ -1,0 +1,12 @@
+.git
+.codebase-memory
+.env
+.venv
+.uv-cache
+**/__pycache__
+**/.astro
+**/dist
+**/node_modules
+data/needleproof.sqlite3*
+data/receipts/*
+!.gitkeep

@@ -2,8 +2,10 @@
 .env.*
 !.env.example
 .venv/
+.uv-cache/
 __pycache__/
 .pytest_cache/
+.pytest-runtime/
 .ruff_cache/
 .mypy_cache/
 *.pyc

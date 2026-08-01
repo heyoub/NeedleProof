@@ -1,8 +1,7 @@
-import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'astro/config';
 import { integration } from '@czap/astro';
 
-const dir = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+const dir = (path: string) => decodeURIComponent(new URL(path, import.meta.url).pathname);
 
 export default defineConfig({
   vite: {
