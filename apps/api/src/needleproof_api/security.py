@@ -7,6 +7,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from ipaddress import ip_address, ip_network
 
 from .config import Settings
 from .db import AppDatabase
@@ -25,6 +26,32 @@ def session_digest(token: str) -> str:
 
 def valid_browser_session(token: str | None) -> bool:
     return bool(token and _SESSION_TOKEN.fullmatch(token))
+
+
+def resolve_client_ip(
+    peer_host: str | None,
+    cf_connecting_ip: str | None,
+    trusted_proxy_cidrs: list[str],
+) -> str:
+    """Honor Cloudflare's client header only when the transport peer is trusted."""
+
+    if not peer_host:
+        return "unknown"
+    try:
+        peer_address = ip_address(peer_host)
+    except ValueError:
+        # ASGI test clients may expose a hostname. It remains a stable direct-peer key,
+        # and an unparseable peer can never become a trusted forwarding proxy.
+        return peer_host
+    peer_is_trusted = any(
+        peer_address in ip_network(cidr, strict=False) for cidr in trusted_proxy_cidrs
+    )
+    if peer_is_trusted and cf_connecting_ip:
+        try:
+            return str(ip_address(cf_connecting_ip.strip()))
+        except ValueError:
+            pass
+    return str(peer_address)
 
 
 class UsageLimitError(RuntimeError):

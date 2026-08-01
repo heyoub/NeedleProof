@@ -25,6 +25,7 @@ from .security import (
     PublicUsageLimiter,
     UsageLimitError,
     new_browser_session,
+    resolve_client_ip,
     session_digest,
     valid_browser_session,
 )
@@ -106,8 +107,10 @@ async def browser_session(request: Request, call_next):
     if created:
         token = new_browser_session()
     request.state.session_id = session_digest(token)
-    request.state.client_ip = request.headers.get("cf-connecting-ip") or (
-        request.client.host if request.client else "unknown"
+    request.state.client_ip = resolve_client_ip(
+        request.client.host if request.client else None,
+        request.headers.get("cf-connecting-ip"),
+        settings.trusted_proxy_cidrs,
     )
     response = await call_next(request)
     if created:

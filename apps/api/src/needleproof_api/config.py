@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from ipaddress import ip_network
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +39,7 @@ class Settings(BaseSettings):
     public_demo: bool = False
     session_cookie_name: str = "needleproof_session"
     session_cookie_secure: bool = False
+    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     max_runs_per_session_per_hour: int = 20
     max_runs_per_ip_per_hour: int = 60
     max_model_tokens_per_hour: int = 1_000_000
@@ -56,6 +58,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Model-token reservation per run cannot exceed the hourly or daily budget"
             )
+        try:
+            for cidr in self.trusted_proxy_cidrs:
+                ip_network(cidr, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Invalid trusted proxy CIDR: {exc}") from exc
         return self
 
     @property
