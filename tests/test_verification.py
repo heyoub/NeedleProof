@@ -61,6 +61,28 @@ def test_modified_or_fabricated_quote_is_rejected(corpus):
     assert not result.evidence[0].quote_found
 
 
+def test_missing_chunk_reference_makes_entire_claim_non_authoritative(corpus):
+    quote = (
+        "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
+        "improving to 50 percent from 48 percent."
+    )
+    valid = reference(MEMO_CHUNK, quote)
+    missing = reference(999999, quote)
+    claim = DraftClaim(
+        statement="Fee-related earnings were $345 million for the fiscal year.",
+        metric="fee-related earnings",
+        status="supported",
+        values=[ReportedValue(value="$345 million", evidence=[valid])],
+        evidence=[valid, missing],
+    )
+
+    result = EvidenceVerifier(corpus).verify_claims([claim], completed_searches=1)
+
+    assert result.claims[0].status == ClaimStatus.UNVERIFIED
+    assert not result.all_claims_authoritative
+    assert any("999999" in note for note in result.claims[0].verification_notes)
+
+
 def test_differing_aum_dates_are_date_variants(corpus):
     first = reference(
         MEMO_CHUNK,

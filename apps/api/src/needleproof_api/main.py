@@ -19,7 +19,7 @@ from .db import AppDatabase
 from .models import CorpusSummary, RunCreateRequest, RunCreateResponse, RunStatus
 from .receipt import receipt_html
 from .retrieval import CorpusStore
-from .service import InvestigationService
+from .service import InvestigationService, RunCapacityError
 from .util import normalize_evidence_text
 
 TERMINAL_STATUSES = {
@@ -115,7 +115,14 @@ async def corpus_summary(request: Request) -> CorpusSummary:
 @app.post("/api/runs", response_model=RunCreateResponse, status_code=202)
 async def create_run(request: Request, body: RunCreateRequest) -> RunCreateResponse:
     _, _, service = _services(request)
-    return await service.create_run(body)
+    try:
+        return await service.create_run(body)
+    except RunCapacityError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=str(exc),
+            headers={"Retry-After": "2"},
+        ) from exc
 
 
 @app.get("/api/runs/{run_id}")

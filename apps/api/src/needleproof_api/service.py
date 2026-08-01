@@ -30,6 +30,10 @@ from .verification import EvidenceVerifier
 VERIFIER_VERSION = EvidenceVerifier.version
 
 
+class RunCapacityError(RuntimeError):
+    """Raised before persistence when all investigation slots are occupied."""
+
+
 def compose_authoritative_answer(
     claims: list[VerifiedClaim], searches: int, corpus_version: str
 ) -> str | None:
@@ -61,29 +65,48 @@ class InvestigationService:
         self.corpus = corpus
         self.verifier = EvidenceVerifier(corpus)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_runs)
+        self._admission_lock = asyncio.Lock()
+        self._admitted_run_ids: set[str] = set()
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def create_run(self, request: RunCreateRequest) -> RunCreateResponse:
         run_id = new_run_id()
-        await self.database.create_run(
-            run_id=run_id,
-            session_id=request.session_id,
-            question=request.question.strip(),
-            corpus_id=self.corpus.corpus_id,
-            corpus_version=self.corpus.corpus_version,
-            manifest_sha256=self.corpus.manifest_sha256,
-        )
-        task = asyncio.create_task(
-            self._replay(run_id, request) if request.rehearsal else self._execute(run_id, request)
-        )
+        async with self._admission_lock:
+            if len(self._admitted_run_ids) >= self.settings.max_concurrent_runs:
+                raise RunCapacityError(
+                    "NeedleProof is at investigation capacity. Retry in a moment."
+                )
+            self._admitted_run_ids.add(run_id)
+        try:
+            await self.database.create_run(
+                run_id=run_id,
+                session_id=request.session_id,
+                question=request.question.strip(),
+                corpus_id=self.corpus.corpus_id,
+                corpus_version=self.corpus.corpus_version,
+                manifest_sha256=self.corpus.manifest_sha256,
+            )
+            task = asyncio.create_task(
+                self._replay(run_id, request)
+                if request.rehearsal
+                else self._execute(run_id, request)
+            )
+        except BaseException:
+            async with self._admission_lock:
+                self._admitted_run_ids.discard(run_id)
+            raise
         self._tasks[run_id] = task
-        task.add_done_callback(lambda _task: self._tasks.pop(run_id, None))
+        task.add_done_callback(lambda _task: self._finish_task(run_id))
         return RunCreateResponse(
             run_id=run_id,
             status=RunStatus.QUEUED,
             events_url=f"/api/runs/{run_id}/events",
             run_url=f"/api/runs/{run_id}",
         )
+
+    def _finish_task(self, run_id: str) -> None:
+        self._tasks.pop(run_id, None)
+        self._admitted_run_ids.discard(run_id)
 
     async def cancel(self, run_id: str) -> bool:
         task = self._tasks.get(run_id)
@@ -220,6 +243,10 @@ class InvestigationService:
             )
 
     async def _replay(self, run_id: str, request: RunCreateRequest) -> None:
+        async with self._semaphore:
+            await self._replay_with_slot(run_id, request)
+
+    async def _replay_with_slot(self, run_id: str, request: RunCreateRequest) -> None:
         ledger = RunLedger(run_id, self.database, self.settings)
         await ledger.hydrate()
         source = self.settings.rehearsal_path

@@ -113,6 +113,7 @@ class EvidenceVerifier:
         chunks = self.corpus.get_chunks([reference.chunk_id for reference in references])
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         evidence: list[VerifiedEvidence] = []
+        missing_reference = False
 
         for reference in references:
             chunk = chunks_by_id.get(reference.chunk_id)
@@ -136,6 +137,7 @@ class EvidenceVerifier:
             if not relevant_values:
                 value_found = True
             if not chunk:
+                missing_reference = True
                 notes.append(f"Chunk {reference.chunk_id} is not part of this corpus version.")
                 continue
             evidence.append(
@@ -156,8 +158,14 @@ class EvidenceVerifier:
                 )
             )
 
-        all_quotes_found = bool(evidence) and all(item.quote_found for item in evidence)
-        all_values_found = all(item.value_found for item in evidence)
+        all_quotes_found = (
+            not missing_reference
+            and bool(evidence)
+            and all(item.quote_found for item in evidence)
+        )
+        all_values_found = not missing_reference and all(
+            item.value_found for item in evidence
+        )
         distinct_values = _distinct_values(claim.values)
         distinct_dates = _distinct_dates(claim.values)
         explicit_conflict = _has_explicit_conflict(evidence)
