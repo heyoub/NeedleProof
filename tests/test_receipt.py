@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from needleproof_api.receipt import validate_receipt
+from needleproof_api.receipt import receipt_contract_schema, validate_receipt
 
 
 def test_featured_rehearsal_receipt_is_sealed(settings):
@@ -15,3 +16,16 @@ def test_featured_rehearsal_receipt_is_sealed(settings):
     assert receipt["configuration"]["model"] == "gpt-5.6-terra"
     assert receipt["configuration"]["reasoning_effort"] == "medium"
     assert receipt["configuration"]["trace_include_sensitive_data"] is False
+
+
+def test_committed_receipt_schema_is_generated_from_pydantic_contract():
+    committed = json.loads(
+        Path("packages/contracts/receipt.schema.json").read_text(encoding="utf-8")
+    )
+    assert committed == receipt_contract_schema()
+
+
+def test_receipt_contract_rejects_unknown_top_level_fields(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    receipt["surprise"] = "not part of the contract"
+    assert any("Extra inputs" in error for error in validate_receipt(receipt))

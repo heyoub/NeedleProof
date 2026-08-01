@@ -9,6 +9,7 @@
     "check": "astro check"
   },
   "dependencies": {
+    "@needleproof/contracts": "workspace:*",
     "@czap/astro": "0.10.0",
     "@czap/core": "0.10.0",
     "@czap/web": "0.10.0",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 from turbovec import IdMapIndex
+
+from .chunk_ids import ChunkId, chunk_id_from_uint64, chunk_id_to_uint64
 
 
 class TurboVecAdapter:
@@ -26,28 +29,39 @@ class TurboVecAdapter:
     def load(cls, path: Path, *, dimensions: int, bit_width: int = 4) -> TurboVecAdapter:
         return cls(IdMapIndex.load(str(path)), dimensions=dimensions, bit_width=bit_width)
 
-    def add(self, vectors: np.ndarray, external_ids: np.ndarray) -> None:
+    def add(self, vectors: np.ndarray, external_ids: Sequence[ChunkId]) -> None:
+        numeric_ids = np.asarray(
+            [chunk_id_to_uint64(chunk_id) for chunk_id in external_ids],
+            dtype=np.uint64,
+        )
         self._index.add_with_ids(
             np.ascontiguousarray(vectors, dtype=np.float32),
-            np.ascontiguousarray(external_ids, dtype=np.uint64),
+            np.ascontiguousarray(numeric_ids, dtype=np.uint64),
         )
 
     def search(
-        self, query: np.ndarray, *, top_k: int, allowlist: np.ndarray | None = None
-    ) -> list[tuple[int, float]]:
+        self, query: np.ndarray, *, top_k: int, allowlist: Sequence[ChunkId] | None = None
+    ) -> list[tuple[ChunkId, float]]:
         query = np.ascontiguousarray(query, dtype=np.float32)
         if query.ndim != 2 or query.shape[1] != self.dimensions:
             raise ValueError(f"Expected query shape (n, {self.dimensions}), received {query.shape}")
         kwargs = {}
         if allowlist is not None:
-            kwargs["allowlist"] = np.ascontiguousarray(allowlist, dtype=np.uint64)
+            kwargs["allowlist"] = np.ascontiguousarray(
+                [chunk_id_to_uint64(chunk_id) for chunk_id in allowlist],
+                dtype=np.uint64,
+            )
         scores, ids = self._index.search(query, top_k, **kwargs)
         return [
-            (int(chunk_id), float(score)) for score, chunk_id in zip(scores[0], ids[0], strict=True)
+            (chunk_id_from_uint64(int(chunk_id)), float(score))
+            for score, chunk_id in zip(scores[0], ids[0], strict=True)
         ]
 
-    def remove(self, external_id: int) -> None:
-        self._index.remove(external_id)
+    def remove(self, external_id: ChunkId) -> None:
+        self._index.remove(chunk_id_to_uint64(external_id))
+
+    def contains(self, external_id: ChunkId) -> bool:
+        return bool(self._index.contains(chunk_id_to_uint64(external_id)))
 
     def write(self, path: Path) -> None:
         self._index.write(str(path))

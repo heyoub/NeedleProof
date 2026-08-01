@@ -14,6 +14,7 @@ import numpy as np
 from openai import OpenAI
 from pypdf import PdfReader
 
+from .chunk_ids import ChunkId, chunk_id_from_uint64
 from .config import Settings
 from .models import ChunkRecord, CorpusSummary
 from .util import (
@@ -83,6 +84,28 @@ CREATE VIRTUAL TABLE chunks_fts USING fts5(
 CREATE INDEX idx_chunks_document_page ON chunks(document_id, physical_page_index, chunk_position);
 """
 
+CHUNK_DIGEST_COLUMNS = (
+    "chunk_external_id",
+    "document_id",
+    "document_name",
+    "physical_page_index",
+    "printed_page_label",
+    "chunk_position",
+    "raw_text",
+    "normalized_text",
+    "previous_chunk_id",
+    "next_chunk_id",
+    "sha256",
+    "token_estimate",
+)
+
+
+def chunk_records_digest(connection: sqlite3.Connection) -> str:
+    columns = ", ".join(CHUNK_DIGEST_COLUMNS)
+    rows = connection.execute(f"SELECT {columns} FROM chunks ORDER BY chunk_external_id").fetchall()
+    records = [dict(zip(CHUNK_DIGEST_COLUMNS, row, strict=True)) for row in rows]
+    return sha256_text(canonical_json(records))
+
 
 def l2_normalize(vectors: np.ndarray) -> np.ndarray:
     vectors = np.asarray(vectors, dtype=np.float32)
@@ -92,9 +115,9 @@ def l2_normalize(vectors: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(vectors / norms, dtype=np.float32)
 
 
-def deterministic_chunk_id(document_id: str, page_index: int, position: int) -> int:
+def deterministic_chunk_id(document_id: str, page_index: int, position: int) -> ChunkId:
     digest = bytes.fromhex(sha256_text(f"{document_id}:{page_index}:{position}"))
-    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return chunk_id_from_uint64(int.from_bytes(digest[:8], byteorder="big", signed=False))
 
 
 def _split_paragraphs(raw_text: str) -> list[str]:
@@ -104,10 +127,31 @@ def _split_paragraphs(raw_text: str) -> list[str]:
     return paragraphs
 
 
+def _split_oversized_paragraph(paragraph: str, *, target_max: int, overlap: int) -> list[str]:
+    if estimate_tokens(paragraph) <= target_max:
+        return [paragraph]
+    words = paragraph.split()
+    maximum_words = max(1, int(target_max / 1.32))
+    overlap_words = min(maximum_words - 1, max(1, int(overlap / 1.32)))
+    step = maximum_words - overlap_words
+    segments: list[str] = []
+    for start in range(0, len(words), step):
+        segment = " ".join(words[start : start + maximum_words])
+        if segment:
+            segments.append(segment)
+        if start + maximum_words >= len(words):
+            break
+    return segments
+
+
 def chunk_page(
     raw_text: str, *, target_min: int = 500, target_max: int = 700, overlap: int = 80
 ) -> list[str]:
-    paragraphs = _split_paragraphs(raw_text)
+    paragraphs = [
+        segment
+        for paragraph in _split_paragraphs(raw_text)
+        for segment in _split_oversized_paragraph(paragraph, target_max=target_max, overlap=overlap)
+    ]
     if not paragraphs:
         return []
 
@@ -134,7 +178,12 @@ def chunk_page(
             current = []
             current_tokens = 0
     if current:
-        if chunks and estimate_tokens("\n\n".join(current)) < overlap:
+        combined = "\n\n".join([*chunks[-1], *current]) if chunks else ""
+        if (
+            chunks
+            and estimate_tokens("\n\n".join(current)) < overlap
+            and estimate_tokens(combined) <= target_max
+        ):
             chunks[-1].extend(current)
         else:
             chunks.append(current)
@@ -217,7 +266,8 @@ class CorpusBuilder:
 
         all_chunks: list[ChunkRecord] = []
         manifest_documents: list[dict[str, Any]] = []
-        seen_chunk_ids: set[int] = set()
+        seen_chunk_ids: set[ChunkId] = set()
+        seen_document_ids: set[str] = set()
 
         try:
             for definition in source["documents"]:
@@ -230,6 +280,9 @@ class CorpusBuilder:
                     canonical_json({"source_sha256": source_sha, "include_pages": included_pages})
                 )
                 document_id = f"doc_{selection_digest[:24]}"
+                if document_id in seen_document_ids:
+                    raise ValueError(f"Duplicate corpus source selection resolves to {document_id}")
+                seen_document_ids.add(document_id)
                 display_name = definition.get("display_name") or original_path.name
                 destination_name = f"{document_id}{original_path.suffix.lower()}"
                 shutil.copy2(original_path, documents_dir / destination_name)
@@ -373,7 +426,7 @@ class CorpusBuilder:
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            str(chunk.chunk_id),
+                            chunk.chunk_id,
                             chunk.document_id,
                             chunk.document_name,
                             chunk.physical_page_index,
@@ -381,17 +434,17 @@ class CorpusBuilder:
                             chunk.chunk_position,
                             chunk.text,
                             chunk.normalized_text,
-                            str(chunk.previous_chunk_id)
+                            chunk.previous_chunk_id
                             if chunk.previous_chunk_id is not None
                             else None,
-                            str(chunk.next_chunk_id) if chunk.next_chunk_id is not None else None,
+                            chunk.next_chunk_id,
                             chunk.sha256,
                             chunk.token_estimate,
                         ),
                     )
                     connection.execute(
                         "INSERT INTO chunks_fts (chunk_external_id, document_id, text) VALUES (?, ?, ?)",
-                        (str(chunk.chunk_id), chunk.document_id, chunk.normalized_text),
+                        (chunk.chunk_id, chunk.document_id, chunk.normalized_text),
                     )
                 all_chunks.extend(document_chunks)
                 manifest_documents.append(
@@ -417,18 +470,24 @@ class CorpusBuilder:
             index = TurboVecAdapter.create(
                 dimensions=self.settings.embedding_dimensions, bit_width=4
             )
-            external_ids = np.asarray([chunk.chunk_id for chunk in all_chunks], dtype=np.uint64)
-            index.add(embeddings, external_ids)
+            index.add(embeddings, [chunk.chunk_id for chunk in all_chunks])
             index.write(build_dir / "index.tvim")
 
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.commit()
+            sqlite_chunk_digest = chunk_records_digest(connection)
+            connection.close()
+            sqlite_sha = sha256_file(db_path)
+            index_sha = sha256_file(build_dir / "index.tvim")
+
             manifest_without_digest = {
-                "schema_version": "1.0",
+                "schema_version": "1.2",
                 "corpus_id": source["corpus_id"],
                 "display_name": source["display_name"],
                 "description": source.get("description"),
                 "parser": {"name": "pypdf", "version": package_version("pypdf")},
                 "chunker": {
-                    "version": "page-semantic-v1",
+                    "version": "page-semantic-v3-bounded-paragraphs",
                     "target_tokens": [500, 700],
                     "overlap_tokens": 80,
                     "crosses_pages": False,
@@ -447,6 +506,11 @@ class CorpusBuilder:
                 "documents": manifest_documents,
                 "document_count": len(manifest_documents),
                 "chunk_count": len(all_chunks),
+                "artifacts": {
+                    "corpus_sqlite3_sha256": sqlite_sha,
+                    "index_tvim_sha256": index_sha,
+                    "ordered_chunk_records_sha256": sqlite_chunk_digest,
+                },
             }
             manifest_sha = sha256_text(canonical_json(manifest_without_digest))
             corpus_version = f"v_{manifest_sha[:16]}"
@@ -461,9 +525,20 @@ class CorpusBuilder:
 
             if len(index) != len(all_chunks):
                 raise ValueError("TurboVec length does not match chunk count")
-            row_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-            if row_count != len(all_chunks):
-                raise ValueError("SQLite chunk count does not match manifest")
+            with sqlite3.connect(db_path) as validation_connection:
+                row_count = validation_connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[
+                    0
+                ]
+                if row_count != len(all_chunks):
+                    raise ValueError("SQLite chunk count does not match manifest")
+                if chunk_records_digest(validation_connection) != sqlite_chunk_digest:
+                    raise ValueError("SQLite chunk-record digest failed validation")
+                persisted_ids = {
+                    row[0]
+                    for row in validation_connection.execute(
+                        "SELECT chunk_external_id FROM chunks"
+                    ).fetchall()
+                }
             loaded = TurboVecAdapter.load(
                 build_dir / "index.tvim",
                 dimensions=self.settings.embedding_dimensions,
@@ -471,6 +546,10 @@ class CorpusBuilder:
             )
             if len(loaded) != len(all_chunks):
                 raise ValueError("Persisted TurboVec index failed length validation")
+            if persisted_ids != {chunk.chunk_id for chunk in all_chunks}:
+                raise ValueError("SQLite chunk ID set does not match the build")
+            if not all(loaded.contains(chunk_id) for chunk_id in persisted_ids):
+                raise ValueError("TurboVec index ID set does not match SQLite")
         except BaseException:
             connection.close()
             shutil.rmtree(build_dir, ignore_errors=True)
@@ -480,6 +559,24 @@ class CorpusBuilder:
 
         version_dir = self.settings.corpora_dir / corpus_version
         if version_dir.exists():
+            existing_manifest = json.loads(
+                (version_dir / "manifest.json").read_text(encoding="utf-8")
+            )
+            expected_artifacts = manifest["artifacts"]
+            existing_artifacts = existing_manifest.get("artifacts") or {}
+            existing_valid = (
+                existing_manifest.get("manifest_sha256") == manifest_sha
+                and existing_artifacts == expected_artifacts
+                and sha256_file(version_dir / "corpus.sqlite3")
+                == expected_artifacts["corpus_sqlite3_sha256"]
+                and sha256_file(version_dir / "index.tvim")
+                == expected_artifacts["index_tvim_sha256"]
+            )
+            if not existing_valid:
+                shutil.rmtree(build_dir)
+                raise ValueError(
+                    f"Existing immutable corpus version {corpus_version} is corrupt or mismatched"
+                )
             shutil.rmtree(build_dir)
         else:
             os.replace(build_dir, version_dir)
@@ -504,19 +601,29 @@ class CorpusBuilder:
         )
 
 
+def corpus_version_path(settings: Settings, corpus_version: str) -> Path:
+    if not re.fullmatch(r"v_[0-9a-f]{16}", corpus_version):
+        raise ValueError("Invalid corpus version")
+    path = settings.corpora_dir / corpus_version
+    if not path.is_dir():
+        raise FileNotFoundError(f"Corpus version is missing: {corpus_version}")
+    return path
+
+
 def current_corpus_path(settings: Settings) -> Path:
     pointer_path = settings.corpora_dir / "current.json"
     if not pointer_path.exists():
         raise FileNotFoundError("No published corpus. Run `pnpm corpus:build`.")
     pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-    path = settings.corpora_dir / pointer["corpus_version"]
-    if not path.exists():
-        raise FileNotFoundError(f"Published corpus directory is missing: {path}")
-    return path
+    return corpus_version_path(settings, pointer["corpus_version"])
 
 
-def load_current_manifest(settings: Settings) -> dict[str, Any]:
-    corpus_path = current_corpus_path(settings)
+def load_corpus_manifest(settings: Settings, corpus_version: str | None = None) -> dict[str, Any]:
+    corpus_path = (
+        corpus_version_path(settings, corpus_version)
+        if corpus_version
+        else current_corpus_path(settings)
+    )
     manifest = json.loads((corpus_path / "manifest.json").read_text(encoding="utf-8"))
     actual = sha256_text(
         canonical_json(
@@ -529,4 +636,16 @@ def load_current_manifest(settings: Settings) -> dict[str, Any]:
     )
     if actual != manifest["manifest_sha256"]:
         raise ValueError("Corpus manifest digest verification failed")
+    expected_version = corpus_version or corpus_path.name
+    if manifest["corpus_version"] != expected_version:
+        raise ValueError("Corpus manifest version does not match its directory")
+    return manifest
+
+
+def load_current_manifest(settings: Settings) -> dict[str, Any]:
+    pointer = json.loads((settings.corpora_dir / "current.json").read_text(encoding="utf-8"))
+    manifest = load_corpus_manifest(settings, pointer["corpus_version"])
+    for key in ("corpus_id", "corpus_version", "manifest_sha256"):
+        if pointer.get(key) != manifest.get(key):
+            raise ValueError(f"Current corpus pointer does not match manifest field {key}")
     return manifest

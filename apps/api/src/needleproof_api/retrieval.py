@@ -11,10 +11,18 @@ from typing import Any, Literal
 import numpy as np
 from openai import AsyncOpenAI
 
+from .chunk_ids import ChunkId
 from .config import Settings
-from .corpus import current_corpus_path, l2_normalize, load_current_manifest
+from .corpus import (
+    chunk_records_digest,
+    corpus_version_path,
+    current_corpus_path,
+    l2_normalize,
+    load_corpus_manifest,
+    load_current_manifest,
+)
 from .models import ChunkRecord, SearchHit, SearchResult
-from .util import utc_now_iso
+from .util import sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
@@ -28,18 +36,72 @@ def _fts_query(query: str) -> str:
 
 
 class CorpusStore:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, corpus_version: str | None = None):
         self.settings = settings
-        self.path = current_corpus_path(settings)
-        self.manifest = load_current_manifest(settings)
+        self.path = (
+            corpus_version_path(settings, corpus_version)
+            if corpus_version
+            else current_corpus_path(settings)
+        )
+        self.manifest = (
+            load_corpus_manifest(settings, corpus_version)
+            if corpus_version
+            else load_current_manifest(settings)
+        )
         self.db_path = self.path / "corpus.sqlite3"
+        self._validate_artifacts()
         self.index = TurboVecAdapter.load(
             self.path / "index.tvim",
             dimensions=settings.embedding_dimensions,
             bit_width=int(self.manifest["turbovec_bit_width"]),
         )
-        self._openai = AsyncOpenAI()
+        self._openai: AsyncOpenAI | None = None
         self._search_lock = asyncio.Lock()
+        self._validate_index_ids()
+
+    def _validate_artifacts(self) -> None:
+        if self.manifest.get("schema_version") != "1.2":
+            raise ValueError("Corpus manifest uses an unsupported schema version")
+        if int(self.manifest["embedding_dimensions"]) != self.settings.embedding_dimensions:
+            raise ValueError("Configured embedding dimensions do not match the corpus")
+        artifacts = self.manifest.get("artifacts") or {}
+        expected_db_sha = artifacts.get("corpus_sqlite3_sha256")
+        expected_index_sha = artifacts.get("index_tvim_sha256")
+        if sha256_file(self.db_path) != expected_db_sha:
+            raise ValueError("Corpus SQLite artifact digest verification failed")
+        index_path = self.path / "index.tvim"
+        if sha256_file(index_path) != expected_index_sha:
+            raise ValueError("TurboVec artifact digest verification failed")
+
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as connection:
+            document_count = connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            if document_count != int(self.manifest["document_count"]):
+                raise ValueError("SQLite document count does not match the corpus manifest")
+            if chunk_count != int(self.manifest["chunk_count"]):
+                raise ValueError("SQLite chunk count does not match the corpus manifest")
+            if chunk_records_digest(connection) != artifacts.get("ordered_chunk_records_sha256"):
+                raise ValueError("SQLite chunk-record digest verification failed")
+            documents = {
+                row[0]: (row[1], row[2])
+                for row in connection.execute(
+                    "SELECT document_id, source_file, source_sha256 FROM documents"
+                ).fetchall()
+            }
+        for document_id, (source_file, source_sha) in documents.items():
+            if sha256_file(self.path / "documents" / source_file) != source_sha:
+                raise ValueError(f"Source artifact digest failed for {document_id}")
+
+    def _validate_index_ids(self) -> None:
+        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as connection:
+            ids = [
+                row[0]
+                for row in connection.execute("SELECT chunk_external_id FROM chunks").fetchall()
+            ]
+        if len(self.index) != len(ids):
+            raise ValueError("TurboVec length does not match SQLite")
+        if not all(self.index.contains(chunk_id) for chunk_id in ids):
+            raise ValueError("TurboVec ID set does not match SQLite")
 
     @property
     def corpus_id(self) -> str:
@@ -57,6 +119,8 @@ class CorpusStore:
         started_at = utc_now_iso()
         clock = time.perf_counter()
         try:
+            if self._openai is None:
+                self._openai = AsyncOpenAI()
             response = await self._openai.embeddings.create(
                 model=self.settings.embedding_model,
                 input=[query],
@@ -102,7 +166,7 @@ class CorpusStore:
         document_ids: list[str] | None,
         date_from: str | None,
         date_to: str | None,
-    ) -> np.ndarray | None:
+    ) -> list[ChunkId] | None:
         if not document_ids and not date_from and not date_to:
             return None
         conditions: list[str] = []
@@ -125,11 +189,11 @@ class CorpusStore:
         )
         with sqlite3.connect(self.db_path) as connection:
             rows = connection.execute(query, params).fetchall()
-        return np.asarray([int(row[0]) for row in rows], dtype=np.uint64)
+        return [row[0] for row in rows]
 
     def _dense_search(
-        self, query_vector: np.ndarray, k: int, allowlist: np.ndarray | None
-    ) -> list[tuple[int, float]]:
+        self, query_vector: np.ndarray, k: int, allowlist: list[ChunkId] | None
+    ) -> list[tuple[ChunkId, float]]:
         if allowlist is not None and len(allowlist) == 0:
             return []
         return self.index.search(query_vector, top_k=k, allowlist=allowlist)
@@ -139,8 +203,8 @@ class CorpusStore:
         query: str,
         k: int,
         document_ids: list[str] | None,
-        allowed: set[int] | None,
-    ) -> list[tuple[int, float]]:
+        allowed: set[ChunkId] | None,
+    ) -> list[tuple[ChunkId, float]]:
         fts = _fts_query(query)
         sql = """
             SELECT f.chunk_external_id, bm25(chunks_fts) AS rank
@@ -158,12 +222,11 @@ class CorpusStore:
                 rows = connection.execute(sql, params).fetchall()
         except sqlite3.OperationalError:
             return []
-        output: list[tuple[int, float]] = []
+        output: list[tuple[ChunkId, float]] = []
         for chunk_id, rank in rows:
-            numeric_id = int(chunk_id)
-            if allowed is not None and numeric_id not in allowed:
+            if allowed is not None and chunk_id not in allowed:
                 continue
-            output.append((numeric_id, float(rank)))
+            output.append((chunk_id, float(rank)))
             if len(output) >= k:
                 break
         return output
@@ -181,9 +244,9 @@ class CorpusStore:
     ) -> SearchResult:
         top_k = max(1, min(top_k, self.settings.max_top_k))
         allowlist = self._candidate_ids(document_ids, date_from, date_to)
-        allowed_set = set(map(int, allowlist)) if allowlist is not None else None
-        dense: list[tuple[int, float]] = []
-        lexical: list[tuple[int, float]] = []
+        allowed_set = set(allowlist) if allowlist is not None else None
+        dense: list[tuple[ChunkId, float]] = []
+        lexical: list[tuple[ChunkId, float]] = []
         if mode in {"dense", "hybrid"}:
             vector = await self.embed_query(query, recorder=recorder)
             async with self._search_lock:
@@ -258,17 +321,19 @@ class CorpusStore:
             corpus_manifest_sha256=self.manifest_sha256,
         )
 
-    def get_chunks(self, chunk_ids: list[int], neighbor_radius: int = 0) -> list[ChunkRecord]:
+    def resolve_chunk_ids(
+        self, chunk_ids: list[ChunkId], neighbor_radius: int = 0
+    ) -> list[ChunkId]:
         if not chunk_ids:
             return []
-        wanted: list[int] = []
-        seen: set[int] = set()
+        wanted: list[ChunkId] = []
+        seen: set[ChunkId] = set()
         with sqlite3.connect(self.db_path) as connection:
             connection.row_factory = sqlite3.Row
             for original_id in chunk_ids:
                 frontier = [original_id]
                 for _ in range(neighbor_radius):
-                    next_frontier: list[int] = []
+                    next_frontier: list[ChunkId] = []
                     for current_id in frontier:
                         row = connection.execute(
                             "SELECT previous_chunk_id, next_chunk_id FROM chunks WHERE chunk_external_id = ?",
@@ -277,21 +342,29 @@ class CorpusStore:
                         if row:
                             for value in (row["previous_chunk_id"], row["next_chunk_id"]):
                                 if value is not None:
-                                    next_frontier.append(int(value))
+                                    next_frontier.append(value)
                     frontier.extend(next_frontier)
                 for value in frontier:
                     if value not in seen:
                         seen.add(value)
                         wanted.append(value)
+        return wanted
+
+    def get_chunks(self, chunk_ids: list[ChunkId], neighbor_radius: int = 0) -> list[ChunkRecord]:
+        wanted = self.resolve_chunk_ids(chunk_ids, neighbor_radius)
+        if not wanted:
+            return []
+        with sqlite3.connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
             placeholders = ",".join("?" for _ in wanted)
             rows = connection.execute(
                 f"SELECT * FROM chunks WHERE chunk_external_id IN ({placeholders})",
-                [str(value) for value in wanted],
+                wanted,
             ).fetchall()
         mapped = {
-            int(row["chunk_external_id"]): ChunkRecord(
+            row["chunk_external_id"]: ChunkRecord(
                 internal_id=row["internal_id"],
-                chunk_id=int(row["chunk_external_id"]),
+                chunk_id=row["chunk_external_id"],
                 document_id=row["document_id"],
                 document_name=row["document_name"],
                 physical_page_index=row["physical_page_index"],
@@ -299,16 +372,26 @@ class CorpusStore:
                 chunk_position=row["chunk_position"],
                 text=row["raw_text"],
                 normalized_text=row["normalized_text"],
-                previous_chunk_id=(
-                    int(row["previous_chunk_id"]) if row["previous_chunk_id"] else None
-                ),
-                next_chunk_id=int(row["next_chunk_id"]) if row["next_chunk_id"] else None,
+                previous_chunk_id=(row["previous_chunk_id"] if row["previous_chunk_id"] else None),
+                next_chunk_id=row["next_chunk_id"] if row["next_chunk_id"] else None,
                 sha256=row["sha256"],
                 token_estimate=row["token_estimate"],
             )
             for row in rows
         }
         return [mapped[value] for value in wanted if value in mapped]
+
+    def document_chunk_ids(self, document_id: str, page_from: int, page_to: int) -> list[ChunkId]:
+        with sqlite3.connect(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT chunk_external_id FROM chunks
+                WHERE document_id = ? AND physical_page_index BETWEEN ? AND ?
+                ORDER BY physical_page_index, chunk_position
+                """,
+                (document_id, page_from, page_to),
+            ).fetchall()
+        return [row[0] for row in rows]
 
     def inspect_document(
         self, document_id: str, page_from: int | None = None, page_to: int | None = None

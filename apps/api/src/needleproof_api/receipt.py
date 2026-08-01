@@ -5,13 +5,15 @@ import html
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
 from .config import Settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
-from .models import LedgerEvent, RunEnvelope
+from .models import LedgerEvent, RunEnvelope, VerifiedClaim
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
 
 
@@ -25,8 +27,111 @@ def _git_sha() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+class ReceiptConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    reasoning_effort: str
+    embedding_model: str
+    embedding_dimensions: int
+    embedding_l2_normalized: bool
+    turbovec_version: str
+    turbovec_bit_width: int
+    retrieval_modes: list[str]
+    parallel_tool_calls: bool
+    max_turns: int
+    trace_include_sensitive_data: bool
+
+
+class ReceiptProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_version: str
+    git_commit_sha: str | None
+    dependency_lock_digests: dict[str, str]
+    agent_instruction_hash: str
+    tool_schema_hash: str
+    verifier_version: str
+    trace_id: str | None
+    sealed_at: str
+    event_chain_head: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ReceiptRehearsal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    source_run_id: str
+    validated: Literal[True]
+    reverified: Literal[True]
+    source_verifier_version: str
+    current_verifier_version: str
+    version_drift: bool
+
+
+class ReceiptEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int = Field(ge=1)
+    type: str
+    occurred_at: str
+    payload: dict[str, Any]
+    previous_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    event_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class ReceiptOpenAICall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int = Field(ge=1)
+    operation: Literal["embedding", "model"]
+    model: str
+    response_id: str | None
+    request_id: str | None
+    started_at: str
+    ended_at: str
+    duration_ms: float = Field(ge=0)
+    token_usage: dict[str, Any]
+    retry_count: int = Field(ge=0)
+    error: dict[str, Any] | None
+
+
+class ReceiptContract(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.2"]
+    run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
+    status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
+    question: str
+    answer: str | None
+    corpus_id: str
+    corpus_version: str = Field(pattern=r"^v_[0-9a-f]{16}$")
+    corpus_manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    claims: list[VerifiedClaim]
+    events: list[ReceiptEvent]
+    openai_calls: list[ReceiptOpenAICall]
+    configuration: ReceiptConfiguration
+    provenance: ReceiptProvenance
+    error: dict[str, Any] | None
+    rehearsal: ReceiptRehearsal | None
+    receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+def receipt_contract_schema() -> dict[str, Any]:
+    schema = ReceiptContract.model_json_schema()
+    schema["$id"] = "https://needleproof.local/contracts/receipt.schema.json"
+    return schema
+
+
 class RunLedger:
-    def __init__(self, run_id: str, database: AppDatabase, settings: Settings):
+    def __init__(
+        self,
+        run_id: str,
+        database: AppDatabase,
+        settings: Settings,
+        *,
+        corpus_manifest: dict[str, Any] | None = None,
+    ):
         self.run_id = run_id
         self.database = database
         self.settings = settings
@@ -34,6 +139,7 @@ class RunLedger:
         self._sequence = 0
         self._previous_hash = "0" * 64
         self._openai_sequence = 0
+        self._corpus_manifest = corpus_manifest
 
     async def hydrate(self) -> None:
         events = await self.database.list_events(self.run_id)
@@ -84,16 +190,17 @@ class RunLedger:
         verifier_version: str,
         trace_id: str | None,
         error: dict[str, Any] | None = None,
+        rehearsal: dict[str, Any] | None = None,
     ) -> Path:
         events = await self.database.list_events(self.run_id)
         openai_calls = await self.database.list_openai_calls(self.run_id)
-        corpus_manifest = load_current_manifest(self.settings)
+        corpus_manifest = self._corpus_manifest or load_current_manifest(self.settings)
         lock_digests = {}
         for lock_path in (Path("uv.lock"), Path("pnpm-lock.yaml")):
             if lock_path.exists():
                 lock_digests[lock_path.name] = sha256_file(lock_path)
         receipt: dict[str, Any] = {
-            "schema_version": "1.0",
+            "schema_version": "1.2",
             "run_id": envelope.run_id,
             "status": envelope.status.value,
             "question": envelope.question,
@@ -107,8 +214,8 @@ class RunLedger:
             "configuration": {
                 "model": self.settings.model,
                 "reasoning_effort": self.settings.reasoning_effort,
-                "embedding_model": self.settings.embedding_model,
-                "embedding_dimensions": self.settings.embedding_dimensions,
+                "embedding_model": corpus_manifest["embedding_model"],
+                "embedding_dimensions": corpus_manifest["embedding_dimensions"],
                 "embedding_l2_normalized": corpus_manifest["embedding_l2_normalized"],
                 "turbovec_version": corpus_manifest["turbovec_version"],
                 "turbovec_bit_width": corpus_manifest["turbovec_bit_width"],
@@ -129,6 +236,7 @@ class RunLedger:
                 "event_chain_head": events[-1]["event_hash"] if events else "0" * 64,
             },
             "error": error,
+            "rehearsal": rehearsal,
         }
         receipt_sha = sha256_text(canonical_json(receipt))
         receipt["receipt_sha256"] = receipt_sha
@@ -171,6 +279,13 @@ def receipt_html(receipt: dict[str, Any]) -> str:
 
 def validate_receipt(receipt: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    try:
+        ReceiptContract.model_validate(receipt)
+    except ValidationError as exc:
+        errors.extend(
+            f"Receipt contract violation at {'.'.join(map(str, item['loc']))}: {item['msg']}"
+            for item in exc.errors()
+        )
     expected_digest = receipt.get("receipt_sha256")
     unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     actual_digest = sha256_text(canonical_json(unsigned))

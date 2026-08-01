@@ -1,29 +1,690 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://needleproof.local/contracts/receipt.schema.json",
-  "title": "NeedleProof sealed investigation receipt",
-  "type": "object",
+  "$defs": {
+    "ClaimStatus": {
+      "enum": [
+        "verified",
+        "conflict",
+        "date_variant",
+        "not_found",
+        "unverified",
+        "possible_conflict"
+      ],
+      "title": "ClaimStatus",
+      "type": "string"
+    },
+    "EvidenceReference": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "pattern": "^chk_[0-9a-f]{16}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "metric_anchor": {
+          "minLength": 1,
+          "title": "Metric Anchor",
+          "type": "string"
+        },
+        "exact_quote": {
+          "title": "Exact Quote",
+          "type": "string"
+        },
+        "relation": {
+          "$ref": "#/$defs/EvidenceRelation",
+          "default": "supports"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "metric_anchor",
+        "exact_quote"
+      ],
+      "title": "EvidenceReference",
+      "type": "object"
+    },
+    "EvidenceRelation": {
+      "enum": [
+        "supports",
+        "contradicts",
+        "contextualizes"
+      ],
+      "title": "EvidenceRelation",
+      "type": "string"
+    },
+    "ReceiptConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "title": "Reasoning Effort",
+          "type": "string"
+        },
+        "embedding_model": {
+          "title": "Embedding Model",
+          "type": "string"
+        },
+        "embedding_dimensions": {
+          "title": "Embedding Dimensions",
+          "type": "integer"
+        },
+        "embedding_l2_normalized": {
+          "title": "Embedding L2 Normalized",
+          "type": "boolean"
+        },
+        "turbovec_version": {
+          "title": "Turbovec Version",
+          "type": "string"
+        },
+        "turbovec_bit_width": {
+          "title": "Turbovec Bit Width",
+          "type": "integer"
+        },
+        "retrieval_modes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Retrieval Modes",
+          "type": "array"
+        },
+        "parallel_tool_calls": {
+          "title": "Parallel Tool Calls",
+          "type": "boolean"
+        },
+        "max_turns": {
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "trace_include_sensitive_data": {
+          "title": "Trace Include Sensitive Data",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "reasoning_effort",
+        "embedding_model",
+        "embedding_dimensions",
+        "embedding_l2_normalized",
+        "turbovec_version",
+        "turbovec_bit_width",
+        "retrieval_modes",
+        "parallel_tool_calls",
+        "max_turns",
+        "trace_include_sensitive_data"
+      ],
+      "title": "ReceiptConfiguration",
+      "type": "object"
+    },
+    "ReceiptEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "occurred_at": {
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        },
+        "previous_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Previous Hash",
+          "type": "string"
+        },
+        "event_hash": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "type",
+        "occurred_at",
+        "payload",
+        "previous_hash",
+        "event_hash"
+      ],
+      "title": "ReceiptEvent",
+      "type": "object"
+    },
+    "ReceiptOpenAICall": {
+      "additionalProperties": false,
+      "properties": {
+        "sequence": {
+          "minimum": 1,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "operation": {
+          "enum": [
+            "embedding",
+            "model"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "response_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Id"
+        },
+        "request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Request Id"
+        },
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "ended_at": {
+          "title": "Ended At",
+          "type": "string"
+        },
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "number"
+        },
+        "token_usage": {
+          "additionalProperties": true,
+          "title": "Token Usage",
+          "type": "object"
+        },
+        "retry_count": {
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        }
+      },
+      "required": [
+        "sequence",
+        "operation",
+        "model",
+        "response_id",
+        "request_id",
+        "started_at",
+        "ended_at",
+        "duration_ms",
+        "token_usage",
+        "retry_count",
+        "error"
+      ],
+      "title": "ReceiptOpenAICall",
+      "type": "object"
+    },
+    "ReceiptProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "application_version": {
+          "title": "Application Version",
+          "type": "string"
+        },
+        "git_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Git Commit Sha"
+        },
+        "dependency_lock_digests": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Dependency Lock Digests",
+          "type": "object"
+        },
+        "agent_instruction_hash": {
+          "title": "Agent Instruction Hash",
+          "type": "string"
+        },
+        "tool_schema_hash": {
+          "title": "Tool Schema Hash",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        },
+        "sealed_at": {
+          "title": "Sealed At",
+          "type": "string"
+        },
+        "event_chain_head": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Chain Head",
+          "type": "string"
+        }
+      },
+      "required": [
+        "application_version",
+        "git_commit_sha",
+        "dependency_lock_digests",
+        "agent_instruction_hash",
+        "tool_schema_hash",
+        "verifier_version",
+        "trace_id",
+        "sealed_at",
+        "event_chain_head"
+      ],
+      "title": "ReceiptProvenance",
+      "type": "object"
+    },
+    "ReceiptRehearsal": {
+      "additionalProperties": false,
+      "properties": {
+        "source_receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Receipt Sha256",
+          "type": "string"
+        },
+        "source_run_id": {
+          "title": "Source Run Id",
+          "type": "string"
+        },
+        "validated": {
+          "const": true,
+          "title": "Validated",
+          "type": "boolean"
+        },
+        "reverified": {
+          "const": true,
+          "title": "Reverified",
+          "type": "boolean"
+        },
+        "source_verifier_version": {
+          "title": "Source Verifier Version",
+          "type": "string"
+        },
+        "current_verifier_version": {
+          "title": "Current Verifier Version",
+          "type": "string"
+        },
+        "version_drift": {
+          "title": "Version Drift",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_receipt_sha256",
+        "source_run_id",
+        "validated",
+        "reverified",
+        "source_verifier_version",
+        "current_verifier_version",
+        "version_drift"
+      ],
+      "title": "ReceiptRehearsal",
+      "type": "object"
+    },
+    "ReportedValue": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "temporal_anchor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temporal Anchor"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceReference"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "value",
+        "evidence"
+      ],
+      "title": "ReportedValue",
+      "type": "object"
+    },
+    "VerifiedClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ClaimStatus"
+        },
+        "values": {
+          "items": {
+            "$ref": "#/$defs/ReportedValue"
+          },
+          "title": "Values",
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/VerifiedEvidence"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "verification_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Verification Notes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "statement",
+        "metric",
+        "status"
+      ],
+      "title": "VerifiedClaim",
+      "type": "object"
+    },
+    "VerifiedEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "pattern": "^chk_[0-9a-f]{16}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "document_id": {
+          "title": "Document Id",
+          "type": "string"
+        },
+        "document_name": {
+          "title": "Document Name",
+          "type": "string"
+        },
+        "physical_page_index": {
+          "title": "Physical Page Index",
+          "type": "integer"
+        },
+        "printed_page_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Printed Page Label"
+        },
+        "metric_anchor": {
+          "title": "Metric Anchor",
+          "type": "string"
+        },
+        "metric_anchor_found": {
+          "title": "Metric Anchor Found",
+          "type": "boolean"
+        },
+        "temporal_anchors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Temporal Anchors",
+          "type": "array"
+        },
+        "temporal_anchors_found": {
+          "title": "Temporal Anchors Found",
+          "type": "boolean"
+        },
+        "quote": {
+          "title": "Quote",
+          "type": "string"
+        },
+        "normalized_quote": {
+          "title": "Normalized Quote",
+          "type": "string"
+        },
+        "normalization_operations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Normalization Operations",
+          "type": "array"
+        },
+        "relation": {
+          "$ref": "#/$defs/EvidenceRelation"
+        },
+        "quote_found": {
+          "title": "Quote Found",
+          "type": "boolean"
+        },
+        "value_found": {
+          "title": "Value Found",
+          "type": "boolean"
+        },
+        "chunk_sha256": {
+          "title": "Chunk Sha256",
+          "type": "string"
+        },
+        "source_url": {
+          "title": "Source Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "document_id",
+        "document_name",
+        "physical_page_index",
+        "metric_anchor",
+        "metric_anchor_found",
+        "temporal_anchors_found",
+        "quote",
+        "normalized_quote",
+        "relation",
+        "quote_found",
+        "value_found",
+        "chunk_sha256",
+        "source_url"
+      ],
+      "title": "VerifiedEvidence",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.2",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^run_[0-9a-f]{32}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "completed",
+        "incomplete",
+        "cancelled",
+        "failed",
+        "interrupted"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "question": {
+      "title": "Question",
+      "type": "string"
+    },
+    "answer": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Answer"
+    },
+    "corpus_id": {
+      "title": "Corpus Id",
+      "type": "string"
+    },
+    "corpus_version": {
+      "pattern": "^v_[0-9a-f]{16}$",
+      "title": "Corpus Version",
+      "type": "string"
+    },
+    "corpus_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Corpus Manifest Sha256",
+      "type": "string"
+    },
+    "claims": {
+      "items": {
+        "$ref": "#/$defs/VerifiedClaim"
+      },
+      "title": "Claims",
+      "type": "array"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/ReceiptEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "openai_calls": {
+      "items": {
+        "$ref": "#/$defs/ReceiptOpenAICall"
+      },
+      "title": "Openai Calls",
+      "type": "array"
+    },
+    "configuration": {
+      "$ref": "#/$defs/ReceiptConfiguration"
+    },
+    "provenance": {
+      "$ref": "#/$defs/ReceiptProvenance"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Error"
+    },
+    "rehearsal": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReceiptRehearsal"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "receipt_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Receipt Sha256",
+      "type": "string"
+    }
+  },
   "required": [
     "schema_version",
     "run_id",
     "status",
+    "question",
+    "answer",
+    "corpus_id",
+    "corpus_version",
     "corpus_manifest_sha256",
-    "events",
     "claims",
+    "events",
     "openai_calls",
+    "configuration",
+    "provenance",
+    "error",
+    "rehearsal",
     "receipt_sha256"
   ],
-  "properties": {
-    "schema_version": { "const": "1.0" },
-    "run_id": { "type": "string", "minLength": 8 },
-    "status": { "enum": ["completed", "incomplete", "cancelled", "failed"] },
-    "question": { "type": "string" },
-    "answer": { "type": ["string", "null"] },
-    "corpus_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "events": { "type": "array", "items": { "type": "object" } },
-    "claims": { "type": "array", "items": { "type": "object" } },
-    "openai_calls": { "type": "array", "items": { "type": "object" } },
-    "receipt_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
-  },
-  "additionalProperties": true
+  "title": "ReceiptContract",
+  "type": "object",
+  "$id": "https://needleproof.local/contracts/receipt.schema.json"
 }

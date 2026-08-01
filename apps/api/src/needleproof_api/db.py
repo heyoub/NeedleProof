@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS runs (
     answer TEXT,
     result_json TEXT,
     receipt_path TEXT,
-    error_json TEXT
+    receipt_sha256 TEXT,
+    error_json TEXT,
+    rehearsal INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS ledger_events (
@@ -61,13 +63,22 @@ class AppDatabase:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as connection:
             await connection.executescript(SCHEMA)
+            cursor = await connection.execute("PRAGMA table_info(runs)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "rehearsal" not in columns:
+                await connection.execute(
+                    "ALTER TABLE runs ADD COLUMN rehearsal INTEGER NOT NULL DEFAULT 0"
+                )
+            if "receipt_sha256" not in columns:
+                await connection.execute("ALTER TABLE runs ADD COLUMN receipt_sha256 TEXT")
             await connection.commit()
 
     async def create_run(
         self,
         *,
         run_id: str,
-        session_id: str | None,
+        session_id: str,
+        rehearsal: bool,
         question: str,
         corpus_id: str,
         corpus_version: str,
@@ -78,8 +89,8 @@ class AppDatabase:
                 """
                 INSERT INTO runs (
                     run_id, session_id, status, question, corpus_id, corpus_version,
-                    corpus_manifest_sha256, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    corpus_manifest_sha256, created_at, rehearsal
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -90,6 +101,7 @@ class AppDatabase:
                     corpus_version,
                     manifest_sha256,
                     utc_now_iso(),
+                    int(rehearsal),
                 ),
             )
             await connection.commit()
@@ -104,6 +116,7 @@ class AppDatabase:
             "answer",
             "result_json",
             "receipt_path",
+            "receipt_sha256",
             "error_json",
         }
         unknown = set(fields) - allowed
@@ -126,6 +139,55 @@ class AppDatabase:
             cursor = await connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,))
             row = await cursor.fetchone()
             return dict(row) if row else None
+
+    async def list_recoverable_runs(self) -> list[dict[str, Any]]:
+        async with aiosqlite.connect(self.path) as connection:
+            connection.row_factory = aiosqlite.Row
+            cursor = await connection.execute(
+                """
+                SELECT * FROM runs
+                WHERE status IN (?, ?, ?)
+                ORDER BY created_at
+                """,
+                (
+                    RunStatus.QUEUED.value,
+                    RunStatus.RUNNING.value,
+                    RunStatus.INTERRUPTED.value,
+                ),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_runs_created_before(self, cutoff: str) -> list[str]:
+        async with aiosqlite.connect(self.path) as connection:
+            cursor = await connection.execute(
+                "SELECT receipt_path FROM runs WHERE created_at < ? AND receipt_path IS NOT NULL",
+                (cutoff,),
+            )
+            paths = [str(row[0]) for row in await cursor.fetchall()]
+            await connection.execute("DELETE FROM runs WHERE created_at < ?", (cutoff,))
+            await connection.commit()
+        return paths
+
+    async def sum_model_tokens_since(self, started_at: str) -> int:
+        async with aiosqlite.connect(self.path) as connection:
+            cursor = await connection.execute(
+                """
+                SELECT c.record_json
+                FROM openai_calls c
+                JOIN runs r ON r.run_id = c.run_id
+                WHERE r.created_at >= ?
+                """,
+                (started_at,),
+            )
+            rows = await cursor.fetchall()
+        total = 0
+        for (record_json,) in rows:
+            record = json.loads(record_json)
+            if record.get("operation") != "model":
+                continue
+            usage = record.get("token_usage") or {}
+            total += int(usage.get("total_tokens") or 0)
+        return total
 
     async def get_envelope(self, run_id: str) -> RunEnvelope | None:
         row = await self.get_run_row(run_id)

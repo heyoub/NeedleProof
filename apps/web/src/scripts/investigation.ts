@@ -1,51 +1,28 @@
 import { SSE, type SSEMessage } from '@czap/web';
 import { Millis } from '@czap/core';
 import { Effect, Fiber } from 'effect';
+import type {
+  Evidence,
+  LedgerEvent,
+  RunEnvelope,
+  RunStatus,
+} from '@needleproof/contracts';
 
-type RunStatus = 'queued' | 'running' | 'completed' | 'incomplete' | 'cancelled' | 'failed';
-
-interface LedgerEvent {
-  sequence: number;
-  type: string;
-  occurred_at: string;
-  payload: Record<string, unknown>;
-  event_hash: string;
-}
-
-interface Evidence {
-  chunk_id: number;
-  document_id: string;
-  document_name: string;
-  physical_page_index: number;
-  printed_page_label: string | null;
-  quote: string;
-  relation: string;
-  quote_found: boolean;
-  value_found: boolean;
-  chunk_sha256: string;
-  source_url: string;
-}
-
-interface Claim {
-  statement: string;
-  metric: string;
-  status: string;
-  evidence: Evidence[];
-}
-
-interface RunEnvelope {
-  run_id: string;
-  status: RunStatus;
-  question: string;
-  answer: string | null;
-  corpus_version: string;
-  corpus_manifest_sha256: string;
-  claims: Claim[];
-  receipt_url: string;
-  receipt_json_url: string;
-}
-
-const terminalEvents = new Set(['run.completed', 'run.incomplete', 'run.cancelled', 'run.failed', 'run.timeout']);
+const terminalEvents = new Set([
+  'run.completed',
+  'run.incomplete',
+  'run.cancelled',
+  'run.failed',
+  'run.timeout',
+  'run.interrupted',
+]);
+const terminalStatuses = new Set<RunStatus>([
+  'completed',
+  'incomplete',
+  'cancelled',
+  'failed',
+  'interrupted',
+]);
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const questionForm = el<HTMLFormElement>('question-form');
 const question = el<HTMLTextAreaElement>('question');
@@ -68,17 +45,12 @@ const quoteChallenge = el<HTMLButtonElement>('quote-challenge');
 const quoteChallengeResult = el<HTMLElement>('quote-challenge-result');
 
 let activeRunId: string | null = null;
+let activeCorpusVersion: string | null = null;
 let streamFiber: ReturnType<typeof Effect.runFork> | null = null;
 let previousFocus: HTMLElement | null = null;
 let challengeEvidence: Evidence | null = null;
-
-const sessionId = (() => {
-  const existing = localStorage.getItem('needleproof-session');
-  if (existing) return existing;
-  const created = crypto.randomUUID();
-  localStorage.setItem('needleproof-session', created);
-  return created;
-})();
+let terminalFetchInFlight = false;
+let fallbackPolling = false;
 
 function describeEvent(event: LedgerEvent): string {
   const payload = event.payload;
@@ -106,6 +78,7 @@ function describeEvent(event: LedgerEvent): string {
     'run.timeout': 'Time limit reached — partial receipt sealed',
     'run.cancelled': 'Investigation cancelled — partial receipt sealed',
     'run.failed': 'Investigation failed — diagnostic receipt sealed',
+    'run.interrupted': 'Investigation interrupted — recovery receipt sealed',
   };
   return labels[event.type] ?? event.type.replaceAll('.', ' ');
 }
@@ -136,10 +109,16 @@ function evidenceButton(evidence: Evidence, index: number): HTMLButtonElement {
 }
 
 function renderRun(run: RunEnvelope): void {
+  activeCorpusVersion = run.corpus_version;
   answerWaiting.hidden = true;
   answerContent.hidden = false;
   answerStatus.dataset.status = run.status;
-  answerStatus.textContent = run.status === 'completed' ? 'Authoritative · verified' : `${statusText(run.status)} · non-authoritative`;
+  answerStatus.textContent =
+    run.status === 'completed'
+      ? 'Authoritative · verified'
+      : run.status === 'incomplete' && run.answer
+        ? 'Verified subset · investigation incomplete'
+        : `${statusText(run.status)} · non-authoritative`;
   answerCopy.textContent = run.answer ?? 'No authoritative answer was released. Inspect the partial receipt for the evidence gathered and terminal status.';
   claims.replaceChildren();
   challengeEvidence = run.claims.flatMap((claim) => claim.evidence)[0] ?? null;
@@ -174,10 +153,55 @@ function renderRun(run: RunEnvelope): void {
   announcer.textContent = `Investigation ${run.status}. ${run.answer ?? 'No authoritative answer released.'}`;
 }
 
-async function fetchRun(runId: string): Promise<void> {
+async function loadRun(runId: string): Promise<RunEnvelope> {
   const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
   if (!response.ok) throw new Error(`Run fetch failed (${response.status})`);
-  renderRun((await response.json()) as RunEnvelope);
+  return (await response.json()) as RunEnvelope;
+}
+
+async function fetchRun(runId: string): Promise<RunEnvelope> {
+  const run = await loadRun(runId);
+  renderRun(run);
+  return run;
+}
+
+async function fetchUntilTerminal(runId: string): Promise<void> {
+  if (terminalFetchInFlight) return;
+  terminalFetchInFlight = true;
+  try {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const run = await loadRun(runId);
+      if (terminalStatuses.has(run.status)) {
+        renderRun(run);
+        stopStream();
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, Math.min(100 * 2 ** attempt, 1_500)));
+    }
+    throw new Error('The terminal event arrived before the completed run could be loaded. Reconnect or refresh to resume.');
+  } finally {
+    terminalFetchInFlight = false;
+  }
+}
+
+async function pollUntilTerminal(runId: string): Promise<void> {
+  if (fallbackPolling) return;
+  fallbackPolling = true;
+  connectionState.textContent = 'Polling for terminal state';
+  try {
+    for (let attempt = 0; attempt < 45; attempt += 1) {
+      const run = await loadRun(runId);
+      if (terminalStatuses.has(run.status)) {
+        renderRun(run);
+        stopStream();
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+    }
+    throw new Error('Unable to recover the terminal investigation state. Refresh to retry.');
+  } finally {
+    fallbackPolling = false;
+  }
 }
 
 function stopStream(): void {
@@ -202,12 +226,15 @@ function connectStream(runId: string): void {
         },
         onStateChange: (state) => {
           connectionState.textContent = state;
+          if (state === 'error') {
+            void pollUntilTerminal(runId).catch(showFailure);
+          }
         },
         onMessage: (message: SSEMessage) => {
           const event = message as unknown as LedgerEvent;
           addActivity(event);
           if (terminalEvents.has(event.type)) {
-            void fetchRun(runId).catch(showFailure).finally(stopStream);
+            void fetchUntilTerminal(runId).catch(showFailure);
           }
         },
       });
@@ -224,8 +251,11 @@ function resetRunUi(): void {
   activityLedger.replaceChildren();
   claims.replaceChildren();
   challengeEvidence = null;
+  activeCorpusVersion = null;
   quoteChallenge.hidden = true;
   quoteChallengeResult.textContent = '';
+  terminalFetchInFlight = false;
+  fallbackPolling = false;
   cancelButton.hidden = false;
   askButton.disabled = true;
   connectionState.textContent = 'Connecting';
@@ -245,11 +275,14 @@ async function beginRun(rehearsal = false): Promise<void> {
     const response = await fetch('/api/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ question: prompt, session_id: sessionId, rehearsal }),
+      body: JSON.stringify({ question: prompt, rehearsal }),
     });
     if (!response.ok) throw new Error(`Unable to start investigation (${response.status})`);
     const created = (await response.json()) as { run_id: string };
     activeRunId = created.run_id;
+    const url = new URL(window.location.href);
+    url.searchParams.set('run', created.run_id);
+    window.history.replaceState(null, '', url);
     connectStream(created.run_id);
   } catch (error) {
     showFailure(error);
@@ -321,16 +354,24 @@ quoteChallenge.addEventListener('click', async () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        run_id: activeRunId,
+        corpus_version: activeCorpusVersion,
         chunk_id: challengeEvidence.chunk_id,
         quote: `${challengeEvidence.quote} [altered]`,
       }),
     });
+    if (!response.ok) {
+      throw new Error(`Quote verification failed with HTTP ${response.status}`);
+    }
     const result = (await response.json()) as { status: string; quote_found: boolean };
     quoteChallengeResult.textContent = result.quote_found
       ? 'Unexpected match — inspect the verifier response.'
       : 'Rejected as expected: the altered quote does not exist in the cited chunk.';
-  } catch {
-    quoteChallengeResult.textContent = 'The quote challenge could not reach the verifier.';
+  } catch (error) {
+    quoteChallengeResult.textContent =
+      error instanceof Error
+        ? error.message
+        : 'The quote challenge could not reach the verifier.';
   } finally {
     quoteChallenge.disabled = false;
   }
@@ -339,6 +380,21 @@ el<HTMLButtonElement>('close-evidence').addEventListener('click', closeEvidence)
 evidenceDialog.addEventListener('click', (event) => {
   if (event.target === evidenceDialog) closeEvidence();
 });
+evidenceDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeEvidence();
+});
+
+const restoredRunId = new URL(window.location.href).searchParams.get('run');
+if (/^run_[0-9a-f]{32}$/.test(restoredRunId ?? '')) {
+  activeRunId = restoredRunId;
+  resetRunUi();
+  void fetchRun(restoredRunId!).then((run) => {
+    if (!terminalStatuses.has(run.status)) connectStream(restoredRunId!);
+  }).catch(showFailure).finally(() => {
+    askButton.disabled = false;
+  });
+}
 
 void fetch('/api/corpus')
   .then((response) => response.json())

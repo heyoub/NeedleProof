@@ -6,6 +6,8 @@
 __pycache__/
 .pytest_cache/
 .pytest-runtime/
+playwright-report/
+test-results/
 .ruff_cache/
 .mypy_cache/
 *.pyc
@@ -14,6 +16,8 @@ dist/
 .astro/
 .DS_Store
 data/corpora/.build-*/
+data/corpora/**/corpus.sqlite3-shm
+data/corpora/**/corpus.sqlite3-wal
 data/needleproof.sqlite3
 data/needleproof.sqlite3-*
 data/receipts/

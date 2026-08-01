@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,12 +26,28 @@ class Settings(BaseSettings):
     max_tool_calls: int = 12
     max_searches: int = 4
     max_opened_chunks: int = 50
+    max_opened_tokens: int = 50_000
     max_document_inspections: int = 2
+    max_inspection_pages: int = 3
+    max_inspection_characters: int = 24_000
     soft_timeout_seconds: float = 45.0
     hard_timeout_seconds: float = 60.0
     trace_include_sensitive_data: bool = False
     receipt_retention_days: int = 7
     max_concurrent_runs: int = 5
+    public_demo: bool = False
+    session_cookie_name: str = "needleproof_session"
+    session_cookie_secure: bool = False
+    max_runs_per_session_per_hour: int = 20
+    max_runs_per_ip_per_hour: int = 60
+    max_model_tokens_per_hour: int = 1_000_000
+    max_model_tokens_per_day: int = 5_000_000
+
+    @model_validator(mode="after")
+    def require_secure_cookie_for_public_demo(self) -> Settings:
+        if self.public_demo and not self.session_cookie_secure:
+            raise ValueError("Public demo mode requires a Secure browser-session cookie")
+        return self
 
     @property
     def app_db_path(self) -> Path:

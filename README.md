@@ -2,7 +2,7 @@
 
 **NeedleProof turns every corpus answer into a reproducible evidence investigation.**
 
-Ask a closed corpus a real question. Watch one agent search, inspect, compare, and verify its evidence. The final answer appears only after deterministic application code has checked its quotations and reported values; every run leaves a sealed, downloadable receipt.
+Ask a closed corpus a real question. Watch one agent search, inspect, compare, and verify its evidence. The final answer appears only after deterministic application code has checked quotation, metric, value, and temporal anchors; every run leaves an application-sealed, downloadable receipt.
 
 Built for the Finance of the Future event at Tactix in Philadelphia on July 29, 2026.
 
@@ -11,8 +11,8 @@ Built for the Finance of the Future event at Tactix in Philadelphia on July 29, 
 - One `NeedleProof Corpus Investigator` using GPT-5.6 Terra with medium reasoning
 - Four sequential tools: `search_corpus`, `read_chunks`, `inspect_document`, and `verify_evidence`
 - TurboVec dense retrieval plus SQLite FTS5 lexical search and reciprocal-rank fusion
-- Immutable, reproducibly indexed event corpus at 768 embedding dimensions
-- Exact-quote, numeric, date-variant, conflict, and bounded missing-evidence verification
+- Immutable, artifact-bound event corpus at 768 embedding dimensions
+- Exact quote/metric/value/time anchors, date variants, conflicts, and bounded missing-evidence verification
 - Append-only hash-chained execution ledger with canonical JSON and human-readable HTML receipts
 - Semantic SSE activity with replay, `Last-Event-ID`, cancellation, and terminal-state recovery
 - LiteShip 0.10.0 / Astro 7 forensic editorial interface—no React and no chatbot theater
@@ -34,7 +34,7 @@ pnpm demo
 
 Open [http://127.0.0.1:4321](http://127.0.0.1:4321). `pnpm demo` verifies the seeded corpus, starts FastAPI on port 8000, starts Astro on port 4321, and proxies `/api` from the web app to the API.
 
-The API performs a real Responses API smoke request at startup. If the configured Terra model is unavailable, startup fails clearly; NeedleProof never silently changes models.
+The process starts even when OpenAI is unavailable, so rehearsal, corpus inspection, and existing receipts remain usable. `/api/live` reports local liveness; `/api/ready` reports corpus/model readiness. A live run performs or reuses a cached capability check and fails precisely if Terra is unavailable—NeedleProof never silently changes models.
 
 ## Golden demo
 
@@ -80,15 +80,16 @@ The longer diagram and trust boundaries are in [docs/architecture.md](docs/archi
 
 ## Verification model
 
-The model produces a typed draft. It never publishes its own answer. The server reruns the same deterministic verifier after the agent finishes and builds the displayed prose only from accepted claims.
+The model produces structured evidence components rather than a publishable proposition. It must copy a canonical metric anchor, exact value, optional exact temporal anchor, evidence relation, and contiguous quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from those verified fields; the model's draft prose is never published.
 
 Verification checks include:
 
 - contiguous quote presence after Unicode normalization, whitespace folding, and PDF line-break dehyphenation
 - chunk membership in the current corpus version
-- currency, magnitude, percentages, basis points, units, dates, and reporting periods
+- metric-anchor identity plus currency, magnitude, percentages, basis points, units, and exact temporal anchors
+- supporting evidence for every accepted value; contextual or contradicting evidence cannot authorize a claim by itself
 - explicit contradiction language versus legitimate differences in reporting dates
-- four completed searches before accepting a bounded `not_found` conclusion
+- four successful, meaningfully distinct searches before accepting a bounded `not_found` conclusion
 
 A rejected claim is removed from the authoritative answer. A timeout, cancellation, invalid structured response, tool failure, or rate limit seals a non-authoritative partial receipt instead.
 
@@ -102,20 +103,22 @@ Every sealed receipt includes:
 - all model and embedding calls, response/request IDs when available, token use, retries, and sanitized errors
 - corpus manifest digest, agent-instruction hash, tool-schema hash, verifier version, Git SHA, dependency-lock digests, and runtime configuration
 
-Run IDs are random UUID-based identifiers and receipt routes send `noindex, nofollow`. The event build supports only the bundled public/fictional corpus; confidential uploads are explicitly unsupported.
+Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed.
+
+A server-generated `HttpOnly`, `SameSite=Lax` browser cookie owns every run. Read, SSE, cancel, receipt, and quote-verification routes enforce that ownership; run IDs are identifiers rather than bearer credentials. Live runs are bounded per browser and by per-session/IP rates plus hourly/daily token budgets. Receipt routes send `noindex, nofollow`. The event build supports only the bundled public/fictional corpus; confidential uploads are explicitly unsupported.
 
 ## Commands
 
 ```bash
 pnpm demo                 # ensure corpus, then run API + web
 pnpm test                 # Python tests, Astro type-check, production web build
-pnpm golden               # live hybrid top-8 retrieval gate
+pnpm golden               # live seeded-corpus passage-presence smoke test
 pnpm receipt:rehearsal    # validate receipt digest, hash chain, and golden statuses
 pnpm corpus:build         # reproducibly rebuild and atomically publish the corpus
 pnpm corpus:ensure        # verify the current manifest or build when absent
 ```
 
-The offline suite covers the TurboVec adapter, corpus manifest, deterministic chunk IDs, quote normalization, verifier rejection, conflicts, date variants, missing evidence, prompt-injection boundaries, and the sealed rehearsal receipt. The live golden suite currently requires at least 95% support-passage recall in the top eight fused results.
+The five-chunk seeded golden is intentionally described as a passage-presence smoke test, not a ranking benchmark. The offline retrieval gate builds a 100-plus-chunk haystack with overlapping finance terms, planted numeric decoys, instruction-like text, the Hamilton Lane material, and the Fairmount Studio general-business memo. It measures dense, lexical, and hybrid ranking, first-support reciprocal rank, multipassage conflict coverage, document/date filters, and ensures `k` is materially smaller than the corpus.
 
 ## Docker
 
@@ -132,11 +135,12 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The multi-stage image build
 `data/corpus-source.json` explicitly selects supported text-based PDF/TXT sources and physical pages. The builder:
 
 1. extracts page text and printed labels without OCR;
-2. creates page-bounded semantic chunks and stable unsigned 64-bit external IDs;
+2. creates page-bounded semantic chunks and stable opaque external IDs (converted to unsigned 64-bit values only inside the TurboVec adapter);
 3. embeds and L2-normalizes chunks;
 4. writes SQLite/FTS5 and TurboVec into a temporary version directory;
-5. validates document, row, ID, chunk, and index counts;
-6. hashes the canonical manifest and atomically advances `data/corpora/current.json`.
+5. validates document/row counts and the full SQLite-to-TurboVec ID set;
+6. commits hashes of `corpus.sqlite3`, `index.tvim`, copied documents, and canonical ordered chunk records into the manifest;
+7. hashes the canonical manifest and atomically advances `data/corpora/current.json` only after validation.
 
 Adding or removing a document creates a new immutable version. PDFs with no usable text fail clearly; OCR, DOCX, XLSX ingestion, crawlers, auth, pgvector, and confidential uploads remain intentionally out of scope.
 
@@ -165,6 +169,8 @@ See [docs/demo-script.md](docs/demo-script.md) for the two-minute presentation f
 - Python `>=3.11,<3.14`
 
 Both `uv.lock` and `pnpm-lock.yaml` are committed. LiteShip’s exact Astro, Effect, and `@czap/*` versions come from the 0.10.0 starter and lockfile rather than older indexed documentation.
+
+NeedleProof is available under the [MIT License](LICENSE).
 
 ---
 

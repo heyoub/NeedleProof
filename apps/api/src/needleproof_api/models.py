@@ -3,7 +3,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from .chunk_ids import ChunkId
 
 
 class RunStatus(StrEnum):
@@ -13,6 +15,7 @@ class RunStatus(StrEnum):
     INCOMPLETE = "incomplete"
     CANCELLED = "cancelled"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
 
 
 class ClaimStatus(StrEnum):
@@ -45,7 +48,7 @@ class DocumentRecord(BaseModel):
 
 class ChunkRecord(BaseModel):
     internal_id: int | None = None
-    chunk_id: int
+    chunk_id: ChunkId
     document_id: str
     document_name: str
     physical_page_index: int
@@ -53,14 +56,14 @@ class ChunkRecord(BaseModel):
     chunk_position: int
     text: str
     normalized_text: str
-    previous_chunk_id: int | None = None
-    next_chunk_id: int | None = None
+    previous_chunk_id: ChunkId | None = None
+    next_chunk_id: ChunkId | None = None
     sha256: str
     token_estimate: int
 
 
 class SearchHit(BaseModel):
-    chunk_id: int
+    chunk_id: ChunkId
     score: float
     dense_score: float | None = None
     lexical_score: float | None = None
@@ -83,16 +86,20 @@ class SearchResult(BaseModel):
 
 
 class EvidenceReference(BaseModel):
-    chunk_id: int
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
+    metric_anchor: str = Field(min_length=1)
     exact_quote: str
     relation: EvidenceRelation = EvidenceRelation.SUPPORTS
 
 
 class ReportedValue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     value: str
-    as_of_date: str | None = None
-    reporting_period: str | None = None
-    evidence: list[EvidenceReference] = Field(default_factory=list)
+    temporal_anchor: str | None = None
+    evidence: list[EvidenceReference] = Field(min_length=1)
 
 
 DraftStatus = Literal[
@@ -106,7 +113,8 @@ DraftStatus = Literal[
 
 
 class DraftClaim(BaseModel):
-    statement: str
+    model_config = ConfigDict(extra="forbid")
+
     metric: str
     status: DraftStatus
     values: list[ReportedValue] = Field(default_factory=list)
@@ -120,11 +128,17 @@ class AgentDraft(BaseModel):
 
 
 class VerifiedEvidence(BaseModel):
-    chunk_id: int
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
     document_id: str
     document_name: str
     physical_page_index: int
     printed_page_label: str | None = None
+    metric_anchor: str
+    metric_anchor_found: bool
+    temporal_anchors: list[str] = Field(default_factory=list)
+    temporal_anchors_found: bool
     quote: str
     normalized_quote: str
     normalization_operations: list[str] = Field(default_factory=list)
@@ -136,6 +150,8 @@ class VerifiedEvidence(BaseModel):
 
 
 class VerifiedClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     statement: str
     metric: str
     status: ClaimStatus
@@ -187,7 +203,6 @@ class RunEnvelope(BaseModel):
 
 class RunCreateRequest(BaseModel):
     question: str = Field(min_length=3, max_length=4000)
-    session_id: str | None = Field(default=None, max_length=200)
     rehearsal: bool = False
 
 

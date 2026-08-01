@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .config import Settings
-from .corpus import CorpusBuilder, load_current_manifest
+from .corpus import CorpusBuilder
 from .golden import run_golden_retrieval
 from .receipt import validate_receipt
 from .retrieval import CorpusStore
@@ -20,7 +20,7 @@ def _corpus_build(settings: Settings) -> int:
 
 def _corpus_ensure(settings: Settings) -> int:
     try:
-        manifest = load_current_manifest(settings)
+        manifest = CorpusStore(settings).manifest
     except (FileNotFoundError, ValueError, json.JSONDecodeError):
         return _corpus_build(settings)
     print(
@@ -31,9 +31,9 @@ def _corpus_ensure(settings: Settings) -> int:
 
 
 async def _model_smoke(settings: Settings) -> int:
-    from .main import verify_model_access
+    from .readiness import ModelAvailability
 
-    await verify_model_access(settings)
+    await ModelAvailability(settings, ttl_seconds=0).require()
     print(f"Model access confirmed: {settings.model}")
     return 0
 

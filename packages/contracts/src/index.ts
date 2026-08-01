@@ -4,7 +4,8 @@ export type RunStatus =
   | 'completed'
   | 'incomplete'
   | 'cancelled'
-  | 'failed';
+  | 'failed'
+  | 'interrupted';
 
 export type ClaimStatus =
   | 'verified'
@@ -15,16 +16,22 @@ export type ClaimStatus =
   | 'possible_conflict';
 
 export interface Evidence {
-  chunk_id: number;
+  chunk_id: string;
   document_id: string;
   document_name: string;
   physical_page_index: number;
   printed_page_label: string | null;
+  metric_anchor: string;
+  metric_anchor_found: boolean;
+  temporal_anchors: string[];
+  temporal_anchors_found: boolean;
   quote: string;
   normalized_quote: string;
+  normalization_operations: string[];
   relation: 'supports' | 'contradicts' | 'contextualizes';
   quote_found: boolean;
   value_found: boolean;
+  chunk_sha256: string;
   source_url: string;
 }
 
@@ -32,7 +39,7 @@ export interface VerifiedClaim {
   statement: string;
   metric: string;
   status: ClaimStatus;
-  values: Array<{ value: string; as_of_date: string | null; reporting_period: string | null }>;
+  values: Array<{ value: string; temporal_anchor: string | null }>;
   evidence: Evidence[];
   verification_notes: string[];
 }
