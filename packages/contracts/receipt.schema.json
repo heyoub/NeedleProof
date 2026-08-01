@@ -97,6 +97,16 @@
           "title": "Max Turns",
           "type": "integer"
         },
+        "max_model_output_tokens_per_call": {
+          "default": 8000,
+          "title": "Max Model Output Tokens Per Call",
+          "type": "integer"
+        },
+        "model_token_reservation_per_run": {
+          "default": 100000,
+          "title": "Model Token Reservation Per Run",
+          "type": "integer"
+        },
         "trace_include_sensitive_data": {
           "title": "Trace Include Sensitive Data",
           "type": "boolean"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from needleproof_api.agent import InvestigationContext
+from needleproof_api.agent import InvestigationContext, build_agent
 from needleproof_api.config import Settings
 from needleproof_api.models import ClaimStatus, DraftClaim
 from needleproof_api.verification import EvidenceVerifier
@@ -60,3 +60,8 @@ def test_rejected_fifth_search_does_not_increment_attempt_count(corpus):
     assert state.attempted_searches == 4
     assert state.completed_searches == 4
     assert state.searches == 4
+
+
+def test_agent_enforces_configured_output_token_cap():
+    agent = build_agent(Settings(max_model_output_tokens_per_call=4_321))
+    assert agent.model_settings.max_tokens == 4_321

@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -40,6 +41,8 @@ class ReceiptConfiguration(BaseModel):
     retrieval_modes: list[str]
     parallel_tool_calls: bool
     max_turns: int
+    max_model_output_tokens_per_call: int = 8_000
+    model_token_reservation_per_run: int = 100_000
     trace_include_sensitive_data: bool
 
 
@@ -181,6 +184,21 @@ class RunLedger:
             payload = {"sequence": self._openai_sequence, **record}
             await self.database.append_openai_call(self.run_id, self._openai_sequence, payload)
 
+    async def reserve_model_call_capacity(self, call_token_ceiling: int) -> None:
+        current = datetime.now(UTC)
+        exceeded = await self.database.expand_model_token_reservation(
+            run_id=self.run_id,
+            call_token_ceiling=call_token_ceiling,
+            hourly_cutoff=(current - timedelta(hours=1)).isoformat(),
+            daily_cutoff=(current - timedelta(days=1)).isoformat(),
+            hourly_limit=self.settings.max_model_tokens_per_hour,
+            daily_limit=self.settings.max_model_tokens_per_day,
+        )
+        if exceeded:
+            raise RuntimeError(
+                f"The public {exceeded} model budget cannot safely fund another model call."
+            )
+
     async def seal(
         self,
         envelope: RunEnvelope,
@@ -222,6 +240,8 @@ class RunLedger:
                 "retrieval_modes": corpus_manifest["retrieval"],
                 "parallel_tool_calls": False,
                 "max_turns": self.settings.max_turns,
+                "max_model_output_tokens_per_call": self.settings.max_model_output_tokens_per_call,
+                "model_token_reservation_per_run": self.settings.model_token_reservation_per_run,
                 "trace_include_sensitive_data": self.settings.trace_include_sensitive_data,
             },
             "provenance": {

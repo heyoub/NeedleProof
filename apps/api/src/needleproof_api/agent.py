@@ -383,6 +383,16 @@ class ReceiptHooks(RunHooksBase[InvestigationContext, Agent]):
         system_prompt: str | None,
         input_items: list[Any],
     ) -> None:
+        serialized_input = json.dumps(input_items, default=str, ensure_ascii=False)
+        input_token_ceiling = len((system_prompt or "").encode("utf-8")) + len(
+            serialized_input.encode("utf-8")
+        )
+        call_token_ceiling = (
+            input_token_ceiling
+            + context.context.settings.model_call_token_overhead
+            + context.context.settings.max_model_output_tokens_per_call
+        )
+        await context.context.ledger.reserve_model_call_capacity(call_token_ceiling)
         self._llm_started = time.perf_counter()
         self._llm_started_at = utc_now_iso()
         await context.context.ledger.append("agent.model.started", {"model": agent.model})
@@ -442,6 +452,7 @@ def build_agent(settings: Settings) -> Agent[InvestigationContext]:
             reasoning=Reasoning(effort=settings.reasoning_effort),
             verbosity="low",
             parallel_tool_calls=False,
+            max_tokens=settings.max_model_output_tokens_per_call,
             store=False,
         ),
     )

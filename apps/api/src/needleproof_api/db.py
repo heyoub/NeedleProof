@@ -262,6 +262,73 @@ class AppDatabase:
             )
             await connection.commit()
 
+    async def expand_model_token_reservation(
+        self,
+        *,
+        run_id: str,
+        call_token_ceiling: int,
+        hourly_cutoff: str,
+        daily_cutoff: str,
+        hourly_limit: int,
+        daily_limit: int,
+    ) -> str | None:
+        """Reserve enough remaining capacity before the next model call is sent."""
+
+        async with aiosqlite.connect(self.path) as connection:
+            await connection.execute("PRAGMA busy_timeout = 5000")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await connection.execute(
+                    "SELECT reserved_tokens FROM model_token_reservations WHERE run_id = ?",
+                    (run_id,),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    raise RuntimeError("Live run has no model-token reservation")
+                current_reservation = int(row[0])
+                actual_for_run = await self._sum_model_tokens_for_run(connection, run_id)
+                required_reservation = actual_for_run + call_token_ceiling
+                if required_reservation <= current_reservation:
+                    await connection.commit()
+                    return None
+                increase = required_reservation - current_reservation
+                hourly_committed = await self._sum_model_tokens(connection, hourly_cutoff)
+                daily_committed = await self._sum_model_tokens(connection, daily_cutoff)
+                hourly_committed += await self._sum_reserved_tokens(connection, hourly_cutoff)
+                daily_committed += await self._sum_reserved_tokens(connection, daily_cutoff)
+                if hourly_committed + increase > hourly_limit:
+                    await connection.rollback()
+                    return "hourly"
+                if daily_committed + increase > daily_limit:
+                    await connection.rollback()
+                    return "daily"
+                await connection.execute(
+                    """
+                    UPDATE model_token_reservations
+                    SET reserved_tokens = ?
+                    WHERE run_id = ?
+                    """,
+                    (required_reservation, run_id),
+                )
+                await connection.commit()
+                return None
+            except BaseException:
+                await connection.rollback()
+                raise
+
+    @staticmethod
+    async def _sum_model_tokens_for_run(connection: aiosqlite.Connection, run_id: str) -> int:
+        cursor = await connection.execute(
+            "SELECT record_json FROM openai_calls WHERE run_id = ?", (run_id,)
+        )
+        total = 0
+        for (record_json,) in await cursor.fetchall():
+            record = json.loads(record_json)
+            if record.get("operation") == "model":
+                usage = record.get("token_usage") or {}
+                total += int(usage.get("total_tokens") or 0)
+        return total
+
     async def get_model_token_reservation(self, run_id: str) -> int | None:
         async with aiosqlite.connect(self.path) as connection:
             cursor = await connection.execute(
@@ -365,11 +432,30 @@ class AppDatabase:
 
     async def append_openai_call(self, run_id: str, sequence: int, record: dict[str, Any]) -> None:
         async with aiosqlite.connect(self.path) as connection:
-            await connection.execute(
-                "INSERT INTO openai_calls (run_id, sequence, record_json) VALUES (?, ?, ?)",
-                (run_id, sequence, json.dumps(record, ensure_ascii=False, sort_keys=True)),
-            )
-            await connection.commit()
+            await connection.execute("PRAGMA busy_timeout = 5000")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                await connection.execute(
+                    """
+                    INSERT INTO openai_calls (run_id, sequence, record_json)
+                    VALUES (?, ?, ?)
+                    """,
+                    (run_id, sequence, json.dumps(record, ensure_ascii=False, sort_keys=True)),
+                )
+                if record.get("operation") == "model":
+                    actual_tokens = await self._sum_model_tokens_for_run(connection, run_id)
+                    await connection.execute(
+                        """
+                        UPDATE model_token_reservations
+                        SET reserved_tokens = MAX(reserved_tokens, ?)
+                        WHERE run_id = ?
+                        """,
+                        (actual_tokens, run_id),
+                    )
+                await connection.commit()
+            except BaseException:
+                await connection.rollback()
+                raise
 
     async def list_openai_calls(self, run_id: str) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.path) as connection:

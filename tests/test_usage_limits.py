@@ -220,3 +220,85 @@ async def test_reservation_cleanup_preserves_active_runs_and_removes_stale_rows(
     await database.update_run("run_active", status=RunStatus.FAILED)
     assert await database.release_terminal_or_orphan_token_reservations() == 1
     assert await database.get_model_token_reservation("run_active") is None
+
+
+@pytest.mark.asyncio
+async def test_recorded_model_usage_atomically_expands_active_reservation(tmp_path):
+    database = AppDatabase(tmp_path / "actual-usage-reservation.sqlite3")
+    await database.initialize()
+    settings = Settings(
+        max_model_tokens_per_hour=1_000_000,
+        max_model_tokens_per_day=1_000_000,
+        model_token_reservation_per_run=100_000,
+    )
+    limiter = PublicUsageLimiter(settings, database)
+    run_id = "run_actual_usage"
+    await limiter.admit(
+        run_id=run_id,
+        session_id="actual",
+        client_ip="192.0.2.30",
+        rehearsal=False,
+    )
+    await database.create_run(
+        run_id=run_id,
+        session_id="actual",
+        rehearsal=False,
+        question="record actual usage",
+        corpus_id="corpus",
+        corpus_version="version",
+        manifest_sha256="digest",
+    )
+
+    for sequence in (1, 2):
+        await database.append_openai_call(
+            run_id,
+            sequence,
+            {"operation": "model", "token_usage": {"total_tokens": 60_000}},
+        )
+
+    assert await database.get_model_token_reservation(run_id) == 120_000
+
+
+@pytest.mark.asyncio
+async def test_next_model_call_expands_reservation_before_request(tmp_path):
+    database = AppDatabase(tmp_path / "projected-call-reservation.sqlite3")
+    await database.initialize()
+    settings = Settings(
+        max_model_tokens_per_hour=1_000_000,
+        max_model_tokens_per_day=1_000_000,
+        model_token_reservation_per_run=100_000,
+    )
+    limiter = PublicUsageLimiter(settings, database)
+    run_id = "run_projected_call"
+    await limiter.admit(
+        run_id=run_id,
+        session_id="projected",
+        client_ip="192.0.2.31",
+        rehearsal=False,
+    )
+    await database.create_run(
+        run_id=run_id,
+        session_id="projected",
+        rehearsal=False,
+        question="reserve next model call",
+        corpus_id="corpus",
+        corpus_version="version",
+        manifest_sha256="digest",
+    )
+    await database.append_openai_call(
+        run_id,
+        1,
+        {"operation": "model", "token_usage": {"total_tokens": 90_000}},
+    )
+
+    exceeded = await database.expand_model_token_reservation(
+        run_id=run_id,
+        call_token_ceiling=50_000,
+        hourly_cutoff="2020-01-01T00:00:00+00:00",
+        daily_cutoff="2020-01-01T00:00:00+00:00",
+        hourly_limit=1_000_000,
+        daily_limit=1_000_000,
+    )
+
+    assert exceeded is None
+    assert await database.get_model_token_reservation(run_id) == 140_000
