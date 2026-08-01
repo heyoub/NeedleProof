@@ -42,11 +42,20 @@ class Settings(BaseSettings):
     max_runs_per_ip_per_hour: int = 60
     max_model_tokens_per_hour: int = 1_000_000
     max_model_tokens_per_day: int = 5_000_000
+    model_token_reservation_per_run: int = 100_000
 
     @model_validator(mode="after")
     def require_secure_cookie_for_public_demo(self) -> Settings:
         if self.public_demo and not self.session_cookie_secure:
             raise ValueError("Public demo mode requires a Secure browser-session cookie")
+        if self.model_token_reservation_per_run <= 0:
+            raise ValueError("Model-token reservation per run must be positive")
+        if self.model_token_reservation_per_run > min(
+            self.max_model_tokens_per_hour, self.max_model_tokens_per_day
+        ):
+            raise ValueError(
+                "Model-token reservation per run cannot exceed the hourly or daily budget"
+            )
         return self
 
     @property

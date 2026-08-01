@@ -37,6 +37,7 @@ class UsageLimitError(RuntimeError):
 class UsageDecision:
     session_attempts: int
     ip_attempts: int
+    reserved_tokens: int = 0
 
 
 class PublicUsageLimiter:
@@ -55,7 +56,9 @@ class PublicUsageLimiter:
         while window and window[0] < threshold:
             window.popleft()
 
-    async def admit(self, *, session_id: str, client_ip: str, rehearsal: bool) -> UsageDecision:
+    async def admit(
+        self, *, run_id: str, session_id: str, client_ip: str, rehearsal: bool
+    ) -> UsageDecision:
         now = time.monotonic()
         async with self._lock:
             session_window = self._session_attempts[session_id]
@@ -75,21 +78,29 @@ class PublicUsageLimiter:
             session_window.append(now)
             ip_window.append(now)
 
+        reserved_tokens = 0
         if not rehearsal:
             current = datetime.now(UTC)
-            hourly = await self.database.sum_model_tokens_since(
-                (current - timedelta(hours=1)).isoformat()
+            reserved_tokens = self.settings.model_token_reservation_per_run
+            exceeded = await self.database.reserve_model_tokens(
+                run_id=run_id,
+                reserved_tokens=reserved_tokens,
+                created_at=current.isoformat(),
+                hourly_cutoff=(current - timedelta(hours=1)).isoformat(),
+                daily_cutoff=(current - timedelta(days=1)).isoformat(),
+                hourly_limit=self.settings.max_model_tokens_per_hour,
+                daily_limit=self.settings.max_model_tokens_per_day,
             )
-            daily = await self.database.sum_model_tokens_since(
-                (current - timedelta(days=1)).isoformat()
-            )
-            if hourly >= self.settings.max_model_tokens_per_hour:
+            if exceeded == "hourly":
                 raise UsageLimitError(
                     "The public hourly model budget is exhausted.", retry_after=3600
                 )
-            if daily >= self.settings.max_model_tokens_per_day:
+            if exceeded == "daily":
                 raise UsageLimitError(
                     "The public daily model budget is exhausted.", retry_after=86400
                 )
 
-        return UsageDecision(len(session_window), len(ip_window))
+        return UsageDecision(len(session_window), len(ip_window), reserved_tokens)
+
+    async def release(self, run_id: str) -> None:
+        await self.database.release_model_token_reservation(run_id)

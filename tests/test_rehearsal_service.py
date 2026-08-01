@@ -104,7 +104,7 @@ async def test_admission_rejects_before_persistence_and_counts_rehearsals(tmp_pa
 @pytest.mark.asyncio
 async def test_run_endpoint_reports_capacity_with_retry_hint():
     class AtCapacity:
-        async def create_run(self, _body, *, session_id):
+        async def create_run(self, _body, *, session_id, client_ip):
             raise RunCapacityError("NeedleProof is at investigation capacity.")
 
     class AllowUsage:

@@ -50,8 +50,16 @@ CREATE TABLE IF NOT EXISTS openai_calls (
     PRIMARY KEY (run_id, sequence)
 );
 
+CREATE TABLE IF NOT EXISTS model_token_reservations (
+    run_id TEXT PRIMARY KEY,
+    reserved_tokens INTEGER NOT NULL CHECK (reserved_tokens > 0),
+    created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at);
 CREATE INDEX IF NOT EXISTS idx_ledger_run_sequence ON ledger_events(run_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_model_token_reservations_created_at
+    ON model_token_reservations(created_at);
 """
 
 
@@ -164,30 +172,124 @@ class AppDatabase:
                 (cutoff,),
             )
             paths = [str(row[0]) for row in await cursor.fetchall()]
+            await connection.execute(
+                """
+                DELETE FROM model_token_reservations
+                WHERE run_id IN (SELECT run_id FROM runs WHERE created_at < ?)
+                """,
+                (cutoff,),
+            )
             await connection.execute("DELETE FROM runs WHERE created_at < ?", (cutoff,))
             await connection.commit()
         return paths
 
-    async def sum_model_tokens_since(self, started_at: str) -> int:
+    async def reserve_model_tokens(
+        self,
+        *,
+        run_id: str,
+        reserved_tokens: int,
+        created_at: str,
+        hourly_cutoff: str,
+        daily_cutoff: str,
+        hourly_limit: int,
+        daily_limit: int,
+    ) -> str | None:
+        """Atomically check persisted usage plus active reservations and reserve capacity."""
+
         async with aiosqlite.connect(self.path) as connection:
-            cursor = await connection.execute(
-                """
-                SELECT c.record_json
-                FROM openai_calls c
-                JOIN runs r ON r.run_id = c.run_id
-                WHERE r.created_at >= ?
-                """,
-                (started_at,),
-            )
-            rows = await cursor.fetchall()
+            await connection.execute("PRAGMA busy_timeout = 5000")
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                hourly_actual = await self._sum_model_tokens(connection, hourly_cutoff)
+                daily_actual = await self._sum_model_tokens(connection, daily_cutoff)
+                hourly_reserved = await self._sum_reserved_tokens(connection, hourly_cutoff)
+                daily_reserved = await self._sum_reserved_tokens(connection, daily_cutoff)
+                if hourly_actual + hourly_reserved + reserved_tokens > hourly_limit:
+                    await connection.rollback()
+                    return "hourly"
+                if daily_actual + daily_reserved + reserved_tokens > daily_limit:
+                    await connection.rollback()
+                    return "daily"
+                await connection.execute(
+                    """
+                    INSERT INTO model_token_reservations (run_id, reserved_tokens, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (run_id, reserved_tokens, created_at),
+                )
+                await connection.commit()
+                return None
+            except BaseException:
+                await connection.rollback()
+                raise
+
+    @staticmethod
+    async def _sum_model_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
+        cursor = await connection.execute(
+            """
+            SELECT c.record_json, r.created_at
+            FROM openai_calls c
+            JOIN runs r ON r.run_id = c.run_id
+            """
+        )
         total = 0
-        for (record_json,) in rows:
+        for record_json, run_created_at in await cursor.fetchall():
             record = json.loads(record_json)
-            if record.get("operation") != "model":
+            call_started_at = str(record.get("started_at") or run_created_at)
+            if record.get("operation") != "model" or call_started_at < started_at:
                 continue
             usage = record.get("token_usage") or {}
             total += int(usage.get("total_tokens") or 0)
         return total
+
+    @staticmethod
+    async def _sum_reserved_tokens(connection: aiosqlite.Connection, started_at: str) -> int:
+        cursor = await connection.execute(
+            """
+            SELECT COALESCE(SUM(reserved_tokens), 0)
+            FROM model_token_reservations
+            WHERE created_at >= ?
+            """,
+            (started_at,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0] or 0)
+
+    async def release_model_token_reservation(self, run_id: str) -> None:
+        async with aiosqlite.connect(self.path) as connection:
+            await connection.execute(
+                "DELETE FROM model_token_reservations WHERE run_id = ?", (run_id,)
+            )
+            await connection.commit()
+
+    async def get_model_token_reservation(self, run_id: str) -> int | None:
+        async with aiosqlite.connect(self.path) as connection:
+            cursor = await connection.execute(
+                "SELECT reserved_tokens FROM model_token_reservations WHERE run_id = ?",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row else None
+
+    async def release_terminal_or_orphan_token_reservations(self) -> int:
+        async with aiosqlite.connect(self.path) as connection:
+            cursor = await connection.execute(
+                """
+                DELETE FROM model_token_reservations
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM runs
+                    WHERE runs.run_id = model_token_reservations.run_id
+                    AND runs.status IN (?, ?)
+                )
+                """,
+                (RunStatus.QUEUED.value, RunStatus.RUNNING.value),
+            )
+            await connection.commit()
+            return max(cursor.rowcount, 0)
+
+    async def sum_model_tokens_since(self, started_at: str) -> int:
+        async with aiosqlite.connect(self.path) as connection:
+            return await self._sum_model_tokens(connection, started_at)
 
     async def get_envelope(self, run_id: str) -> RunEnvelope | None:
         row = await self.get_run_row(run_id)

@@ -70,9 +70,9 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.database = database
     app.state.corpus = corpus
-    app.state.service = InvestigationService(settings, database, corpus)
-    await app.state.service.reconcile_abandoned_runs()
     app.state.usage_limiter = PublicUsageLimiter(settings, database)
+    app.state.service = InvestigationService(settings, database, corpus, app.state.usage_limiter)
+    await app.state.service.reconcile_abandoned_runs()
     app.state.model_availability = ModelAvailability(settings)
     model_probe = asyncio.create_task(app.state.model_availability.refresh())
     yield
@@ -183,17 +183,15 @@ async def corpus_summary(request: Request) -> CorpusSummary:
 @app.post("/api/runs", response_model=RunCreateResponse, status_code=202)
 async def create_run(request: Request, body: RunCreateRequest) -> RunCreateResponse:
     _, _, service = _services(request)
-    limiter: PublicUsageLimiter = request.app.state.usage_limiter
     try:
         if not body.rehearsal:
             availability: ModelAvailability = request.app.state.model_availability
             await availability.require()
-        await limiter.admit(
+        return await service.create_run(
+            body,
             session_id=request.state.session_id,
             client_ip=request.state.client_ip,
-            rehearsal=body.rehearsal,
         )
-        return await service.create_run(body, session_id=request.state.session_id)
     except RunCapacityError as exc:
         raise HTTPException(
             status_code=429,

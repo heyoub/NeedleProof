@@ -12,6 +12,7 @@ from needleproof_api.main import run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger
 from needleproof_api.retrieval import CorpusStore
+from needleproof_api.security import PublicUsageLimiter
 from needleproof_api.service import InvestigationService
 from needleproof_api.util import new_run_id, utc_now_iso
 
@@ -22,7 +23,12 @@ def lifecycle_service(tmp_path: Path) -> tuple[InvestigationService, AppDatabase
     shutil.copy2(Path("data/rehearsal/featured.json"), tmp_path / "rehearsal/featured.json")
     settings = Settings(data_dir=tmp_path)
     database = AppDatabase(settings.app_db_path)
-    return InvestigationService(settings, database, CorpusStore(settings)), database, settings
+    limiter = PublicUsageLimiter(settings, database)
+    return (
+        InvestigationService(settings, database, CorpusStore(settings), limiter),
+        database,
+        settings,
+    )
 
 
 @pytest.mark.asyncio
@@ -72,6 +78,57 @@ async def test_immediate_cancellation_still_enters_guarded_finalizer(tmp_path):
     assert row is not None
     assert row["status"] == RunStatus.CANCELLED.value
     assert Path(str(row["receipt_path"])).exists()
+
+
+@pytest.mark.asyncio
+async def test_live_cancellation_releases_reserved_model_tokens(tmp_path, monkeypatch):
+    service, database, settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    entered = asyncio.Event()
+
+    async def blocked_live(_run_id, _request, _session_id, _ledger):
+        entered.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_run_live", blocked_live)
+    created = await service.create_run(
+        RunCreateRequest(question="Cancel this live run"),
+        session_id="alice",
+        client_ip="192.0.2.20",
+    )
+    task = service._tasks[created.run_id]
+    await entered.wait()
+    assert await database.get_model_token_reservation(created.run_id) == (
+        settings.model_token_reservation_per_run
+    )
+
+    assert await service.cancel(created.run_id)
+    await task
+
+    assert await database.get_model_token_reservation(created.run_id) is None
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.CANCELLED.value
+
+
+@pytest.mark.asyncio
+async def test_run_creation_failure_releases_reservation(tmp_path, monkeypatch):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+
+    async def fail_create_run(**_kwargs):
+        raise OSError("injected run persistence failure")
+
+    monkeypatch.setattr(database, "create_run", fail_create_run)
+    with pytest.raises(OSError, match="injected run persistence failure"):
+        await service.create_run(
+            RunCreateRequest(question="Fail after budget reservation"),
+            session_id="alice",
+            client_ip="192.0.2.21",
+        )
+
+    assert await database.release_terminal_or_orphan_token_reservations() == 0
+    assert not service._admitted_run_ids
 
 
 @pytest.mark.asyncio
@@ -135,6 +192,13 @@ async def test_startup_reconciles_abandoned_running_run(tmp_path):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
     run_id = new_run_id()
+    assert service.usage_limiter is not None
+    await service.usage_limiter.admit(
+        run_id=run_id,
+        session_id="alice",
+        client_ip="192.0.2.22",
+        rehearsal=False,
+    )
     await database.create_run(
         run_id=run_id,
         session_id="alice",
@@ -156,6 +220,7 @@ async def test_startup_reconciles_abandoned_running_run(tmp_path):
     assert Path(str(row["receipt_path"])).exists()
     events = await database.list_events(run_id)
     assert events[-1]["type"] == "run.interrupted"
+    assert await database.get_model_token_reservation(run_id) is None
 
 
 @pytest.mark.asyncio

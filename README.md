@@ -105,7 +105,7 @@ Every sealed receipt includes:
 
 Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed.
 
-A server-generated `HttpOnly`, `SameSite=Lax` browser cookie owns every run. Read, SSE, cancel, receipt, and quote-verification routes enforce that ownership; run IDs are identifiers rather than bearer credentials. Live runs are bounded per browser and by per-session/IP rates plus hourly/daily token budgets. Receipt routes send `noindex, nofollow`. The event build supports only the bundled public/fictional corpus; confidential uploads are explicitly unsupported.
+A server-generated `HttpOnly`, `SameSite=Lax` browser cookie owns every run. Read, SSE, cancel, receipt, and quote-verification routes enforce that ownership; run IDs are identifiers rather than bearer credentials. Live runs are bounded per browser and by per-session/IP rates plus hourly/daily token budgets. Each live admission atomically reserves conservative token capacity in SQLite, then reconciles that reservation against persisted model usage at terminal finalization. Receipt routes send `noindex, nofollow`. The event build supports only the bundled public/fictional corpus; confidential uploads are explicitly unsupported.
 
 ## Commands
 

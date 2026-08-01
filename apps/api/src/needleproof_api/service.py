@@ -28,6 +28,7 @@ from .models import (
 )
 from .receipt import RunLedger, validate_receipt
 from .retrieval import CorpusStore
+from .security import PublicUsageLimiter
 from .util import new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
@@ -95,10 +96,17 @@ def compose_authoritative_answer(
 
 
 class InvestigationService:
-    def __init__(self, settings: Settings, database: AppDatabase, corpus: CorpusStore):
+    def __init__(
+        self,
+        settings: Settings,
+        database: AppDatabase,
+        corpus: CorpusStore,
+        usage_limiter: PublicUsageLimiter | None = None,
+    ):
         self.settings = settings
         self.database = database
         self.corpus = corpus
+        self.usage_limiter = usage_limiter
         self.verifier = EvidenceVerifier(corpus)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_runs)
         self._admission_lock = asyncio.Lock()
@@ -106,7 +114,9 @@ class InvestigationService:
         self._live_session_by_run: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
-    async def create_run(self, request: RunCreateRequest, *, session_id: str) -> RunCreateResponse:
+    async def create_run(
+        self, request: RunCreateRequest, *, session_id: str, client_ip: str = "unknown"
+    ) -> RunCreateResponse:
         run_id = new_run_id()
         async with self._admission_lock:
             if len(self._admitted_run_ids) >= self.settings.max_concurrent_runs:
@@ -119,6 +129,13 @@ class InvestigationService:
             if not request.rehearsal:
                 self._live_session_by_run[run_id] = session_id
         try:
+            if self.usage_limiter:
+                await self.usage_limiter.admit(
+                    run_id=run_id,
+                    session_id=session_id,
+                    client_ip=client_ip,
+                    rehearsal=request.rehearsal,
+                )
             await self.database.create_run(
                 run_id=run_id,
                 session_id=session_id,
@@ -130,6 +147,9 @@ class InvestigationService:
             )
             task = asyncio.create_task(self._run_guarded(run_id, request, session_id))
         except BaseException:
+            if self.usage_limiter:
+                with suppress(Exception):
+                    await self.usage_limiter.release(run_id)
             async with self._admission_lock:
                 self._admitted_run_ids.discard(run_id)
                 self._live_session_by_run.pop(run_id, None)
@@ -240,6 +260,7 @@ class InvestigationService:
                 error=error,
             )
             await self._finalize_run(ledger, state)
+        await self.database.release_terminal_or_orphan_token_reservations()
 
     async def _soft_timeout(self, ledger: RunLedger) -> None:
         await asyncio.sleep(self.settings.soft_timeout_seconds)
@@ -521,50 +542,56 @@ class InvestigationService:
         )
 
     async def _finalize_run(self, ledger: RunLedger, state: TerminalState) -> None:
-        events = await self.database.list_events(ledger.run_id)
-        if not any(event["type"] == state.event_type for event in events):
-            await ledger.append(state.event_type, state.event_payload)
-
-        receipt_path = self.settings.receipts_dir / f"{ledger.run_id}.json"
         try:
-            if not receipt_path.exists():
-                receipt_path = await ledger.seal(
-                    state.envelope,
-                    instruction_hash=INSTRUCTION_HASH,
-                    tool_schema_hash=TOOL_SCHEMA_HASH,
-                    verifier_version=VERIFIER_VERSION,
-                    trace_id=state.trace_id,
-                    error=state.error,
-                    rehearsal=state.rehearsal_metadata,
+            events = await self.database.list_events(ledger.run_id)
+            if not any(event["type"] == state.event_type for event in events):
+                await ledger.append(state.event_type, state.event_payload)
+
+            receipt_path = self.settings.receipts_dir / f"{ledger.run_id}.json"
+            try:
+                if not receipt_path.exists():
+                    receipt_path = await ledger.seal(
+                        state.envelope,
+                        instruction_hash=INSTRUCTION_HASH,
+                        tool_schema_hash=TOOL_SCHEMA_HASH,
+                        verifier_version=VERIFIER_VERSION,
+                        trace_id=state.trace_id,
+                        error=state.error,
+                        rehearsal=state.rehearsal_metadata,
+                    )
+                await self._commit_terminal(state.envelope, receipt_path, state.error)
+            except Exception as exc:
+                if receipt_path.exists():
+                    raise
+                error = {
+                    "type": "finalization_interrupted",
+                    "message": str(exc)[:500],
+                    "intended_status": state.envelope.status.value,
+                }
+                interrupted = self._envelope(
+                    ledger.run_id,
+                    state.envelope.question,
+                    status=RunStatus.INTERRUPTED,
+                    answer=None,
+                    claims=[],
                 )
-            await self._commit_terminal(state.envelope, receipt_path, state.error)
-        except Exception as exc:
-            if receipt_path.exists():
-                raise
-            error = {
-                "type": "finalization_interrupted",
-                "message": str(exc)[:500],
-                "intended_status": state.envelope.status.value,
-            }
-            interrupted = self._envelope(
-                ledger.run_id,
-                state.envelope.question,
-                status=RunStatus.INTERRUPTED,
-                answer=None,
-                claims=[],
-            )
-            with suppress(Exception):
-                await ledger.append(
-                    "run.interrupted", {**error, "authoritative": False, "recoverable": True}
+                with suppress(Exception):
+                    await ledger.append(
+                        "run.interrupted",
+                        {**error, "authoritative": False, "recoverable": True},
+                    )
+                await self.database.update_run(
+                    ledger.run_id,
+                    status=RunStatus.INTERRUPTED,
+                    completed_at=utc_now_iso(),
+                    answer=None,
+                    result_json=interrupted.model_dump_json(),
+                    error_json=json.dumps(error),
                 )
-            await self.database.update_run(
-                ledger.run_id,
-                status=RunStatus.INTERRUPTED,
-                completed_at=utc_now_iso(),
-                answer=None,
-                result_json=interrupted.model_dump_json(),
-                error_json=json.dumps(error),
-            )
+        finally:
+            if self.usage_limiter:
+                with suppress(Exception):
+                    await self.usage_limiter.release(ledger.run_id)
 
     async def _commit_terminal(
         self,
