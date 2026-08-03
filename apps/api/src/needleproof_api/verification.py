@@ -148,20 +148,40 @@ def _first_matching_measure_positions(
 def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) -> bool:
     """Fail closed when punctuation introduces a different metric before a value.
 
-    Text after the last comma or colon may continue the original metric only with
-    a trusted predicate/modifier. An unrecognized leading word is treated as a new
-    subject, avoiding an open-ended list of verbs used by competing predicates.
+    Separator-delimited text may continue the original metric only with a trusted
+    predicate, modifier, or anaphoric reference. Once an explicit competing subject
+    appears, later anaphora continues that newer subject and cannot restore the
+    original metric.
     """
 
     between = text[metric_end:value_start]
     separators = list(_VALUE_ASSOCIATION_SEPARATOR.finditer(between))
     if not separators:
         return True
-    continuation_text = between[separators[-1].end() :].strip().casefold()
-    if _ANAPHORIC_METRIC.match(continuation_text):
-        return True
-    continuation = _WORD.findall(continuation_text)
-    return not continuation or all(word in _SUBJECT_CONTINUATIONS for word in continuation)
+
+    def continues_subject(value: str) -> bool:
+        normalized = value.strip().casefold()
+        if _ANAPHORIC_METRIC.match(normalized):
+            return True
+        words = _WORD.findall(normalized)
+        return not words or all(word in _SUBJECT_CONTINUATIONS for word in words)
+
+    for index, separator in enumerate(separators):
+        next_start = separators[index + 1].start() if index + 1 < len(separators) else len(between)
+        segment = between[separator.end() : next_start]
+        if separator.group() == "," and index + 1 < len(separators):
+            next_separator = separators[index + 1]
+            following_end = (
+                separators[index + 2].start() if index + 2 < len(separators) else len(between)
+            )
+            following = between[next_separator.end() : following_end]
+            if next_separator.group() == "," and continues_subject(following):
+                # Treat paired commas followed by a safe continuation as a
+                # parenthetical modifier of the original metric.
+                continue
+        if not continues_subject(segment):
+            return False
+    return True
 
 
 def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:

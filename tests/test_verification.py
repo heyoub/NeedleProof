@@ -361,6 +361,16 @@ def test_and_can_continue_original_metric_with_anaphora():
     assert reported_value_linked_to_metric("$82 billion", "Fee-earning AUM", quote)
 
 
+def test_anaphora_continues_nearest_explicit_metric_subject():
+    quote = (
+        "Revenue was flat and operating expenses were $2 million, "
+        "and this was down from $3 billion."
+    )
+
+    assert not reported_value_linked_to_metric("$3 billion", "Revenue", quote)
+    assert reported_value_linked_to_metric("$3 billion", "operating expenses", quote)
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,
