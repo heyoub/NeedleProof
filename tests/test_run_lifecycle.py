@@ -416,7 +416,8 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
-async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path):
+@pytest.mark.parametrize("corrupt_receipt", ["{not valid json", "null", '{"events": null}'])
+async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path, corrupt_receipt):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
     created = await service.create_run(
@@ -427,7 +428,7 @@ async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path
     row = await database.get_run_row(created.run_id)
     assert row is not None
     receipt_path = Path(str(row["receipt_path"]))
-    receipt_path.write_text("{not valid json", encoding="utf-8")
+    receipt_path.write_text(corrupt_receipt, encoding="utf-8")
     events = await database.list_events(created.run_id)
 
     async def connected() -> bool:

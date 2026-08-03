@@ -353,7 +353,15 @@ def _integrity_checked_receipt(row: dict[str, object]) -> tuple[Path, dict[str, 
     if not path.exists():
         raise HTTPException(status_code=404, detail="Receipt file is unavailable")
     receipt = json.loads(path.read_text(encoding="utf-8"))
-    errors = validate_receipt(receipt)
+    if not isinstance(receipt, dict):
+        raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
+    try:
+        errors = validate_receipt(receipt)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Receipt integrity validation failed",
+        ) from exc
     if errors:
         raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
     if receipt.get("receipt_sha256") != row.get("receipt_sha256"):
