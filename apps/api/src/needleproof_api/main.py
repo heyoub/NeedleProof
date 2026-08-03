@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -53,6 +54,7 @@ TERMINAL_EVENTS_BY_STATUS = {
     RunStatus.FAILED: {"run.failed"},
     RunStatus.INTERRUPTED: {"run.interrupted"},
 }
+ReceiptReconciliationState = Literal["ready", "pending", "invalid"]
 
 
 def document_media_type(path: Path) -> str:
@@ -283,11 +285,21 @@ async def run_events(
                         row_status = RunStatus(str(row["status"])) if row else None
                         committed = bool(
                             row and row_status in TERMINAL_STATUSES and row.get("receipt_path")
-                        ) and _receipt_is_reconciled(row)
+                        )
                         if not committed:
                             # Keep the cursor before this event so reconnect/replay
                             # cannot observe completion ahead of durable state.
                             break
+                        receipt_state = _receipt_reconciliation_state(row)
+                        if receipt_state == "pending":
+                            # A valid receipt with a mismatched status can still be
+                            # reconciled without losing the intended terminal event.
+                            break
+                        if receipt_state == "invalid":
+                            # Permanent receipt corruption is not startup-recoverable
+                            # for an already terminal row. Close instead of polling the
+                            # same ledger event forever at 10 Hz.
+                            return
                         if event["type"] not in TERMINAL_EVENTS_BY_STATUS[row_status]:
                             # A failed terminal commit can leave an earlier intended
                             # event in the append-only ledger. Skip it in favor of the
@@ -305,11 +317,18 @@ async def run_events(
                     quiet_polls = 0
                     yield ": heartbeat\n\n"
             row = await database.get_run_row(run_id)
+            terminal_receipt_state = (
+                _receipt_reconciliation_state(row)
+                if row
+                and RunStatus(str(row["status"])) in TERMINAL_STATUSES
+                and row.get("receipt_path")
+                else None
+            )
             if (
                 row
                 and RunStatus(str(row["status"])) in TERMINAL_STATUSES
                 and row.get("receipt_path")
-                and _receipt_is_reconciled(row)
+                and terminal_receipt_state in {"ready", "invalid"}
                 and not events
             ):
                 break
@@ -326,7 +345,7 @@ async def run_events(
     )
 
 
-def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
+def _integrity_checked_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
     value = row.get("receipt_path")
     if not value:
         raise HTTPException(status_code=409, detail="Receipt has not been sealed")
@@ -339,6 +358,11 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
         raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
     if receipt.get("receipt_sha256") != row.get("receipt_sha256"):
         raise HTTPException(status_code=409, detail="Receipt database digest does not match")
+    return path, receipt
+
+
+def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
+    path, receipt = _integrity_checked_receipt(row)
     if receipt.get("status") != row.get("status"):
         raise HTTPException(
             status_code=409,
@@ -347,12 +371,12 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
     return path, receipt
 
 
-def _receipt_is_reconciled(row: dict[str, object]) -> bool:
+def _receipt_reconciliation_state(row: dict[str, object]) -> ReceiptReconciliationState:
     try:
-        _validated_receipt(row)
-    except (HTTPException, OSError, json.JSONDecodeError):
-        return False
-    return True
+        _, receipt = _integrity_checked_receipt(row)
+    except (HTTPException, OSError, UnicodeError, json.JSONDecodeError):
+        return "invalid"
+    return "ready" if receipt.get("status") == row.get("status") else "pending"
 
 
 @app.get("/api/runs/{run_id}/receipt.json")

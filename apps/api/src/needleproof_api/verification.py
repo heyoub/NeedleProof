@@ -29,12 +29,19 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
 _ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
 _POST_VALUE_ANAPHORA = re.compile(r"^(?:which|who|whose|where|when|the\s+figure|it|this|that)\b")
+_POST_VALUE_CONTEXT = re.compile(
+    r"^(?:about|approximately|around|down|from|nearly|roughly|up|versus|vs\.?|"
+    r"compared\s+(?:with|to))\b"
+)
+_COMPARISON_AMOUNT_PREFIX = re.compile(
+    r"(?:\(|,)\s*(?:(?:up|down)\s+from|compared\s+(?:with|to)|versus|vs\.?)\s*$"
+)
 _VALUE_FIRST_SENTENCE = re.compile(r"^(?:by|at|as\s+of)\b")
 _SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
 # Candidate boundaries are filtered structurally below so an elided predicate such as
 # ``but still reached`` keeps the preceding subject.
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(
-    r"\s*(?P<boundary>;|\b(?:while|whereas|although|though|because|since|but)\b)\s*"
+    r"\s*(?P<boundary>;|[—–]|\b(?:while|whereas|although|though|because|since|but)\b)\s*"
 )
 _VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
 _PARENTHETICAL_MODIFIER = re.compile(
@@ -204,10 +211,12 @@ def _first_matching_measure_spans(
             observed_index += 1
             if signature[1] != target[1] or signature[3] != target[3]:
                 continue
-            if signature != target:
-                return None
-            spans.append(span)
-            break
+            if signature == target:
+                spans.append(span)
+                break
+            if _COMPARISON_AMOUNT_PREFIX.search(text[: span[0]]):
+                continue
+            return None
         else:
             return None
     return spans if expected else None
@@ -248,9 +257,18 @@ def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -
 
     tail = text[value_end:].strip(" \t,:;()-")
     tail = re.sub(r"^(?:and|but)\s+", "", tail)
-    if not tail or _POST_VALUE_ANAPHORA.match(tail):
+    if (
+        not tail
+        or _POST_VALUE_ANAPHORA.match(tail)
+        or _POST_VALUE_CONTEXT.match(tail)
+        or _subject_refers_to_metric(tail, metric)
+    ):
         return False
-    return _text_introduces_competing_subject(tail, metric)
+    # A value-first continuation has already supplied its value. Any remaining
+    # unrecognized noun phrase is therefore a new explicit subject regardless
+    # of which predicate verb follows it. Fail closed instead of maintaining an
+    # open-ended verb whitelist.
+    return bool(_WORD.findall(tail))
 
 
 def _continues_metric_subject(value: str) -> bool:
@@ -282,6 +300,14 @@ def _continues_coordinated_modifier(value: str) -> bool:
     return len(words) == 2 and words[1] in _SINGULAR_SUBJECT_PREDICATES
 
 
+def _is_coordinated_subject_with_shared_predicate(value: str) -> bool:
+    words = _WORD.findall(value.strip().casefold())
+    predicate_indexes = [
+        index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS
+    ]
+    return len(predicate_indexes) == 1 and predicate_indexes[0] >= 2
+
+
 def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
     boundaries: list[re.Match[str]] = []
     for boundary in _PREDICATE_CLAUSE_BOUNDARY.finditer(sentence):
@@ -296,6 +322,10 @@ def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
             continue
         numeric = _NUMERIC.search(following)
         continuation_prefix = following[: numeric.start()] if numeric else following
+        if boundary.group("boundary") in {"—", "–"}:
+            if not _continues_metric_subject(continuation_prefix):
+                boundaries.append(boundary)
+            continue
         if not _continues_metric_subject(continuation_prefix):
             boundaries.append(boundary)
     return boundaries
@@ -362,7 +392,12 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
         preceding = between[previous_end : separator.start()]
         segment = between[separator.end() : next_start]
         preceding_words = set(_WORD.findall(preceding.casefold()))
-        if (
+        coordinated_subject = (
+            separator.group() == "and"
+            and not preceding_words
+            and _is_coordinated_subject_with_shared_predicate(segment)
+        )
+        if coordinated_subject or (
             separator.group() == "and"
             and preceding_words & _COORDINATED_MODIFIER_PREPOSITIONS
             and not preceding_words & _PREDICATE_VERBS

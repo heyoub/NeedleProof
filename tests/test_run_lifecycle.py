@@ -416,6 +416,43 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Detect corrupt terminal receipt", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    receipt_path = Path(str(row["receipt_path"]))
+    receipt_path.write_text("{not valid json", encoding="utf-8")
+    events = await database.list_events(created.run_id)
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+    iterator = response.body_iterator
+    first_terminal_index = next(
+        index for index, event in enumerate(events) if event["type"] == "run.completed"
+    )
+    for _event in events[:first_terminal_index]:
+        await anext(iterator)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(iterator), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_terminal_event_read_failure_marks_run_interrupted(tmp_path, monkeypatch):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
