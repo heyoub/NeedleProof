@@ -347,6 +347,18 @@ def test_non_predicate_punctuation_remains_inside_metric_clause():
     )
 
 
+@pytest.mark.parametrize(
+    "modifier",
+    ["on an adjusted basis", "according to management"],
+)
+def test_ordinary_comma_paired_modifier_retains_metric_subject(modifier):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue, {modifier}, was $2 million.",
+    )
+
+
 @pytest.mark.parametrize("separator", [",", ":"])
 @pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
 def test_unlisted_predicate_verbs_do_not_leak_numeric_value_to_prior_metric(separator, predicate):
@@ -482,6 +494,18 @@ def test_value_first_continuation_preserves_anaphora_and_context(following):
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+def test_value_first_comparison_tail_preserves_later_anaphora():
+    quote = "Revenue was flat. At $2 million, up from $1 million, it was unchanged."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_continuation_allows_repeated_metric_subject():
+    quote = "Revenue was flat. At $2 million, Revenue was stable."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
 def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
     quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
 
@@ -512,6 +536,14 @@ def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
 
     assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
     assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
+
+
+def test_explanatory_causal_clause_retains_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue declined because of restructuring, settling at $2 million.",
+    )
 
 
 @pytest.mark.parametrize(

@@ -58,6 +58,7 @@ _PARTICIPIAL_CONTINUATIONS = frozenset(
         "reaching",
         "representing",
         "rising",
+        "settling",
         "totaling",
         "totalling",
     }
@@ -208,15 +209,30 @@ def _first_matching_measure_spans(
     return sorted(spans) if expected else None
 
 
-def _tail_introduces_competing_subject(text: str, value_end: int) -> bool:
+def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -> bool:
     """Detect a new explicit subject after a value-first continuation."""
 
     tail = text[value_end:].strip(" \t,:;()-")
     tail = re.sub(r"^(?:and|but)\s+", "", tail)
     if not tail or _POST_VALUE_ANAPHORA.match(tail):
         return False
-    words = _WORD.findall(tail)
-    return any(index > 0 and word in _PREDICATE_VERBS for index, word in enumerate(words))
+    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(tail):
+        words = list(_WORD.finditer(clause))
+        predicate = next(
+            (
+                word
+                for index, word in enumerate(words)
+                if index > 0 and word.group() in _PREDICATE_VERBS
+            ),
+            None,
+        )
+        if predicate is None:
+            continue
+        subject = clause[: predicate.start()].strip()
+        if _SUBJECT_ANAPHORA.search(subject) or _metric_occurrence_spans(subject, metric):
+            continue
+        return True
+    return False
 
 
 def _continues_metric_subject(value: str) -> bool:
@@ -238,6 +254,11 @@ def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
             boundaries.append(boundary)
             continue
         following = sentence[boundary.end() :]
+        if boundary.group("boundary") in {"because", "since"} and re.match(
+            r"^(?:of|due\s+to|as\s+a\s+result\s+of)\b",
+            following,
+        ):
+            continue
         numeric = _NUMERIC.search(following)
         continuation_prefix = following[: numeric.start()] if numeric else following
         if not _continues_metric_subject(continuation_prefix):
@@ -286,7 +307,13 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
                 else len(between)
             )
             following = between[closing.end() : following_end]
-            if _PARENTHETICAL_MODIFIER.match(modifier) and _continues_metric_subject(following):
+            modifier_words = _WORD.findall(modifier.casefold())
+            contains_explicit_predicate = any(
+                index > 0 and word in _PREDICATE_VERBS for index, word in enumerate(modifier_words)
+            )
+            if (
+                _PARENTHETICAL_MODIFIER.match(modifier) or not contains_explicit_predicate
+            ) and _continues_metric_subject(following):
                 # A recognized comma-paired modifier can contain separators of
                 # its own without transferring the sentence to another metric.
                 ignored_parenthetical_separators.update(range(opening_index, closing_index + 1))
@@ -431,6 +458,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                     or not _tail_introduces_competing_subject(
                         following,
                         max(end for _start, end in following_spans),
+                        normalized_metric,
                     )
                 )
             ):
