@@ -111,6 +111,9 @@ class InvestigationContext:
                 "query": arguments["query"],
                 "mode": arguments["mode"],
                 "metric": arguments.get("metric"),
+                "document_ids": arguments.get("document_ids"),
+                "date_from": arguments.get("date_from"),
+                "date_to": arguments.get("date_to"),
                 "signature": signature,
             }
         )

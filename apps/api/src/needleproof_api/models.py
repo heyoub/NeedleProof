@@ -101,6 +101,13 @@ class ReportedValue(BaseModel):
     temporal_anchor: str | None = None
     evidence: list[EvidenceReference] = Field(min_length=1)
 
+    @field_validator("value")
+    @classmethod
+    def require_value_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reported value must contain non-whitespace text")
+        return value
+
 
 DraftStatus = Literal[
     "supported",

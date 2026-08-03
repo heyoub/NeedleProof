@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import mimetypes
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -52,6 +53,10 @@ TERMINAL_EVENTS_BY_STATUS = {
     RunStatus.FAILED: {"run.failed"},
     RunStatus.INTERRUPTED: {"run.interrupted"},
 }
+
+
+def document_media_type(path: Path) -> str:
+    return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
 class QuoteChallengeRequest(BaseModel):
@@ -363,7 +368,7 @@ async def versioned_document_pdf(
         raise HTTPException(status_code=404, detail="Document not found") from exc
     return FileResponse(
         path,
-        media_type="application/pdf",
+        media_type=document_media_type(path),
         headers={"X-Robots-Tag": "noindex, nofollow"},
     )
 

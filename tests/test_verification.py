@@ -77,6 +77,14 @@ def test_numeric_value_preserves_explicit_and_accounting_signs():
     assert not reported_value_found("$4 billion", "The loss was ($4 billion).")
 
 
+def test_reported_value_rejects_whitespace_only_text():
+    evidence = reference(
+        MEMO_CHUNK, "Fee-related earnings were $345 million.", "Fee-related earnings"
+    )
+    with pytest.raises(ValueError, match="non-whitespace"):
+        ReportedValue(value="   ", evidence=[evidence])
+
+
 def test_modified_or_fabricated_quote_is_rejected(corpus):
     quote = "Fee-related earnings were $346 million for the year."
     evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
@@ -242,6 +250,48 @@ def test_right_number_attached_to_wrong_metric_is_rejected(corpus):
     verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
     assert verified.status == ClaimStatus.UNVERIFIED
     assert any("canonical metric" in note for note in verified.verification_notes)
+
+
+def test_value_cooccurring_with_another_metric_is_rejected(corpus):
+    quote = corpus.get_chunks([MEMO_CHUNK])[0].text
+    evidence = reference(MEMO_CHUNK, quote, "Assets under management")
+    claim = DraftClaim(
+        metric="assets under management",
+        status="supported",
+        values=[ReportedValue(value="$905 billion", evidence=[evidence])],
+        evidence=[evidence],
+    )
+
+    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].value_found
+
+
+def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
+    first = reference(
+        MEMO_CHUNK,
+        "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
+        "Fee-earning AUM",
+    )
+    second = reference(
+        MEMO_CONTINUATION_CHUNK,
+        "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+        "fee-earning AUM",
+    )
+    claim = DraftClaim(
+        metric="fee-earning AUM",
+        status="supported",
+        values=[
+            ReportedValue(value="$82 billion", evidence=[first]),
+            ReportedValue(value="$8.2 billion", evidence=[second]),
+        ],
+        evidence=[first, second],
+    )
+
+    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=2)
+
+    assert verified.status == ClaimStatus.CONFLICT
 
 
 @pytest.mark.parametrize(

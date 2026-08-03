@@ -84,6 +84,23 @@ def test_searches_for_another_metric_do_not_authorize_not_found(corpus):
     assert verified.status == ClaimStatus.UNVERIFIED
 
 
+def test_scoped_searches_do_not_authorize_corpus_wide_not_found(corpus):
+    state = context(Settings(max_searches=4), corpus)
+    for index in range(4):
+        arguments = search_arguments(f"total headcount wording {index}")
+        arguments["document_ids"] = ["doc_outside_scope"]
+        state.begin_search()
+        state.complete_search(arguments)
+
+    claim = DraftClaim(metric="total headcount", status="not_found")
+    verified = state.verifier.verify_claim(
+        claim,
+        completed_searches=state.searches,
+        completed_search_records=state.completed_search_records,
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
 def test_agent_enforces_configured_output_token_cap():
     agent = build_agent(Settings(max_model_output_tokens_per_call=4_321))
     assert agent.model_settings.max_tokens == 4_321

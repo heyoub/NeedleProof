@@ -25,29 +25,92 @@ _NUMERIC = re.compile(
     r"\s*(?P<close>\))?",
     re.IGNORECASE,
 )
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+_ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
+
+
+def _numeric_signature(match: re.Match[str]) -> tuple[str, str, str, str]:
+    parenthesized = bool(match.group("open") and match.group("close"))
+    explicit_sign = match.group("sign_before") or match.group("sign_after")
+    sign = "-" if parenthesized or explicit_sign == "-" else "+"
+    currency = match.group("currency") or ""
+    number = match.group("number").replace(",", "")
+    unit = re.sub(r"\s+", " ", (match.group("unit") or "").lower())
+    return sign, currency, number, unit
 
 
 def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
     signatures: set[tuple[str, str, str, str]] = set()
     for match in _NUMERIC.finditer(text):
-        parenthesized = bool(match.group("open") and match.group("close"))
-        explicit_sign = match.group("sign_before") or match.group("sign_after")
-        sign = "-" if parenthesized or explicit_sign == "-" else "+"
-        currency = match.group("currency") or ""
-        number = match.group("number").replace(",", "")
-        unit = re.sub(r"\s+", " ", (match.group("unit") or "").lower())
-        signatures.add((sign, currency, number, unit))
+        signatures.add(_numeric_signature(match))
     return signatures
 
 
 def reported_value_found(value: str, quote: str) -> bool:
     normalized_value, _ = normalize_evidence_text(value)
     normalized_quote, _ = normalize_evidence_text(quote)
+    if not normalized_value:
+        return False
     expected = numeric_signatures(normalized_value)
     if expected:
         observed = numeric_signatures(normalized_quote)
         return expected.issubset(observed)
     return normalized_value.casefold() in normalized_quote.casefold()
+
+
+def _first_matching_measure_is_expected(
+    text: str,
+    expected: set[tuple[str, str, str, str]],
+    *,
+    start: int = 0,
+) -> bool:
+    for target in expected:
+        _sign, target_currency, _number, target_unit = target
+        comparable = [
+            _numeric_signature(match)
+            for match in _NUMERIC.finditer(text, pos=start)
+            if (match.group("currency") or "") == target_currency
+            and re.sub(r"\s+", " ", (match.group("unit") or "").lower()) == target_unit
+        ]
+        if not comparable or comparable[0] != target:
+            return False
+    return bool(expected)
+
+
+def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) -> bool:
+    normalized_value = normalize_evidence_text(value)[0].casefold()
+    normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
+    normalized_quote = normalize_evidence_text(quote)[0].casefold()
+    if not normalized_value or not normalized_metric:
+        return False
+
+    expected = numeric_signatures(normalized_value)
+    sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
+    for index, sentence in enumerate(sentences):
+        metric_position = sentence.find(normalized_metric)
+        if metric_position < 0:
+            continue
+        if expected and _first_matching_measure_is_expected(
+            sentence,
+            expected,
+            start=metric_position + len(normalized_metric),
+        ):
+            return True
+        if not expected:
+            clauses = re.split(r"[,;:]\s+", sentence)
+            if any(
+                normalized_metric in clause and normalized_value in clause for clause in clauses
+            ):
+                return True
+        if index + 1 < len(sentences):
+            following = sentences[index + 1].strip()
+            if (
+                expected
+                and _ANAPHORIC_SENTENCE.match(following)
+                and _first_matching_measure_is_expected(following, expected)
+            ):
+                return True
+    return False
 
 
 def _all_evidence(claim: DraftClaim) -> list[EvidenceReference]:
@@ -283,6 +346,11 @@ class EvidenceVerifier:
             ]
             value_found = all(
                 reported_value_found(value.value, reference.exact_quote)
+                and reported_value_linked_to_metric(
+                    value.value,
+                    reference.metric_anchor,
+                    reference.exact_quote,
+                )
                 for value in relevant_values
             )
             if not relevant_values:
@@ -371,6 +439,9 @@ class EvidenceVerifier:
                 for record in completed_search_records or []
                 if _canonical_metric(str(record.get("metric") or "")) == canonical_claim_metric
                 and canonical_claim_metric in _canonical_metric(str(record.get("query") or ""))
+                and not record.get("document_ids")
+                and not record.get("date_from")
+                and not record.get("date_to")
             }
             if len(relevant_searches) >= 4 and not references and not claim.values:
                 status = ClaimStatus.NOT_FOUND
@@ -414,21 +485,32 @@ class EvidenceVerifier:
                 notes.append(
                     "Contextual or contradicting evidence cannot independently authorize a claim."
                 )
-        elif claim.status == "date_variant":
-            if explicit_conflict and len(distinct_values) >= 2:
+        elif len(distinct_values) >= 2:
+            if explicit_conflict:
                 status = ClaimStatus.CONFLICT
                 notes.append(
                     "A verified quotation explicitly characterizes the values as erroneous or incompatible."
                 )
             elif (
-                len(distinct_values) >= 2
+                all_values_supported
                 and len(distinct_temporal_anchors) >= 2
                 and len(distinct_temporal_anchors) == len(claim.values)
             ):
                 status = ClaimStatus.DATE_VARIANT
+            elif (
+                all_values_supported
+                and len(distinct_temporal_anchors) == 1
+                and all(value.temporal_anchor for value in claim.values)
+            ):
+                status = ClaimStatus.CONFLICT
             else:
                 status = ClaimStatus.POSSIBLE_CONFLICT
-                notes.append("Distinct values were not tied to at least two explicit dates.")
+                notes.append(
+                    "Distinct values were not fully supported and tied to a consistent temporal relationship."
+                )
+        elif claim.status == "date_variant":
+            status = ClaimStatus.POSSIBLE_CONFLICT
+            notes.append("A date variant requires at least two distinct reported values.")
         elif claim.status in {"conflict", "possible_conflict"}:
             if len(distinct_values) < 2:
                 status = ClaimStatus.UNVERIFIED

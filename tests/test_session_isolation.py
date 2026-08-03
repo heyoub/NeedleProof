@@ -10,7 +10,7 @@ import httpx
 import pytest
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
-from needleproof_api.main import app
+from needleproof_api.main import app, document_media_type
 from needleproof_api.models import RunCreateRequest
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter, resolve_client_ip
@@ -141,6 +141,11 @@ async def test_browser_sessions_isolate_every_run_surface(tmp_path):
 def test_public_demo_configuration_requires_secure_cookies():
     with pytest.raises(ValueError, match="Secure"):
         Settings(public_demo=True, session_cookie_secure=False)
+
+
+def test_document_media_type_matches_supported_source_format():
+    assert document_media_type(Path("evidence.pdf")) == "application/pdf"
+    assert document_media_type(Path("evidence.txt")) == "text/plain"
 
 
 def test_public_demo_routes_follow_dotenv_configuration(tmp_path):

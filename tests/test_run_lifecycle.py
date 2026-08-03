@@ -366,6 +366,42 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_terminal_event_read_failure_marks_run_interrupted(tmp_path, monkeypatch):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    original_rehearsal = service._run_rehearsal
+    original_list_events = database.list_events
+    armed = False
+
+    async def rehearsal_then_arm(*args, **kwargs):
+        nonlocal armed
+        state = await original_rehearsal(*args, **kwargs)
+        armed = True
+        return state
+
+    async def fail_once_when_armed(*args, **kwargs):
+        nonlocal armed
+        if armed:
+            armed = False
+            raise OSError("injected terminal event read failure")
+        return await original_list_events(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_run_rehearsal", rehearsal_then_arm)
+    monkeypatch.setattr(database, "list_events", fail_once_when_armed)
+    created = await service.create_run(
+        RunCreateRequest(question="Recover terminal event persistence", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.INTERRUPTED.value
+    events = await original_list_events(created.run_id)
+    assert events[-1]["type"] == "run.interrupted"
+
+
+@pytest.mark.asyncio
 async def test_reconciliation_preserves_valid_receipt_when_commit_is_unavailable(
     tmp_path, monkeypatch
 ):

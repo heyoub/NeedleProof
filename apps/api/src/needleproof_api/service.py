@@ -578,12 +578,11 @@ class InvestigationService:
 
     async def _finalize_run(self, ledger: RunLedger, state: TerminalState) -> None:
         try:
-            events = await self.database.list_events(ledger.run_id)
-            if not any(event["type"] == state.event_type for event in events):
-                await ledger.append(state.event_type, state.event_payload)
-
             receipt_path = self.settings.receipts_dir / f"{ledger.run_id}.json"
             try:
+                events = await self.database.list_events(ledger.run_id)
+                if not any(event["type"] == state.event_type for event in events):
+                    await ledger.append(state.event_type, state.event_payload)
                 if not receipt_path.exists():
                     receipt_path = await ledger.seal(
                         state.envelope,
