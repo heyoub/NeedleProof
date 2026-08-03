@@ -32,6 +32,9 @@ _ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
 # inside one such clause makes ambiguous compound sentences fail closed.
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*")
 _VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
+_PARENTHETICAL_MODIFIER = re.compile(
+    r"^\s*(?:adjusted\s+for|after|before|despite|excluding|including|net\s+of|with|without)\b"
+)
 _WORD = re.compile(r"[^\W_]+")
 _SUBJECT_CONTINUATIONS = frozenset(
     {
@@ -166,19 +169,32 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
         words = _WORD.findall(normalized)
         return not words or all(word in _SUBJECT_CONTINUATIONS for word in words)
 
+    ignored_parenthetical_separators: set[int] = set()
+    for opening_index, opening in enumerate(separators):
+        if opening.group() != "," or opening_index in ignored_parenthetical_separators:
+            continue
+        for closing_index in range(opening_index + 1, len(separators)):
+            closing = separators[closing_index]
+            if closing.group() != ",":
+                continue
+            modifier = between[opening.end() : closing.start()]
+            following_end = (
+                separators[closing_index + 1].start()
+                if closing_index + 1 < len(separators)
+                else len(between)
+            )
+            following = between[closing.end() : following_end]
+            if _PARENTHETICAL_MODIFIER.match(modifier) and continues_subject(following):
+                # A recognized comma-paired modifier can contain separators of
+                # its own without transferring the sentence to another metric.
+                ignored_parenthetical_separators.update(range(opening_index, closing_index + 1))
+                break
+
     for index, separator in enumerate(separators):
+        if index in ignored_parenthetical_separators:
+            continue
         next_start = separators[index + 1].start() if index + 1 < len(separators) else len(between)
         segment = between[separator.end() : next_start]
-        if separator.group() == "," and index + 1 < len(separators):
-            next_separator = separators[index + 1]
-            following_end = (
-                separators[index + 2].start() if index + 2 < len(separators) else len(between)
-            )
-            following = between[next_separator.end() : following_end]
-            if next_separator.group() == "," and continues_subject(following):
-                # Treat paired commas followed by a safe continuation as a
-                # parenthetical modifier of the original metric.
-                continue
         if not continues_subject(segment):
             return False
     return True

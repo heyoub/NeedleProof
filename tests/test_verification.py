@@ -340,6 +340,22 @@ def test_punctuation_continuation_can_retain_original_metric_subject():
     )
 
 
+def test_compound_parenthetical_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, excluding discontinued operations and foreign exchange effects, was $2 million.",
+    )
+
+
+def test_unrecognized_comma_pair_cannot_hide_competing_metric_subject():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, operating expenses remained stable, was compared with $2 million.",
+    )
+
+
 def test_metric_name_starting_with_continuation_word_still_introduces_new_subject():
     quote = "Revenue was flat, increased costs were $2 million."
 
