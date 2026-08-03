@@ -113,22 +113,37 @@ async def test_live_cancellation_releases_reserved_model_tokens(tmp_path, monkey
 
 @pytest.mark.asyncio
 async def test_run_creation_failure_releases_reservation(tmp_path, monkeypatch):
-    service, database, _settings = lifecycle_service(tmp_path)
+    service, database, settings = lifecycle_service(tmp_path)
     await database.initialize()
+    settings.max_runs_per_session_per_hour = 2
+    settings.max_runs_per_ip_per_hour = 2
+    original_create_run = database.create_run
 
     async def fail_create_run(**_kwargs):
         raise OSError("injected run persistence failure")
 
     monkeypatch.setattr(database, "create_run", fail_create_run)
-    with pytest.raises(OSError, match="injected run persistence failure"):
-        await service.create_run(
-            RunCreateRequest(question="Fail after budget reservation"),
-            session_id="alice",
-            client_ip="192.0.2.21",
-        )
+    for attempt in range(2):
+        with pytest.raises(OSError, match="injected run persistence failure"):
+            await service.create_run(
+                RunCreateRequest(question=f"Fail after budget reservation {attempt}"),
+                session_id="alice",
+                client_ip="192.0.2.21",
+            )
 
     assert await database.release_terminal_or_orphan_token_reservations() == 0
     assert not service._admitted_run_ids
+
+    monkeypatch.setattr(database, "create_run", original_create_run)
+    recovered = await service.create_run(
+        RunCreateRequest(question="Persist after database recovery", rehearsal=True),
+        session_id="alice",
+        client_ip="192.0.2.21",
+    )
+    await service._tasks[recovered.run_id]
+    row = await database.get_run_row(recovered.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.COMPLETED.value
 
 
 @pytest.mark.asyncio

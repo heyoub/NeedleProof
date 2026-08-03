@@ -118,6 +118,7 @@ class InvestigationService:
         self, request: RunCreateRequest, *, session_id: str, client_ip: str = "unknown"
     ) -> RunCreateResponse:
         run_id = new_run_id()
+        run_persisted = False
         async with self._admission_lock:
             if len(self._admitted_run_ids) >= self.settings.max_concurrent_runs:
                 raise RunCapacityError(
@@ -145,11 +146,15 @@ class InvestigationService:
                 corpus_version=self.corpus.corpus_version,
                 manifest_sha256=self.corpus.manifest_sha256,
             )
+            run_persisted = True
             task = asyncio.create_task(self._run_guarded(run_id, request, session_id))
         except BaseException:
             if self.usage_limiter:
                 with suppress(Exception):
-                    await self.usage_limiter.release(run_id)
+                    if run_persisted:
+                        await self.usage_limiter.release(run_id)
+                    else:
+                        await self.usage_limiter.rollback(run_id)
             async with self._admission_lock:
                 self._admitted_run_ids.discard(run_id)
                 self._live_session_by_run.pop(run_id, None)

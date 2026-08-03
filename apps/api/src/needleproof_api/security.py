@@ -5,6 +5,7 @@ import re
 import secrets
 import time
 from collections import defaultdict, deque
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address, ip_network
@@ -75,6 +76,7 @@ class PublicUsageLimiter:
         self.database = database
         self._session_attempts: defaultdict[str, deque[float]] = defaultdict(deque)
         self._ip_attempts: defaultdict[str, deque[float]] = defaultdict(deque)
+        self._attempt_by_run: dict[str, tuple[str, str, float]] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -104,6 +106,7 @@ class PublicUsageLimiter:
                 )
             session_window.append(now)
             ip_window.append(now)
+            self._attempt_by_run[run_id] = (session_id, client_ip, now)
 
         reserved_tokens = 0
         if not rehearsal:
@@ -128,12 +131,35 @@ class PublicUsageLimiter:
                         "The public daily model budget is exhausted.", retry_after=86400
                     )
             except BaseException:
-                async with self._lock:
-                    session_window.remove(now)
-                    ip_window.remove(now)
+                with suppress(Exception):
+                    await self.database.release_model_token_reservation(run_id)
+                await self._rollback_local_attempt(run_id)
                 raise
 
         return UsageDecision(len(session_window), len(ip_window), reserved_tokens)
 
     async def release(self, run_id: str) -> None:
         await self.database.release_model_token_reservation(run_id)
+        async with self._lock:
+            self._attempt_by_run.pop(run_id, None)
+
+    async def rollback(self, run_id: str) -> None:
+        """Release model capacity and remove a pre-persistence local admission."""
+
+        await self.database.release_model_token_reservation(run_id)
+        await self._rollback_local_attempt(run_id)
+
+    async def _rollback_local_attempt(self, run_id: str) -> None:
+        async with self._lock:
+            attempt = self._attempt_by_run.pop(run_id, None)
+            if not attempt:
+                return
+            session_id, client_ip, admitted_at = attempt
+            for window in (
+                self._session_attempts[session_id],
+                self._ip_attempts[client_ip],
+            ):
+                try:
+                    window.remove(admitted_at)
+                except ValueError:
+                    pass
