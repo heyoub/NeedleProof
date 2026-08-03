@@ -29,11 +29,15 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
 # These separators introduce an independent predicate. Keeping metric/value matching
 # inside one such clause makes ambiguous compound sentences fail closed.
+_INDEPENDENT_PREDICATE = (
+    r"(?=(?!(?:it|this|that|the\s+figure)\b)"
+    r"[a-z][^,;:.!?]{0,79}\s+"
+    r"(?:was|were|is|are|has|have|had|reached|totaled|totalled|amounted|stood)\b)"
+)
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(
     r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*"
-    r"|\s+and\s+(?=(?!(?:it|this|that|the\s+figure)\b)"
-    r"[^,;:.!?]{1,80}\b(?:was|were|is|are|has|have|had|reached|totaled|totalled|"
-    r"amounted|stood)\b)"
+    rf"|\s+and\s+{_INDEPENDENT_PREDICATE}"
+    rf"|[,:]\s*{_INDEPENDENT_PREDICATE}"
 )
 _WORD = re.compile(r"[^\W_]+")
 

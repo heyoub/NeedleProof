@@ -305,6 +305,24 @@ def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
     )
 
 
+@pytest.mark.parametrize("separator", [",", ":"])
+@pytest.mark.parametrize("value", ["stable", "$2 million"])
+def test_punctuation_delimited_predicate_does_not_leak_to_prior_metric(separator, value):
+    quote = f"Revenue was flat{separator} operating expenses were {value}."
+
+    assert not reported_value_linked_to_metric(value, "Revenue", quote)
+    assert reported_value_linked_to_metric(value, "operating expenses", quote)
+
+
+def test_non_predicate_punctuation_remains_inside_metric_clause():
+    assert reported_value_linked_to_metric("stable", "Revenue", "Revenue: stable.")
+    assert reported_value_linked_to_metric(
+        "stable",
+        "Revenue",
+        "Revenue, excluding discontinued operations, was stable.",
+    )
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,
