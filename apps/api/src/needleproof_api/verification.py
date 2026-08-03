@@ -27,17 +27,11 @@ _NUMERIC = re.compile(
 )
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
+_ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
 # These separators introduce an independent predicate. Keeping metric/value matching
 # inside one such clause makes ambiguous compound sentences fail closed.
-_INDEPENDENT_PREDICATE = (
-    r"(?=(?!(?:it|this|that|the\s+figure)\b)"
-    r"[a-z][^,;:.!?]{0,79}\s+"
-    r"(?:was|were|is|are|has|have|had|reached|totaled|totalled|amounted|stood)\b)"
-)
-_PREDICATE_CLAUSE_BOUNDARY = re.compile(
-    r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*"
-    rf"|\s+and\s+{_INDEPENDENT_PREDICATE}"
-)
+_PREDICATE_CLAUSE_BOUNDARY = re.compile(r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*")
+_VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
 _WORD = re.compile(r"[^\W_]+")
 _SUBJECT_CONTINUATIONS = frozenset(
     {
@@ -160,10 +154,13 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
     """
 
     between = text[metric_end:value_start]
-    punctuation = max(between.rfind(","), between.rfind(":"))
-    if punctuation < 0:
+    separators = list(_VALUE_ASSOCIATION_SEPARATOR.finditer(between))
+    if not separators:
         return True
-    continuation = _WORD.findall(between[punctuation + 1 :].casefold())
+    continuation_text = between[separators[-1].end() :].strip().casefold()
+    if _ANAPHORIC_METRIC.match(continuation_text):
+        return True
+    continuation = _WORD.findall(continuation_text)
     return not continuation or all(word in _SUBJECT_CONTINUATIONS for word in continuation)
 
 

@@ -347,6 +347,20 @@ def test_metric_name_starting_with_continuation_word_still_introduces_new_subjec
     assert reported_value_linked_to_metric("$2 million", "increased costs", quote)
 
 
+@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
+def test_and_delimited_predicate_does_not_leak_to_prior_metric(predicate):
+    quote = f"Revenue was flat and operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_and_can_continue_original_metric_with_anaphora():
+    quote = "Fee-earning AUM drives revenue and it ended the year at $82 billion."
+
+    assert reported_value_linked_to_metric("$82 billion", "Fee-earning AUM", quote)
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,
