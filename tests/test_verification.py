@@ -16,6 +16,7 @@ from needleproof_api.verification import (
     EvidenceVerifier,
     _distinct_values,
     _temporal_signature,
+    reported_value_found,
 )
 
 MEMO_CHUNK = chunk_id_from_uint64(2565635019366042796)
@@ -59,6 +60,14 @@ def test_direct_value_and_quote_are_verified(corpus):
     assert result.status == ClaimStatus.VERIFIED
     assert result.evidence[0].quote_found
     assert result.evidence[0].value_found
+
+
+def test_numeric_value_must_match_the_complete_signature():
+    quote = "Assets under management were $142 billion at fiscal year end."
+
+    assert reported_value_found("$142 billion", quote)
+    assert not reported_value_found("42", quote)
+    assert not reported_value_found("142", quote)
 
 
 def test_modified_or_fabricated_quote_is_rejected(corpus):

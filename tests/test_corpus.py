@@ -112,3 +112,26 @@ def test_corrupt_existing_immutable_version_is_not_silently_reused(tmp_path):
 
     with pytest.raises(ValueError, match="immutable corpus version.*corrupt"):
         builder.build()
+
+
+@pytest.mark.parametrize("artifact", ["manifest", "document"])
+def test_corrupt_existing_manifest_or_document_is_not_silently_reused(tmp_path, artifact):
+    source = tmp_path / "source.txt"
+    source.write_text(
+        "A deterministic source paragraph for complete artifact validation.",
+        encoding="utf-8",
+    )
+    builder, settings = configured_builder(tmp_path, [{"path": str(source)}])
+    summary = builder.build()
+    version_dir = settings.corpora_dir / summary.corpus_version
+    if artifact == "manifest":
+        manifest_path = version_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["display_name"] = "Tampered but self-reported as valid"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        document_path = next((version_dir / "documents").iterdir())
+        document_path.write_text("tampered source artifact", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="immutable corpus version.*corrupt"):
+        builder.build()

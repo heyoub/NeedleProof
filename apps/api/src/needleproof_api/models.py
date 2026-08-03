@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .chunk_ids import ChunkId
 
@@ -204,6 +204,14 @@ class RunEnvelope(BaseModel):
 class RunCreateRequest(BaseModel):
     question: str = Field(min_length=3, max_length=4000)
     rehearsal: bool = False
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 3:
+            raise ValueError("question must contain at least three non-whitespace characters")
+        return normalized
 
 
 class RunCreateResponse(BaseModel):

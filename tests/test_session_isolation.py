@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -8,9 +11,11 @@ import pytest
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
 from needleproof_api.main import app
+from needleproof_api.models import RunCreateRequest
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter, resolve_client_ip
 from needleproof_api.service import InvestigationService
+from pydantic import ValidationError
 
 
 @pytest.mark.asyncio
@@ -136,6 +141,42 @@ async def test_browser_sessions_isolate_every_run_surface(tmp_path):
 def test_public_demo_configuration_requires_secure_cookies():
     with pytest.raises(ValueError, match="Secure"):
         Settings(public_demo=True, session_cookie_secure=False)
+
+
+def test_public_demo_routes_follow_dotenv_configuration(tmp_path):
+    (tmp_path / ".env").write_text(
+        "NEEDLEPROOF_PUBLIC_DEMO=true\nNEEDLEPROOF_SESSION_COOKIE_SECURE=true\n",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.pop("NEEDLEPROOF_PUBLIC_DEMO", None)
+    environment.pop("NEEDLEPROOF_SESSION_COOKIE_SECURE", None)
+    source_root = str(Path("apps/api/src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_root, environment.get("PYTHONPATH")) if part
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from needleproof_api.main import app; "
+                "assert app.docs_url is None; assert app.openapi_url is None"
+            ),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_run_question_is_stripped_and_rejects_whitespace_only_input():
+    assert RunCreateRequest(question="  What was AUM?  ").question == "What was AUM?"
+    with pytest.raises(ValidationError, match="non-whitespace"):
+        RunCreateRequest(question="   ")
 
 
 def test_forwarded_client_ip_requires_a_trusted_transport_peer():

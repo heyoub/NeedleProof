@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .chunk_ids import ChunkId
 from .config import Settings
+from .config import settings as application_settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
 from .models import CorpusSummary, RunCreateRequest, RunCreateResponse, RunStatus
@@ -70,7 +71,7 @@ class QuoteChallengeRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings()
+    settings = application_settings
     database = AppDatabase(settings.app_db_path)
     await database.initialize()
     retention_cutoff = (
@@ -99,11 +100,7 @@ async def lifespan(app: FastAPI):
         await model_probe
 
 
-_public_demo = os.getenv("NEEDLEPROOF_PUBLIC_DEMO", "false").casefold() in {
-    "1",
-    "true",
-    "yes",
-}
+_public_demo = application_settings.public_demo
 
 app = FastAPI(
     title="NeedleProof API",

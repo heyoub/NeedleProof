@@ -107,6 +107,30 @@ def chunk_records_digest(connection: sqlite3.Connection) -> str:
     return sha256_text(canonical_json(records))
 
 
+def stored_document_artifacts_match(version_dir: Path, manifest: dict[str, Any]) -> bool:
+    expected = {
+        document["document_id"]: document["source_sha256"]
+        for document in manifest.get("documents", [])
+    }
+    with sqlite3.connect(f"file:{version_dir / 'corpus.sqlite3'}?mode=ro", uri=True) as connection:
+        stored = connection.execute(
+            "SELECT document_id, source_file, source_sha256 FROM documents"
+        ).fetchall()
+    if {row[0] for row in stored} != set(expected):
+        return False
+    documents_dir = (version_dir / "documents").resolve()
+    for document_id, source_file, source_sha in stored:
+        document_path = (documents_dir / source_file).resolve()
+        if (
+            document_path.parent != documents_dir
+            or source_sha != expected[document_id]
+            or not document_path.is_file()
+            or sha256_file(document_path) != expected[document_id]
+        ):
+            return False
+    return True
+
+
 def l2_normalize(vectors: np.ndarray) -> np.ndarray:
     vectors = np.asarray(vectors, dtype=np.float32)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
@@ -559,19 +583,21 @@ class CorpusBuilder:
 
         version_dir = self.settings.corpora_dir / corpus_version
         if version_dir.exists():
-            existing_manifest = json.loads(
-                (version_dir / "manifest.json").read_text(encoding="utf-8")
-            )
             expected_artifacts = manifest["artifacts"]
-            existing_artifacts = existing_manifest.get("artifacts") or {}
-            existing_valid = (
-                existing_manifest.get("manifest_sha256") == manifest_sha
-                and existing_artifacts == expected_artifacts
-                and sha256_file(version_dir / "corpus.sqlite3")
-                == expected_artifacts["corpus_sqlite3_sha256"]
-                and sha256_file(version_dir / "index.tvim")
-                == expected_artifacts["index_tvim_sha256"]
-            )
+            try:
+                existing_manifest = load_corpus_manifest(self.settings, corpus_version)
+                existing_artifacts = existing_manifest.get("artifacts") or {}
+                existing_valid = (
+                    existing_manifest.get("manifest_sha256") == manifest_sha
+                    and existing_artifacts == expected_artifacts
+                    and sha256_file(version_dir / "corpus.sqlite3")
+                    == expected_artifacts["corpus_sqlite3_sha256"]
+                    and sha256_file(version_dir / "index.tvim")
+                    == expected_artifacts["index_tvim_sha256"]
+                    and stored_document_artifacts_match(version_dir, existing_manifest)
+                )
+            except (FileNotFoundError, KeyError, OSError, sqlite3.Error, ValueError):
+                existing_valid = False
             if not existing_valid:
                 shutil.rmtree(build_dir)
                 raise ValueError(

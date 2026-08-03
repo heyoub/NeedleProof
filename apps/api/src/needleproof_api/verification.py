@@ -38,11 +38,11 @@ def numeric_signatures(text: str) -> set[tuple[str, str, str]]:
 def reported_value_found(value: str, quote: str) -> bool:
     normalized_value, _ = normalize_evidence_text(value)
     normalized_quote, _ = normalize_evidence_text(quote)
-    if normalized_value.casefold() in normalized_quote.casefold():
-        return True
     expected = numeric_signatures(normalized_value)
-    observed = numeric_signatures(normalized_quote)
-    return bool(expected) and expected.issubset(observed)
+    if expected:
+        observed = numeric_signatures(normalized_quote)
+        return expected.issubset(observed)
+    return normalized_value.casefold() in normalized_quote.casefold()
 
 
 def _all_evidence(claim: DraftClaim) -> list[EvidenceReference]:
