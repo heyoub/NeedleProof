@@ -214,6 +214,13 @@ def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int
     search_from = 0
     while (metric_start := sentence.find(metric, search_from)) >= 0:
         metric_end = metric_start + len(metric)
+        starts_inside_word = metric_start > 0 and bool(_WORD.fullmatch(sentence[metric_start - 1]))
+        ends_inside_word = metric_end < len(sentence) and bool(
+            _WORD.fullmatch(sentence[metric_end])
+        )
+        if starts_inside_word or ends_inside_word:
+            search_from = metric_start + 1
+            continue
         clause_start = max(
             (boundary.end() for boundary in boundaries if boundary.end() <= metric_start),
             default=0,
@@ -241,7 +248,8 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     expected = numeric_signatures(normalized_value)
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
-        for clause, metric_position in _metric_predicate_clauses(sentence, normalized_metric):
+        metric_clauses = _metric_predicate_clauses(sentence, normalized_metric)
+        for clause, metric_position in metric_clauses:
             metric_end = metric_position + len(normalized_metric)
             measure_positions = (
                 _first_matching_measure_positions(
@@ -265,7 +273,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 for position, _ in phrase_positions
             ):
                 return True
-        if index + 1 < len(sentences):
+        if metric_clauses and index + 1 < len(sentences):
             following = sentences[index + 1].strip()
             following_positions = (
                 _first_matching_measure_positions(following, expected) if expected else None

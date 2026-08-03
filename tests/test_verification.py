@@ -387,6 +387,32 @@ def test_anaphora_continues_nearest_explicit_metric_subject():
     assert reported_value_linked_to_metric("$3 billion", "operating expenses", quote)
 
 
+def test_cross_sentence_anaphora_requires_metric_in_immediately_prior_sentence():
+    quote = "Revenue was flat. Operating expenses remained stable. It was $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Coffee sales fell to $2 million this quarter. Fee income remained flat.",
+        "Fees collected were $2 million this quarter. Fee income remained flat.",
+    ],
+)
+def test_metric_anchor_does_not_match_inside_larger_word(quote):
+    assert not reported_value_linked_to_metric("$2 million", "fee", quote)
+
+
+def test_metric_anchor_can_end_at_hyphen_boundary():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "fee",
+        "Fee-related income was $2 million.",
+    )
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,
