@@ -283,7 +283,7 @@ async def run_events(
                         row_status = RunStatus(str(row["status"])) if row else None
                         committed = bool(
                             row and row_status in TERMINAL_STATUSES and row.get("receipt_path")
-                        )
+                        ) and _receipt_is_reconciled(row)
                         if not committed:
                             # Keep the cursor before this event so reconnect/replay
                             # cannot observe completion ahead of durable state.
@@ -309,6 +309,7 @@ async def run_events(
                 row
                 and RunStatus(str(row["status"])) in TERMINAL_STATUSES
                 and row.get("receipt_path")
+                and _receipt_is_reconciled(row)
                 and not events
             ):
                 break
@@ -344,6 +345,14 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
             detail="Receipt is awaiting terminal-state reconciliation",
         )
     return path, receipt
+
+
+def _receipt_is_reconciled(row: dict[str, object]) -> bool:
+    try:
+        _validated_receipt(row)
+    except (HTTPException, OSError, json.JSONDecodeError):
+        return False
+    return True
 
 
 @app.get("/api/runs/{run_id}/receipt.json")

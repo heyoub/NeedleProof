@@ -383,9 +383,20 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         is_disconnected=connected,
     )
     response = await run_events(request, created.run_id, None, None)
-    streamed = "".join([chunk async for chunk in response.body_iterator])
-    assert "run.interrupted" in streamed
-    assert "run.completed" not in streamed
+    iterator = response.body_iterator
+    first_terminal_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"].startswith("run.") and event["type"] != "run.started"
+    )
+    for _event in events[:first_terminal_index]:
+        chunk = await anext(iterator)
+        assert "run.completed" not in chunk
+        assert "run.interrupted" not in chunk
+
+    terminal_chunk = asyncio.create_task(anext(iterator))
+    await asyncio.sleep(0.15)
+    assert not terminal_chunk.done()
 
     for route in (receipt_json, receipt_page):
         with pytest.raises(HTTPException, match="awaiting terminal-state reconciliation") as raised:
@@ -393,6 +404,9 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         assert raised.value.status_code == 409
 
     await service.reconcile_abandoned_runs()
+    chunk = await asyncio.wait_for(terminal_chunk, timeout=1)
+    assert "run.completed" in chunk
+    assert "run.interrupted" not in chunk
     recovered = await database.get_run_row(created.run_id)
     assert recovered is not None
     assert recovered["status"] == RunStatus.COMPLETED.value
