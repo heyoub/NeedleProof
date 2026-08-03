@@ -132,6 +132,44 @@ async def test_model_budget_blocks_live_runs_but_not_rehearsal(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_model_budget_denials_do_not_exhaust_local_request_quota(tmp_path):
+    database = AppDatabase(tmp_path / "budget-denial-quota.sqlite3")
+    await database.initialize()
+    await add_model_usage(database, run_id="run_existing_usage", total_tokens=10)
+    settings = Settings(
+        max_runs_per_session_per_hour=2,
+        max_runs_per_ip_per_hour=2,
+        max_model_tokens_per_hour=10,
+        max_model_tokens_per_day=10,
+        model_token_reservation_per_run=10,
+    )
+    limiter = PublicUsageLimiter(settings, database)
+
+    for attempt in range(2):
+        with pytest.raises(UsageLimitError, match="hourly model budget"):
+            await limiter.admit(
+                run_id=f"run_denied_{attempt}",
+                session_id="recovering-browser",
+                client_ip="192.0.2.40",
+                rehearsal=False,
+            )
+
+    limiter.settings = settings.model_copy(
+        update={"max_model_tokens_per_hour": 30, "max_model_tokens_per_day": 30}
+    )
+    decision = await limiter.admit(
+        run_id="run_after_budget_recovery",
+        session_id="recovering-browser",
+        client_ip="192.0.2.40",
+        rehearsal=False,
+    )
+
+    assert decision.session_attempts == 1
+    assert decision.ip_attempts == 1
+    assert await database.get_model_token_reservation("run_after_budget_recovery") == 10
+
+
+@pytest.mark.asyncio
 async def test_concurrent_live_admission_atomically_reserves_remaining_budget(tmp_path):
     database = AppDatabase(tmp_path / "concurrent-usage.sqlite3")
     await database.initialize()
