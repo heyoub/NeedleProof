@@ -36,6 +36,7 @@ def _search_text_signature(value: object) -> str:
     tokens = re.findall(r"[^\W_]+", normalized.casefold())
     return " ".join(sorted(tokens))
 
+
 AGENT_INSTRUCTIONS = """
 You are the NeedleProof Corpus Investigator. You investigate a closed document corpus.
 

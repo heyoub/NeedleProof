@@ -208,13 +208,8 @@ def chunk_page(
         if current and current_tokens + paragraph_tokens > target_max:
             chunks.append(current)
             carry_budget = min(overlap, max(0, target_max - paragraph_tokens))
-            carry_text = _bounded_tail_overlap(
-                "\n\n".join(current), token_budget=carry_budget
-            )
-            while (
-                carry_text
-                and estimate_tokens(f"{carry_text}\n\n{paragraph}") > target_max
-            ):
+            carry_text = _bounded_tail_overlap("\n\n".join(current), token_budget=carry_budget)
+            while carry_text and estimate_tokens(f"{carry_text}\n\n{paragraph}") > target_max:
                 carry_text = " ".join(carry_text.split()[1:])
             current = [carry_text] if carry_text else []
             current_tokens = estimate_tokens(carry_text) if carry_text else 0
