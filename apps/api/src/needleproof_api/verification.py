@@ -210,6 +210,7 @@ def _first_matching_measure_spans(
     ]
     spans: list[tuple[int, int]] = []
     observed_index = 0
+    comparison_end: int | None = None
     for target in expected:
         while observed_index < len(observed):
             signature, span = observed[observed_index]
@@ -217,9 +218,15 @@ def _first_matching_measure_spans(
             if signature[1] != target[1] or signature[3] != target[3]:
                 continue
             if signature == target:
+                if comparison_end is not None:
+                    continuation = text[comparison_end : span[0]].strip(" \t,:;()-")
+                    if not _continues_metric_subject(continuation):
+                        return None
                 spans.append(span)
+                comparison_end = None
                 break
             if _COMPARISON_AMOUNT_PREFIX.search(text[: span[0]]):
+                comparison_end = span[1]
                 continue
             return None
         else:
@@ -341,25 +348,22 @@ def _is_coordinated_subject_with_shared_predicate(value: str) -> bool:
 def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
     boundaries: list[re.Match[str]] = []
     for boundary in _PREDICATE_CLAUSE_BOUNDARY.finditer(sentence):
-        if boundary.group("boundary") == ";":
-            boundaries.append(boundary)
-            continue
         following = sentence[boundary.end() :]
         if boundary.group("boundary") in {"because", "since"} and re.match(
             r"^(?:of|due\s+to|as\s+a\s+result\s+of)\b",
             following,
         ):
             continue
-        numeric = _NUMERIC.search(following)
-        continuation_prefix = following[: numeric.start()] if numeric else following
-        if boundary.group("boundary") == "since" and "," in continuation_prefix:
-            temporal_modifier, continuation = continuation_prefix.split(",", 1)
+        if boundary.group("boundary") == "since" and "," in following:
+            temporal_modifier, continuation = following.rsplit(",", 1)
             modifier_words = _WORD.findall(temporal_modifier.casefold())
             if not any(
                 word in _PREDICATE_VERBS for word in modifier_words
             ) and _continues_metric_subject(continuation):
                 continue
-        if boundary.group("boundary") in {"—", "–"}:
+        numeric = _NUMERIC.search(following)
+        continuation_prefix = following[: numeric.start()] if numeric else following
+        if boundary.group("boundary") in {";", "—", "–"}:
             if not _continues_metric_subject(continuation_prefix):
                 boundaries.append(boundary)
             continue

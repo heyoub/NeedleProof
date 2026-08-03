@@ -310,6 +310,18 @@ def test_em_dash_keeps_value_before_competing_clause_and_anaphoric_continuation(
     )
 
 
+@pytest.mark.parametrize(
+    "continuation",
+    ["it reached $2 million", "then reached $2 million"],
+)
+def test_semicolon_keeps_anaphoric_or_elided_metric_continuation(continuation):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue was flat; {continuation}.",
+    )
+
+
 def test_elided_subject_remains_linked_across_contrasting_predicate():
     assert reported_value_linked_to_metric(
         "$2 million",
@@ -658,6 +670,13 @@ def test_comparison_amount_before_reported_value_does_not_block_match(quote):
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+def test_comparison_skip_cannot_cross_competing_subject():
+    quote = "Revenue increased (up from $1 million) after operating expenses reached $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
 def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
     quote = "Revenue was flat because operating expenses rose. It was $2 million."
 
@@ -678,6 +697,14 @@ def test_temporal_since_modifier_retains_metric_subject():
         "$2 million",
         "Revenue",
         "Revenue has increased since the acquisition, reaching $2 million.",
+    )
+
+
+def test_temporal_since_modifier_preserves_comma_inside_date():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue has increased since January 1, 2024, reaching $2 million.",
     )
 
 
