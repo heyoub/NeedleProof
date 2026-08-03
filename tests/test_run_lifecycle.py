@@ -9,7 +9,7 @@ import pytest
 from fastapi import HTTPException
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
-from needleproof_api.main import receipt_json, receipt_page, run_events
+from needleproof_api.main import get_run, receipt_json, receipt_page, run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger
 from needleproof_api.retrieval import CorpusStore
@@ -398,6 +398,9 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         with pytest.raises(HTTPException, match="awaiting terminal-state reconciliation") as raised:
             await route(request, created.run_id)
         assert raised.value.status_code == 409
+
+    restored = await get_run(request, created.run_id)
+    assert restored.status == RunStatus.COMPLETED
 
     terminal_chunk = asyncio.create_task(anext(iterator))
     chunk = await asyncio.wait_for(terminal_chunk, timeout=1)

@@ -234,8 +234,10 @@ async def create_run(request: Request, body: RunCreateRequest) -> RunCreateRespo
 
 @app.get("/api/runs/{run_id}")
 async def get_run(request: Request, run_id: str):
-    database, _, _ = _services(request)
-    await _owned_run_row(request, run_id)
+    database, _, service = _services(request)
+    row = await _owned_run_row(request, run_id)
+    if row.get("status") == RunStatus.INTERRUPTED.value and row.get("receipt_path"):
+        await service.reconcile_pending_receipt(run_id)
     envelope = await database.get_envelope(run_id)
     if not envelope:
         raise HTTPException(status_code=404, detail="Investigation run not found")

@@ -37,6 +37,10 @@ _COMPARISON_AMOUNT_PREFIX = re.compile(
     r"(?:\(|,)\s*(?:(?:up|down)\s+from|compared\s+(?:with|to)|versus|vs\.?)\s*$"
 )
 _VALUE_FIRST_SENTENCE = re.compile(r"^(?:by|at|as\s+of)\b")
+_VALUE_FIRST_TEMPORAL_PREFIX = re.compile(
+    r"^(?:at|as\s+of|by)\s+(?:(?:the\s+)?(?:year|quarter|month|period)\s+end|"
+    r"(?:the\s+)?end\s+of\s+(?:the\s+)?(?:year|quarter|month|period))\b\s*"
+)
 _SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
 # Candidate boundaries are filtered structurally below so an elided predicate such as
 # ``but still reached`` keeps the preceding subject.
@@ -234,7 +238,8 @@ def _subject_refers_to_metric(subject: str, metric: str) -> bool:
 
 
 def _text_introduces_competing_subject(text: str, metric: str) -> bool:
-    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(text.strip(" \t,:;()-")):
+    normalized = _VALUE_FIRST_TEMPORAL_PREFIX.sub("", text.strip(" \t,:;()-"))
+    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(normalized):
         words = list(_WORD.finditer(clause))
         predicate = next(
             (
@@ -245,6 +250,8 @@ def _text_introduces_competing_subject(text: str, metric: str) -> bool:
             None,
         )
         if predicate is None:
+            if words and not _continues_metric_subject(clause):
+                return True
             continue
         subject = clause[: predicate.start()].strip()
         if _subject_refers_to_metric(subject, metric):
@@ -553,12 +560,13 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 expected
                 and _ANAPHORIC_SENTENCE.match(following)
                 and following_spans
+                and first_value_start is not None
+                and not _text_introduces_competing_subject(
+                    following[:first_value_start],
+                    normalized_metric,
+                )
                 and all(
                     _value_retains_metric_subject(following, 0, start, normalized_metric)
-                    and not _text_introduces_competing_subject(
-                        following[:start],
-                        normalized_metric,
-                    )
                     for start, _end in following_spans
                 )
                 and (

@@ -610,6 +610,13 @@ def test_value_first_competing_subject_does_not_depend_on_predicate_whitelist(pr
     assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+@pytest.mark.parametrize("predicate", ["equaled", "accounted for", "constituted", "will be"])
+def test_competing_subject_before_value_does_not_depend_on_predicate_whitelist(predicate):
+    quote = f"Revenue was flat. At year end operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
 def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
     quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
 
