@@ -314,6 +314,13 @@ def test_participial_continuation_remains_linked():
     )
 
 
+def test_participial_competing_subject_is_not_linked_to_prior_metric():
+    quote = "Revenue was flat, increasing expenses reached $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "increasing expenses", quote)
+
+
 def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
     metric = "Research and development expenses"
 
@@ -476,6 +483,19 @@ def test_cross_sentence_anaphora_uses_final_metric_subject(quote):
 )
 def test_value_first_continuation_rejects_competing_subject_after_value(following):
     quote = f"Revenue was flat. {following}"
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_continuation_rejects_competing_subject_before_value():
+    quote = "Revenue was flat. At year end operating expenses were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_anaphoric_determiner_does_not_hide_competing_subject():
+    quote = "Revenue was flat. At $2 million, operating expenses for this quarter were stable."
 
     assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
 

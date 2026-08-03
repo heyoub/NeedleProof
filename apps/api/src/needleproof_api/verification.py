@@ -209,14 +209,16 @@ def _first_matching_measure_spans(
     return sorted(spans) if expected else None
 
 
-def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -> bool:
-    """Detect a new explicit subject after a value-first continuation."""
+def _subject_refers_to_metric(subject: str, metric: str) -> bool:
+    if _metric_occurrence_spans(subject, metric):
+        return True
+    return any(
+        not _WORD.findall(subject[match.end() :]) for match in _SUBJECT_ANAPHORA.finditer(subject)
+    )
 
-    tail = text[value_end:].strip(" \t,:;()-")
-    tail = re.sub(r"^(?:and|but)\s+", "", tail)
-    if not tail or _POST_VALUE_ANAPHORA.match(tail):
-        return False
-    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(tail):
+
+def _text_introduces_competing_subject(text: str, metric: str) -> bool:
+    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(text.strip(" \t,:;()-")):
         words = list(_WORD.finditer(clause))
         predicate = next(
             (
@@ -229,10 +231,20 @@ def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -
         if predicate is None:
             continue
         subject = clause[: predicate.start()].strip()
-        if _SUBJECT_ANAPHORA.search(subject) or _metric_occurrence_spans(subject, metric):
+        if _subject_refers_to_metric(subject, metric):
             continue
         return True
     return False
+
+
+def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -> bool:
+    """Detect a new explicit subject after a value-first continuation."""
+
+    tail = text[value_end:].strip(" \t,:;()-")
+    tail = re.sub(r"^(?:and|but)\s+", "", tail)
+    if not tail or _POST_VALUE_ANAPHORA.match(tail):
+        return False
+    return _text_introduces_competing_subject(tail, metric)
 
 
 def _continues_metric_subject(value: str) -> bool:
@@ -242,7 +254,10 @@ def _continues_metric_subject(value: str) -> bool:
     words = _WORD.findall(normalized)
     return (
         not words
-        or words[0] in _PARTICIPIAL_CONTINUATIONS
+        or (
+            words[0] in _PARTICIPIAL_CONTINUATIONS
+            and not any(index > 1 and word in _PREDICATE_VERBS for index, word in enumerate(words))
+        )
         or all(word in _SUBJECT_CONTINUATIONS for word in words)
     )
 
@@ -451,6 +466,10 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 and following_spans
                 and all(
                     _value_retains_metric_subject(following, 0, start)
+                    and not _text_introduces_competing_subject(
+                        following[:start],
+                        normalized_metric,
+                    )
                     for start, _end in following_spans
                 )
                 and (
