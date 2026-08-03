@@ -290,6 +290,21 @@ def test_value_in_metric_clause_remains_linked_before_contrasting_clause():
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
+    metric = "Research and development expenses"
+
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        metric,
+        "Research and development expenses were $2 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        metric,
+        "Research and development expenses were flat and sales expenses were $2 million.",
+    )
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,

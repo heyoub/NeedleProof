@@ -95,6 +95,37 @@ def _first_matching_measure_is_expected(
     return bool(expected)
 
 
+def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:
+    """Return predicate clauses containing the complete metric anchor.
+
+    A boundary inside the anchor itself is ignored, so compound names such as
+    ``research and development expenses`` remain intact. Boundaries before or
+    after the complete anchor still isolate competing predicates.
+    """
+
+    boundaries = list(_PREDICATE_CLAUSE_BOUNDARY.finditer(sentence))
+    clauses: list[tuple[str, int]] = []
+    seen: set[tuple[int, int]] = set()
+    search_from = 0
+    while (metric_start := sentence.find(metric, search_from)) >= 0:
+        metric_end = metric_start + len(metric)
+        clause_start = max(
+            (boundary.end() for boundary in boundaries if boundary.end() <= metric_start),
+            default=0,
+        )
+        clause_end = min(
+            (boundary.start() for boundary in boundaries if boundary.start() >= metric_end),
+            default=len(sentence),
+        )
+        span = (clause_start, clause_end)
+        if span not in seen:
+            clause = sentence[clause_start:clause_end]
+            clauses.append((clause, metric_start - clause_start))
+            seen.add(span)
+        search_from = metric_end
+    return clauses
+
+
 def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) -> bool:
     normalized_value = normalize_evidence_text(value)[0].casefold()
     normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
@@ -105,15 +136,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     expected = numeric_signatures(normalized_value)
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
-        clauses = [
-            clause.strip()
-            for clause in _PREDICATE_CLAUSE_BOUNDARY.split(sentence)
-            if clause.strip()
-        ]
-        for clause in clauses:
-            metric_position = clause.find(normalized_metric)
-            if metric_position < 0:
-                continue
+        for clause, metric_position in _metric_predicate_clauses(sentence, normalized_metric):
             if expected and _first_matching_measure_is_expected(
                 clause,
                 expected,
