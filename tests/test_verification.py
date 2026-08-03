@@ -17,6 +17,7 @@ from needleproof_api.verification import (
     _distinct_values,
     _temporal_signature,
     reported_value_found,
+    reported_value_linked_to_metric,
 )
 
 MEMO_CHUNK = chunk_id_from_uint64(2565635019366042796)
@@ -266,6 +267,27 @@ def test_value_cooccurring_with_another_metric_is_rejected(corpus):
 
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].value_found
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Revenue was flat while operating expenses were $2 million.",
+        "Revenue was flat whereas operating expenses were $2 million.",
+        "Revenue was flat; operating expenses were $2 million.",
+        "Revenue was flat, but operating expenses were $2 million.",
+        "Revenue was flat and operating expenses were $2 million.",
+    ],
+)
+def test_value_after_intervening_metric_clause_is_not_linked_to_first_metric(quote):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_value_in_metric_clause_remains_linked_before_contrasting_clause():
+    quote = "Revenue was $2 million while operating expenses were flat."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):

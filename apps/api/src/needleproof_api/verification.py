@@ -27,6 +27,14 @@ _NUMERIC = re.compile(
 )
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
+# These separators introduce an independent predicate. Keeping metric/value matching
+# inside one such clause makes ambiguous compound sentences fail closed.
+_PREDICATE_CLAUSE_BOUNDARY = re.compile(
+    r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*"
+    r"|\s+and\s+(?=(?!(?:it|this|that|the\s+figure)\b)"
+    r"[^,;:.!?]{1,80}\b(?:was|were|is|are|has|have|had|reached|totaled|totalled|"
+    r"amounted|stood)\b)"
+)
 _WORD = re.compile(r"[^\W_]+")
 
 
@@ -97,21 +105,24 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     expected = numeric_signatures(normalized_value)
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
-        metric_position = sentence.find(normalized_metric)
-        if metric_position < 0:
-            continue
-        if expected and _first_matching_measure_is_expected(
-            sentence,
-            expected,
-            start=metric_position + len(normalized_metric),
-        ):
-            return True
-        if not expected:
-            clauses = re.split(r"[,;:]\s+", sentence)
-            if any(
-                _word_phrase_found(normalized_metric, clause)
-                and _word_phrase_found(normalized_value, clause)
-                for clause in clauses
+        clauses = [
+            clause.strip()
+            for clause in _PREDICATE_CLAUSE_BOUNDARY.split(sentence)
+            if clause.strip()
+        ]
+        for clause in clauses:
+            metric_position = clause.find(normalized_metric)
+            if metric_position < 0:
+                continue
+            if expected and _first_matching_measure_is_expected(
+                clause,
+                expected,
+                start=metric_position + len(normalized_metric),
+            ):
+                return True
+            if not expected and _word_phrase_found(
+                normalized_value,
+                clause[metric_position + len(normalized_metric) :],
             ):
                 return True
         if index + 1 < len(sentences):

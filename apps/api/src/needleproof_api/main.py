@@ -259,7 +259,11 @@ async def run_events(
     database, _, _ = _services(request)
     await _owned_run_row(request, run_id)
     try:
-        after = last_event_id_query or int(last_event_id_header or 0)
+        after = (
+            last_event_id_query
+            if last_event_id_query is not None
+            else int(last_event_id_header or 0)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid Last-Event-ID") from exc
 
@@ -334,6 +338,11 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
         raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
     if receipt.get("receipt_sha256") != row.get("receipt_sha256"):
         raise HTTPException(status_code=409, detail="Receipt database digest does not match")
+    if receipt.get("status") != row.get("status"):
+        raise HTTPException(
+            status_code=409,
+            detail="Receipt is awaiting terminal-state reconciliation",
+        )
     return path, receipt
 
 

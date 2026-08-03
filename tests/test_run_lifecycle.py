@@ -6,9 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
-from needleproof_api.main import run_events
+from needleproof_api.main import receipt_json, receipt_page, run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger
 from needleproof_api.retrieval import CorpusStore
@@ -276,6 +277,34 @@ async def test_terminal_sse_waits_for_terminal_database_commit(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_explicit_zero_sse_cursor_overrides_nonzero_header(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Replay the complete event history", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, "999", 0)
+    streamed = "".join([chunk async for chunk in response.body_iterator])
+
+    assert "id: 1\n" in streamed
+    assert "run.started" in streamed
+    assert "run.completed" in streamed
+
+
+@pytest.mark.asyncio
 async def test_startup_reconciles_abandoned_running_run(tmp_path):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
@@ -358,11 +387,18 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
     assert "run.interrupted" in streamed
     assert "run.completed" not in streamed
 
+    for route in (receipt_json, receipt_page):
+        with pytest.raises(HTTPException, match="awaiting terminal-state reconciliation") as raised:
+            await route(request, created.run_id)
+        assert raised.value.status_code == 409
+
     await service.reconcile_abandoned_runs()
     recovered = await database.get_run_row(created.run_id)
     assert recovered is not None
     assert recovered["status"] == RunStatus.COMPLETED.value
     assert recovered["receipt_path"]
+    assert (await receipt_json(request, created.run_id)).status_code == 200
+    assert (await receipt_page(request, created.run_id)).status_code == 200
 
 
 @pytest.mark.asyncio
