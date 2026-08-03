@@ -245,12 +245,30 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         session_id="alice",
     )
     task = service._tasks[created.run_id]
-    with pytest.raises(RuntimeError, match="injected terminal database failure"):
-        await task
+    await task
     assert settings.receipts_dir.joinpath(f"{created.run_id}.json").exists()
     row = await database.get_run_row(created.run_id)
     assert row is not None
-    assert row["status"] == RunStatus.RUNNING.value
+    assert row["status"] == RunStatus.INTERRUPTED.value
+    assert row["receipt_path"]
+    assert row["receipt_sha256"]
+    events = await database.list_events(created.run_id)
+    assert events[-1]["type"] == "run.interrupted"
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+    streamed = "".join([chunk async for chunk in response.body_iterator])
+    assert "run.interrupted" in streamed
+    assert "run.completed" not in streamed
 
     await service.reconcile_abandoned_runs()
     recovered = await database.get_run_row(created.run_id)

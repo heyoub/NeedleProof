@@ -560,9 +560,7 @@ class InvestigationService:
                         rehearsal=state.rehearsal_metadata,
                     )
                 await self._commit_terminal(state.envelope, receipt_path, state.error)
-            except Exception as exc:
-                if receipt_path.exists():
-                    raise
+            except Exception as exc:  # noqa: BLE001 - persist a recoverable terminal state
                 error = {
                     "type": "finalization_interrupted",
                     "message": str(exc)[:500],
@@ -580,12 +578,22 @@ class InvestigationService:
                         "run.interrupted",
                         {**error, "authoritative": False, "recoverable": True},
                     )
+                receipt_sha256 = None
+                persisted_receipt_path = None
+                if receipt_path.exists():
+                    with suppress(Exception):
+                        sealed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                        receipt_sha256 = sealed_receipt.get("receipt_sha256")
+                        if receipt_sha256:
+                            persisted_receipt_path = str(receipt_path)
                 await self.database.update_run(
                     ledger.run_id,
                     status=RunStatus.INTERRUPTED,
                     completed_at=utc_now_iso(),
                     answer=None,
                     result_json=interrupted.model_dump_json(),
+                    receipt_path=persisted_receipt_path,
+                    receipt_sha256=receipt_sha256,
                     error_json=json.dumps(error),
                 )
         finally:

@@ -44,6 +44,13 @@ TERMINAL_STATUSES = {
     RunStatus.FAILED,
     RunStatus.INTERRUPTED,
 }
+TERMINAL_EVENTS_BY_STATUS = {
+    RunStatus.COMPLETED: {"run.completed"},
+    RunStatus.INCOMPLETE: {"run.incomplete", "run.timeout"},
+    RunStatus.CANCELLED: {"run.cancelled"},
+    RunStatus.FAILED: {"run.failed"},
+    RunStatus.INTERRUPTED: {"run.interrupted"},
+}
 
 
 class QuoteChallengeRequest(BaseModel):
@@ -267,15 +274,20 @@ async def run_events(
                 for event in events:
                     if event["type"] in TERMINAL_EVENT_TYPES:
                         row = await database.get_run_row(run_id)
+                        row_status = RunStatus(str(row["status"])) if row else None
                         committed = bool(
-                            row
-                            and RunStatus(str(row["status"])) in TERMINAL_STATUSES
-                            and row.get("receipt_path")
+                            row and row_status in TERMINAL_STATUSES and row.get("receipt_path")
                         )
                         if not committed:
                             # Keep the cursor before this event so reconnect/replay
                             # cannot observe completion ahead of durable state.
                             break
+                        if event["type"] not in TERMINAL_EVENTS_BY_STATUS[row_status]:
+                            # A failed terminal commit can leave an earlier intended
+                            # event in the append-only ledger. Skip it in favor of the
+                            # durable recovery status appended by the finalizer.
+                            cursor = int(event["sequence"])
+                            continue
                     cursor = int(event["sequence"])
                     yield f"id: {cursor}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
                     terminal_sent = event["type"] in TERMINAL_EVENT_TYPES
