@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .chunk_ids import ChunkId
 from .config import Settings
@@ -51,6 +51,14 @@ class QuoteChallengeRequest(BaseModel):
     corpus_version: str = Field(pattern=r"^v_[0-9a-f]{16}$")
     chunk_id: ChunkId
     quote: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("quote")
+    @classmethod
+    def require_normalized_quote_text(cls, value: str) -> str:
+        normalized, _ = normalize_evidence_text(value)
+        if not normalized:
+            raise ValueError("quote must contain non-whitespace evidence text")
+        return value
 
 
 @asynccontextmanager
@@ -380,6 +388,8 @@ async def quote_challenge(request: Request, body: QuoteChallengeRequest) -> JSON
     if not chunks:
         raise HTTPException(status_code=404, detail="Chunk not found")
     normalized_quote, operations = normalize_evidence_text(body.quote)
+    if not normalized_quote:
+        raise HTTPException(status_code=422, detail="Quote contains no evidence text")
     matched = normalized_quote in chunks[0].normalized_text
     return JSONResponse(
         {

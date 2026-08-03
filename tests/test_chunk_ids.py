@@ -36,3 +36,15 @@ def test_quote_challenge_rejects_numeric_chunk_ids_at_the_contract_boundary():
                 "quote": "altered quotation",
             }
         )
+
+
+def test_quote_challenge_rejects_quote_empty_after_normalization():
+    with pytest.raises(ValidationError, match="non-whitespace evidence text"):
+        QuoteChallengeRequest.model_validate(
+            {
+                "run_id": "run_0123456789abcdef0123456789abcdef",
+                "corpus_version": "v_0123456789abcdef",
+                "chunk_id": "chk_5e8a2f6d4c3b1a09",
+                "quote": " \t\n  ",
+            }
+        )
