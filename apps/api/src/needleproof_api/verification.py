@@ -28,6 +28,7 @@ _NUMERIC = re.compile(
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
 _ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
+_POST_VALUE_ANAPHORA = re.compile(r"^(?:which|who|whose|where|when|the\s+figure|it|this|that)\b")
 # These separators introduce an independent predicate. Keeping metric/value matching
 # inside one such clause makes ambiguous compound sentences fail closed.
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*")
@@ -73,6 +74,33 @@ _SUBJECT_CONTINUATIONS = frozenset(
         "still",
         "then",
         "to",
+        "totaled",
+        "totalled",
+        "was",
+        "were",
+    }
+)
+_PREDICATE_VERBS = frozenset(
+    {
+        "amounted",
+        "are",
+        "closed",
+        "declined",
+        "decreased",
+        "ended",
+        "fell",
+        "generated",
+        "grew",
+        "had",
+        "has",
+        "have",
+        "increased",
+        "is",
+        "reached",
+        "remained",
+        "reported",
+        "rose",
+        "stood",
         "totaled",
         "totalled",
         "was",
@@ -127,25 +155,36 @@ def reported_value_found(value: str, quote: str) -> bool:
     return _word_phrase_found(normalized_value, normalized_quote)
 
 
-def _first_matching_measure_positions(
+def _first_matching_measure_spans(
     text: str,
     expected: set[tuple[str, str, str, str]],
     *,
     start: int = 0,
-) -> list[int] | None:
-    positions: list[int] = []
+) -> list[tuple[int, int]] | None:
+    spans: list[tuple[int, int]] = []
     for target in expected:
         _sign, target_currency, _number, target_unit = target
         comparable = [
-            (_numeric_signature(match), match.start())
+            (_numeric_signature(match), (match.start(), match.end()))
             for match in _NUMERIC.finditer(text, pos=start)
             if (match.group("currency") or "") == target_currency
             and re.sub(r"\s+", " ", (match.group("unit") or "").lower()) == target_unit
         ]
         if not comparable or comparable[0][0] != target:
             return None
-        positions.append(comparable[0][1])
-    return positions if expected else None
+        spans.append(comparable[0][1])
+    return spans if expected else None
+
+
+def _tail_introduces_competing_subject(text: str, value_end: int) -> bool:
+    """Detect a new explicit subject after a value-first continuation."""
+
+    tail = text[value_end:].strip(" \t,:;()-")
+    tail = re.sub(r"^(?:and|but)\s+", "", tail)
+    if not tail or _POST_VALUE_ANAPHORA.match(tail):
+        return False
+    words = _WORD.findall(tail)
+    return any(index > 0 and word in _PREDICATE_VERBS for index, word in enumerate(words))
 
 
 def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) -> bool:
@@ -251,8 +290,8 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
         metric_clauses = _metric_predicate_clauses(sentence, normalized_metric)
         for clause, metric_position in metric_clauses:
             metric_end = metric_position + len(normalized_metric)
-            measure_positions = (
-                _first_matching_measure_positions(
+            measure_spans = (
+                _first_matching_measure_spans(
                     clause,
                     expected,
                     start=metric_end,
@@ -260,9 +299,9 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 if expected
                 else None
             )
-            if measure_positions and all(
-                _value_retains_metric_subject(clause, metric_end, position)
-                for position in measure_positions
+            if measure_spans and all(
+                _value_retains_metric_subject(clause, metric_end, start)
+                for start, _end in measure_spans
             ):
                 return True
             phrase_positions = (
@@ -275,16 +314,17 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 return True
         if metric_clauses and index + 1 < len(sentences):
             following = sentences[index + 1].strip()
-            following_positions = (
-                _first_matching_measure_positions(following, expected) if expected else None
+            following_spans = (
+                _first_matching_measure_spans(following, expected) if expected else None
             )
             if (
                 expected
                 and _ANAPHORIC_SENTENCE.match(following)
-                and following_positions
+                and following_spans
                 and all(
-                    _value_retains_metric_subject(following, 0, position)
-                    for position in following_positions
+                    _value_retains_metric_subject(following, 0, start)
+                    and not _tail_introduces_competing_subject(following, end)
+                    for start, end in following_spans
                 )
             ):
                 return True

@@ -395,6 +395,33 @@ def test_cross_sentence_anaphora_requires_metric_in_immediately_prior_sentence()
 
 
 @pytest.mark.parametrize(
+    "following",
+    [
+        "At $2 million, operating expenses were stable.",
+        "At $2 million operating expenses were stable.",
+    ],
+)
+def test_value_first_continuation_rejects_competing_subject_after_value(following):
+    quote = f"Revenue was flat. {following}"
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize(
+    "following",
+    [
+        "At $2 million, it remained stable.",
+        "It was $2 million, which was unchanged.",
+        "At $2 million, up from the prior year.",
+    ],
+)
+def test_value_first_continuation_preserves_anaphora_and_context(following):
+    quote = f"Revenue was flat. {following}"
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize(
     "quote",
     [
         "Coffee sales fell to $2 million this quarter. Fee income remained flat.",
