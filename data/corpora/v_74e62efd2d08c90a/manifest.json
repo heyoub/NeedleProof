@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0",
+  "corpus_id": "finance-of-the-future-2026",
+  "display_name": "Finance of the Future \u2014 Find and Pull Out",
+  "description": "The supplied model-directed extraction instructions and Northbank Advisors Hamilton Lane memo. Answer-key pages are intentionally excluded.",
+  "parser": {
+    "name": "pypdf",
+    "version": "6.14.2"
+  },
+  "chunker": {
+    "version": "page-semantic-v1",
+    "target_tokens": [
+      500,
+      700
+    ],
+    "overlap_tokens": 80,
+    "crosses_pages": false
+  },
+  "normalization": [
+    "unicode_nfkc",
+    "whitespace_folding",
+    "pdf_linebreak_dehyphenation"
+  ],
+  "embedding_model": "text-embedding-3-small",
+  "embedding_dimensions": 768,
+  "embedding_l2_normalized": true,
+  "turbovec_version": "0.8.0",
+  "turbovec_bit_width": 4,
+  "retrieval": [
+    "dense",
+    "sqlite_fts5",
+    "rrf_hybrid"
+  ],
+  "documents": [
+    {
+      "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+      "display_name": "Northbank Advisors \u2014 Hamilton Lane annual review",
+      "source_sha256": "ce12c42ac0dcca444de0f5dc8c686895ce0a4957ce20fa5b75136da2982b68d7",
+      "included_pages": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "publication_date": "2026-07-24",
+      "reporting_period_date": null,
+      "file_creation_date": "2026-07-29",
+      "chunk_count": 5,
+      "chunk_hashes": [
+        "444d7f7bfa43923701e2c1a933f782d230700000a3bdc50636c880240927b689",
+        "cb9de665973d4a7ba926c0dc2ea2f4efb0f709c3e0f29f05e725ff88bcc02852",
+        "17a2412f5348fc96f7ea475e37a855dc17422414572af9ec4209e8c6f88295a1",
+        "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+        "ffb4cc06801880a5e8ffa62ca8cc72fe9c11dfb3dfe7daf03d2a459d92dda224"
+      ]
+    }
+  ],
+  "document_count": 1,
+  "chunk_count": 5,
+  "corpus_version": "v_74e62efd2d08c90a",
+  "manifest_sha256": "74e62efd2d08c90aca2ec3e0ea8a42f6d1318e35839457f0c6c718c39bc6ebf5",
+  "built_at": "2026-07-30T00:46:51.263122+00:00",
+  "embedding_calls": [
+    {
+      "operation": "embedding",
+      "model": "text-embedding-3-small",
+      "response_id": "gen-emb-1785372410-UNYXaRhr5bb95i1u5Yvk",
+      "request_id": null,
+      "started_at": "2026-07-30T00:46:49.396829+00:00",
+      "ended_at": "2026-07-30T00:46:50.967752+00:00",
+      "duration_ms": 1570.881,
+      "token_usage": {
+        "prompt_tokens": 1848,
+        "total_tokens": 1848,
+        "cost": 3.696e-05,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 3.696e-05,
+          "upstream_inference_prompt_cost": 3.696e-05,
+          "upstream_inference_completions_cost": 0
+        }
+      },
+      "retry_count": 0,
+      "error": null,
+      "input_count": 5
+    }
+  ]
+}

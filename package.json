@@ -1,0 +1,23 @@
+{
+  "name": "needleproof",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "pnpm --filter @needleproof/web build",
+    "corpus:build": "UV_CACHE_DIR=.uv-cache uv run --env-file .env --no-sync needleproof corpus build",
+    "corpus:ensure": "UV_CACHE_DIR=.uv-cache uv run --env-file .env --no-sync needleproof corpus ensure",
+    "demo": "pnpm corpus:ensure && concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"UV_CACHE_DIR=.uv-cache uv run --env-file .env --no-sync uvicorn needleproof_api.main:app --app-dir apps/api/src --host 127.0.0.1 --port 8000\" \"ASTRO_DEV_BACKGROUND=0 pnpm --filter @needleproof/web dev --host 127.0.0.1 --port 4321\"",
+    "test": "UV_CACHE_DIR=.uv-cache uv run --no-sync pytest && pnpm --filter @needleproof/web check && pnpm --filter @needleproof/web build",
+    "test:e2e": "playwright test",
+    "golden": "UV_CACHE_DIR=.uv-cache uv run --env-file .env --no-sync needleproof golden",
+    "receipt:rehearsal": "UV_CACHE_DIR=.uv-cache uv run --no-sync needleproof rehearsal"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "concurrently": "9.2.1"
+  }
+}

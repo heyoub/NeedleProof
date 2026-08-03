@@ -1,0 +1,14 @@
+services:
+  needleproof:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - needleproof-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  needleproof-data:

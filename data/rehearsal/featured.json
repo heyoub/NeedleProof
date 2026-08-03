@@ -1,0 +1,889 @@
+{
+  "schema_version": "1.2",
+  "run_id": "run_4f3a91fcdfa34deeaebc95335b7cc244",
+  "status": "completed",
+  "question": "Report the two assets-under-management dates, the conflicting fee-earning AUM figures, and fee-related earnings.",
+  "answer": "Assets under management is reported at different dates: $146.1 billion (as of 31 December 2025) and $142 billion (on 31 March 2026). These are date variants, not a conflict. Fee-earning AUM is reported with conflicting values: $82 billion (ended the year) and $8.2 billion (February call). The verified sources contain a conflict. Fee-related earnings: $345 million.",
+  "corpus_id": "finance-of-the-future-2026",
+  "corpus_version": "v_0a380d3ab8d9570c",
+  "corpus_manifest_sha256": "0a380d3ab8d9570c6686328d5ff6b05b1cac18686d2aa6173e2923b564942d18",
+  "claims": [
+    {
+      "statement": "Assets under management is reported at different dates: $146.1 billion (as of 31 December 2025) and $142 billion (on 31 March 2026)",
+      "metric": "Assets under management",
+      "status": "date_variant",
+      "values": [
+        {
+          "value": "$146.1 billion",
+          "temporal_anchor": "as of 31 December 2025",
+          "evidence": [
+            {
+              "chunk_id": "chk_239af774f09d8cac",
+              "metric_anchor": "Assets under management",
+              "exact_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+              "relation": "supports"
+            }
+          ]
+        },
+        {
+          "value": "$142 billion",
+          "temporal_anchor": "on 31 March 2026",
+          "evidence": [
+            {
+              "chunk_id": "chk_239af774f09d8cac",
+              "metric_anchor": "Assets under management",
+              "exact_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+              "relation": "supports"
+            }
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "chunk_id": "chk_239af774f09d8cac",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "Assets under management",
+          "metric_anchor_found": true,
+          "temporal_anchors": [
+            "as of 31 December 2025",
+            "on 31 March 2026"
+          ],
+          "temporal_anchors_found": true,
+          "quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+          "normalized_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+          "normalization_operations": [],
+          "relation": "contextualizes",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        },
+        {
+          "chunk_id": "chk_239af774f09d8cac",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "Assets under management",
+          "metric_anchor_found": true,
+          "temporal_anchors": [
+            "as of 31 December 2025",
+            "on 31 March 2026"
+          ],
+          "temporal_anchors_found": true,
+          "quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+          "normalized_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
+          "normalization_operations": [],
+          "relation": "supports",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        }
+      ],
+      "verification_notes": []
+    },
+    {
+      "statement": "Fee-earning AUM is reported with conflicting values: $82 billion (ended the year) and $8.2 billion (February call)",
+      "metric": "Fee-earning AUM",
+      "status": "conflict",
+      "values": [
+        {
+          "value": "$82 billion",
+          "temporal_anchor": "ended the year",
+          "evidence": [
+            {
+              "chunk_id": "chk_239af774f09d8cac",
+              "metric_anchor": "Fee-earning AUM",
+              "exact_quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
+              "relation": "supports"
+            }
+          ]
+        },
+        {
+          "value": "$8.2 billion",
+          "temporal_anchor": "February call",
+          "evidence": [
+            {
+              "chunk_id": "chk_5e898d2f71bb3a75",
+              "metric_anchor": "fee-earning AUM",
+              "exact_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+              "relation": "supports"
+            }
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "chunk_id": "chk_5e898d2f71bb3a75",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "fee-earning AUM",
+          "metric_anchor_found": true,
+          "temporal_anchors": [
+            "February call"
+          ],
+          "temporal_anchors_found": true,
+          "quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+          "normalized_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+          "normalization_operations": [],
+          "relation": "contextualizes",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "ffb4cc06801880a5e8ffa62ca8cc72fe9c11dfb3dfe7daf03d2a459d92dda224",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        },
+        {
+          "chunk_id": "chk_239af774f09d8cac",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "Fee-earning AUM",
+          "metric_anchor_found": true,
+          "temporal_anchors": [
+            "ended the year"
+          ],
+          "temporal_anchors_found": true,
+          "quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
+          "normalized_quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
+          "normalization_operations": [],
+          "relation": "supports",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        },
+        {
+          "chunk_id": "chk_5e898d2f71bb3a75",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "fee-earning AUM",
+          "metric_anchor_found": true,
+          "temporal_anchors": [
+            "February call"
+          ],
+          "temporal_anchors_found": true,
+          "quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+          "normalized_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+          "normalization_operations": [],
+          "relation": "supports",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "ffb4cc06801880a5e8ffa62ca8cc72fe9c11dfb3dfe7daf03d2a459d92dda224",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        }
+      ],
+      "verification_notes": [
+        "A verified quotation explicitly characterizes the values as erroneous or incompatible."
+      ]
+    },
+    {
+      "statement": "Fee-related earnings: $345 million",
+      "metric": "Fee-related earnings",
+      "status": "verified",
+      "values": [
+        {
+          "value": "$345 million",
+          "temporal_anchor": null,
+          "evidence": [
+            {
+              "chunk_id": "chk_239af774f09d8cac",
+              "metric_anchor": "Fee-related earnings",
+              "exact_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+              "relation": "supports"
+            }
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "chunk_id": "chk_239af774f09d8cac",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "Fee-related earnings",
+          "metric_anchor_found": true,
+          "temporal_anchors": [],
+          "temporal_anchors_found": true,
+          "quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+          "normalized_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+          "normalization_operations": [],
+          "relation": "supports",
+          "quote_found": true,
+          "value_found": true,
+          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        }
+      ],
+      "verification_notes": []
+    }
+  ],
+  "events": [
+    {
+      "sequence": 1,
+      "type": "run.started",
+      "occurred_at": "2026-08-01T20:51:51.531691+00:00",
+      "payload": {
+        "corpus_manifest_sha256": "0a380d3ab8d9570c6686328d5ff6b05b1cac18686d2aa6173e2923b564942d18",
+        "corpus_version": "v_0a380d3ab8d9570c",
+        "question": "Report the two assets-under-management dates, the conflicting fee-earning AUM figures, and fee-related earnings.",
+        "rehearsal": false
+      },
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "event_hash": "def34bdaa070837a059cd2883e37f0d5943f3a4b88443e9a4932f3b5c67b7995"
+    },
+    {
+      "sequence": 2,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-01T20:51:51.584544+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "def34bdaa070837a059cd2883e37f0d5943f3a4b88443e9a4932f3b5c67b7995",
+      "event_hash": "8b2f6fbe55a445786b98cf93ed91d381270631145b9da67d9150a641e0e9b60e"
+    },
+    {
+      "sequence": 3,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-01T20:51:56.118660+00:00",
+      "payload": {
+        "response_id": "gen-1785617512-ensMCJZUbjsFV61nk68H",
+        "token_usage": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 1515,
+          "input_tokens": 1518,
+          "output_tokens": 71,
+          "reasoning_tokens": 15,
+          "requests": 1,
+          "total_tokens": 1589
+        }
+      },
+      "previous_hash": "8b2f6fbe55a445786b98cf93ed91d381270631145b9da67d9150a641e0e9b60e",
+      "event_hash": "e6853b38052766a804a860c04ed7aab4792eae267d03df5e28584f01e5cbf78f"
+    },
+    {
+      "sequence": 4,
+      "type": "tool.search.started",
+      "occurred_at": "2026-08-01T20:51:56.128283+00:00",
+      "payload": {
+        "date_from": null,
+        "date_to": null,
+        "document_ids": null,
+        "mode": "hybrid",
+        "query": "assets under management fee-earning AUM fee-related earnings",
+        "top_k": 10
+      },
+      "previous_hash": "e6853b38052766a804a860c04ed7aab4792eae267d03df5e28584f01e5cbf78f",
+      "event_hash": "75376fee2044c7e26f455673b5570af13f40cb9c491d6a04a2d2b52aef2f89d1"
+    },
+    {
+      "sequence": 5,
+      "type": "tool.search.completed",
+      "occurred_at": "2026-08-01T20:51:57.116163+00:00",
+      "payload": {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "document_ids": null,
+          "mode": "hybrid",
+          "query": "assets under management fee-earning AUM fee-related earnings",
+          "top_k": 10
+        },
+        "attempted_searches": 1,
+        "completed_searches": 1,
+        "duration_ms": 982.129,
+        "results": [
+          {
+            "chunk_id": "chk_239af774f09d8cac",
+            "dense_rank": 1,
+            "dense_score": 0.5404913,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 1,
+            "lexical_score": -1.8721805,
+            "physical_page_index": 6,
+            "preview": "NORTHBANK ADVISORS LLC INTERNAL MEMORANDUM. NOT FOR DISTRIBUTION. To: Investment Committee From: Research desk Date: 24 July 2026 Re: Annual review, Hamilton Lane Incorporated (HLNE), public comparable Ahead of Thursday I have pulled together where HLNE landed for their fiscal…",
+            "printed_page_label": "6",
+            "retrieval_mode": "hybrid",
+            "score": 0.0327869,
+            "sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca"
+          },
+          {
+            "chunk_id": "chk_5e898d2f71bb3a75",
+            "dense_rank": 2,
+            "dense_score": 0.467728,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 3,
+            "lexical_score": -0.3732669,
+            "physical_page_index": 6,
+            "preview": "$5.92 against $5.41. Adjusted net income was $321 million. On capital returns, the quarterly dividend was $0.54 per share through fiscal 2026, keeping them on the targeted $2.16 for that year, which was a 10 percent increase. Alongside the annual results they declared $0.60 pe…",
+            "printed_page_label": "6",
+            "retrieval_mode": "hybrid",
+            "score": 0.032002,
+            "sha256": "ffb4cc06801880a5e8ffa62ca8cc72fe9c11dfb3dfe7daf03d2a459d92dda224"
+          },
+          {
+            "chunk_id": "chk_61eadd23f3ed71bc",
+            "dense_rank": 3,
+            "dense_score": 0.4218407,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 2,
+            "lexical_score": -1.6758913,
+            "physical_page_index": 4,
+            "preview": "03 / THE INSTRUCTION Copy this into the top boxComplete and ready to run. No brackets to fill, nothing to decide. Copy every line. You extract reported financial metrics for a public asset manager from an internal review memo. INPUT I will paste an internal memo. It is prose, …",
+            "printed_page_label": "4",
+            "retrieval_mode": "hybrid",
+            "score": 0.032002,
+            "sha256": "cb9de665973d4a7ba926c0dc2ea2f4efb0f709c3e0f29f05e725ff88bcc02852"
+          },
+          {
+            "chunk_id": "chk_eb8e183090199793",
+            "dense_rank": 4,
+            "dense_score": 0.2916705,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": null,
+            "lexical_score": null,
+            "physical_page_index": 5,
+            "preview": "04 / THE DATA Copy this into the bottom boxAn internal memo from Northbank Advisors, written the way real internal memos are written. The numbers are scattered through prose, some are repeated, and one of them is wrong. oneprompt · Finance of the Future · July 29, 2026 5",
+            "printed_page_label": "5",
+            "retrieval_mode": "hybrid",
+            "score": 0.015625,
+            "sha256": "17a2412f5348fc96f7ea475e37a855dc17422414572af9ec4209e8c6f88295a1"
+          },
+          {
+            "chunk_id": "chk_db0629f76cbc19ec",
+            "dense_rank": 5,
+            "dense_score": 0.1724471,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": null,
+            "lexical_score": null,
+            "physical_page_index": 3,
+            "preview": "TOP BOX · PASTE ONCE, LEAVE IT THERE The instruction Google AI Studio: the panel on the right labelled System instructions. Claude: make a Project, then Project instructions. ChatGPT: make a Project, or a Custom GPT, then Instructions. This is the thing you are building tonigh…",
+            "printed_page_label": "3",
+            "retrieval_mode": "hybrid",
+            "score": 0.0153846,
+            "sha256": "444d7f7bfa43923701e2c1a933f782d230700000a3bdc50636c880240927b689"
+          }
+        ],
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "75376fee2044c7e26f455673b5570af13f40cb9c491d6a04a2d2b52aef2f89d1",
+      "event_hash": "3f8fcf14ea633912fed29c04553b57227d107c18c58d22727735e85b8a68874f"
+    },
+    {
+      "sequence": 6,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-01T20:51:57.141000+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "3f8fcf14ea633912fed29c04553b57227d107c18c58d22727735e85b8a68874f",
+      "event_hash": "4d70483af3205bfadb8c75586542ad3dc413b4f381ad876f7127ac8dd0e9b384"
+    },
+    {
+      "sequence": 7,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-01T20:51:58.741728+00:00",
+      "payload": {
+        "response_id": "gen-1785617517-JnvUjez0iiYmJnagPOJj",
+        "token_usage": {
+          "cache_write_tokens": 1329,
+          "cached_tokens": 1515,
+          "input_tokens": 2847,
+          "output_tokens": 67,
+          "reasoning_tokens": 17,
+          "requests": 1,
+          "total_tokens": 2914
+        }
+      },
+      "previous_hash": "4d70483af3205bfadb8c75586542ad3dc413b4f381ad876f7127ac8dd0e9b384",
+      "event_hash": "b86deb74328ced7875ea8cc5d11dcf895e1d56af3756b6e4754f6b67f96fb1a1"
+    },
+    {
+      "sequence": 8,
+      "type": "tool.read.started",
+      "occurred_at": "2026-08-01T20:51:58.749783+00:00",
+      "payload": {
+        "chunk_ids": [
+          "chk_239af774f09d8cac",
+          "chk_5e898d2f71bb3a75"
+        ],
+        "neighbor_radius": 1
+      },
+      "previous_hash": "b86deb74328ced7875ea8cc5d11dcf895e1d56af3756b6e4754f6b67f96fb1a1",
+      "event_hash": "952d29e7ac1a1a0f19947d25596242cf45c0b9d701ae0357fa345412f3dedcc7"
+    },
+    {
+      "sequence": 9,
+      "type": "tool.read.completed",
+      "occurred_at": "2026-08-01T20:51:58.756107+00:00",
+      "payload": {
+        "chunk_ids": [
+          "chk_239af774f09d8cac",
+          "chk_eb8e183090199793",
+          "chk_5e898d2f71bb3a75"
+        ],
+        "duration_ms": 1.312,
+        "opened_tokens": 987,
+        "unique_opened_chunks": 3
+      },
+      "previous_hash": "952d29e7ac1a1a0f19947d25596242cf45c0b9d701ae0357fa345412f3dedcc7",
+      "event_hash": "1272f53d5b8b16675c5c6e3c2485b8dd94feab161e557349e28dc131d551d963"
+    },
+    {
+      "sequence": 10,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-01T20:51:58.773233+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "1272f53d5b8b16675c5c6e3c2485b8dd94feab161e557349e28dc131d551d963",
+      "event_hash": "14b5dee1167a5be8cabed6620157b616c97bf95906f174b055303cada55f242a"
+    },
+    {
+      "sequence": 11,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-01T20:52:07.218500+00:00",
+      "payload": {
+        "response_id": "gen-1785617519-qFQYxhy29z5PcYnuyG0A",
+        "token_usage": {
+          "cache_write_tokens": 2647,
+          "cached_tokens": 2844,
+          "input_tokens": 5494,
+          "output_tokens": 1121,
+          "reasoning_tokens": 415,
+          "requests": 1,
+          "total_tokens": 6615
+        }
+      },
+      "previous_hash": "14b5dee1167a5be8cabed6620157b616c97bf95906f174b055303cada55f242a",
+      "event_hash": "4311df911df23faa55f60da07bf11e9c27a4af1b3b71c3cd201e47eef90591a2"
+    },
+    {
+      "sequence": 12,
+      "type": "verification.started",
+      "occurred_at": "2026-08-01T20:52:07.225962+00:00",
+      "payload": {
+        "attempted_searches": 1,
+        "claim_count": 3,
+        "completed_search_records": [
+          {
+            "mode": "hybrid",
+            "query": "assets under management fee-earning AUM fee-related earnings",
+            "signature": "{\"date_from\":null,\"date_to\":null,\"document_ids\":[],\"mode\":\"hybrid\",\"query\":\"assets under management fee-earning aum fee-related earnings\"}"
+          }
+        ],
+        "completed_searches": 1,
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "4311df911df23faa55f60da07bf11e9c27a4af1b3b71c3cd201e47eef90591a2",
+      "event_hash": "188e55074d71ac3b7630b4e008b4e846b00c6aa1f816bf9c1ab2c8b2000c3742"
+    },
+    {
+      "sequence": 13,
+      "type": "claim.rejected",
+      "occurred_at": "2026-08-01T20:52:07.234376+00:00",
+      "payload": {
+        "metric": "Assets under management",
+        "statement": "Unverified claim about Assets under management",
+        "status": "unverified"
+      },
+      "previous_hash": "188e55074d71ac3b7630b4e008b4e846b00c6aa1f816bf9c1ab2c8b2000c3742",
+      "event_hash": "ace3364c5fe3ca1e244065b703b73bdc3398b9e8c206320c3b5b64435d854776"
+    },
+    {
+      "sequence": 14,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:07.239453+00:00",
+      "payload": {
+        "metric": "Fee-earning AUM",
+        "statement": "Fee-earning AUM is reported with conflicting values: $82 billion (ended the year) and $8.2 billion (February call)",
+        "status": "conflict"
+      },
+      "previous_hash": "ace3364c5fe3ca1e244065b703b73bdc3398b9e8c206320c3b5b64435d854776",
+      "event_hash": "71bff009d76762807a3fe11da38c21953e3df8be616007b6589abc6ae27ce1c6"
+    },
+    {
+      "sequence": 15,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:07.244556+00:00",
+      "payload": {
+        "metric": "Fee-related earnings",
+        "statement": "Fee-related earnings: $345 million",
+        "status": "verified"
+      },
+      "previous_hash": "71bff009d76762807a3fe11da38c21953e3df8be616007b6589abc6ae27ce1c6",
+      "event_hash": "e3efe4cac22e3e3a3d0e9848bd8530ebf243f5cc22a3f69a71edfc8117391bff"
+    },
+    {
+      "sequence": 16,
+      "type": "verification.completed",
+      "occurred_at": "2026-08-01T20:52:07.249631+00:00",
+      "payload": {
+        "all_claims_authoritative": false,
+        "duration_ms": 18.337
+      },
+      "previous_hash": "e3efe4cac22e3e3a3d0e9848bd8530ebf243f5cc22a3f69a71edfc8117391bff",
+      "event_hash": "886689479078fe9948a65fc4888abd3f6aad5391eda0b98927a50dadd03fb64f"
+    },
+    {
+      "sequence": 17,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-01T20:52:07.267321+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "886689479078fe9948a65fc4888abd3f6aad5391eda0b98927a50dadd03fb64f",
+      "event_hash": "21900f6a1839bc2cd2a84c62fa8cd13e8f15b5050e6e946a825a1f313221163d"
+    },
+    {
+      "sequence": 18,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-01T20:52:15.222158+00:00",
+      "payload": {
+        "response_id": "gen-1785617527-lgkahMigrfqsSmr4qYPj",
+        "token_usage": {
+          "cache_write_tokens": 3926,
+          "cached_tokens": 5491,
+          "input_tokens": 9420,
+          "output_tokens": 1083,
+          "reasoning_tokens": 203,
+          "requests": 1,
+          "total_tokens": 10503
+        }
+      },
+      "previous_hash": "21900f6a1839bc2cd2a84c62fa8cd13e8f15b5050e6e946a825a1f313221163d",
+      "event_hash": "bc65a2b3386e9b80c1eda47f832c8166046e1f75ffd061d3c59816b8fd102393"
+    },
+    {
+      "sequence": 19,
+      "type": "verification.started",
+      "occurred_at": "2026-08-01T20:52:15.229250+00:00",
+      "payload": {
+        "attempted_searches": 1,
+        "claim_count": 3,
+        "completed_search_records": [
+          {
+            "mode": "hybrid",
+            "query": "assets under management fee-earning AUM fee-related earnings",
+            "signature": "{\"date_from\":null,\"date_to\":null,\"document_ids\":[],\"mode\":\"hybrid\",\"query\":\"assets under management fee-earning aum fee-related earnings\"}"
+          }
+        ],
+        "completed_searches": 1,
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "bc65a2b3386e9b80c1eda47f832c8166046e1f75ffd061d3c59816b8fd102393",
+      "event_hash": "d1ef51f4ebbae02613c0931852d297bf226d42a5e168ce1b2f087c6e63408f1b"
+    },
+    {
+      "sequence": 20,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:15.237167+00:00",
+      "payload": {
+        "metric": "Assets under management",
+        "statement": "Assets under management is reported at different dates: $146.1 billion (as of 31 December 2025) and $142 billion (on 31 March 2026)",
+        "status": "date_variant"
+      },
+      "previous_hash": "d1ef51f4ebbae02613c0931852d297bf226d42a5e168ce1b2f087c6e63408f1b",
+      "event_hash": "37a8d56017664d63b579bde1a8460f7e6ae94d662549d6257614e774bb85f425"
+    },
+    {
+      "sequence": 21,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:15.242417+00:00",
+      "payload": {
+        "metric": "Fee-earning AUM",
+        "statement": "Fee-earning AUM is reported with conflicting values: $82 billion (ended the year) and $8.2 billion (February call)",
+        "status": "conflict"
+      },
+      "previous_hash": "37a8d56017664d63b579bde1a8460f7e6ae94d662549d6257614e774bb85f425",
+      "event_hash": "d1d703cdfe7e850fc6b03e5979e6bcd25aef1a5f2d29d9cd1e3ae9f64a3f9f6e"
+    },
+    {
+      "sequence": 22,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:15.247816+00:00",
+      "payload": {
+        "metric": "Fee-related earnings",
+        "statement": "Fee-related earnings: $345 million",
+        "status": "verified"
+      },
+      "previous_hash": "d1d703cdfe7e850fc6b03e5979e6bcd25aef1a5f2d29d9cd1e3ae9f64a3f9f6e",
+      "event_hash": "8c563fb42050f839fe19e77cf249cad446e35478c12ce1ad772029566489b1b4"
+    },
+    {
+      "sequence": 23,
+      "type": "verification.completed",
+      "occurred_at": "2026-08-01T20:52:15.253104+00:00",
+      "payload": {
+        "all_claims_authoritative": true,
+        "duration_ms": 18.819
+      },
+      "previous_hash": "8c563fb42050f839fe19e77cf249cad446e35478c12ce1ad772029566489b1b4",
+      "event_hash": "51ea098e515cb3820d7c1834fb18016bbdf99352b401fab745fdacda5f1dfa43"
+    },
+    {
+      "sequence": 24,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-01T20:52:15.274084+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "51ea098e515cb3820d7c1834fb18016bbdf99352b401fab745fdacda5f1dfa43",
+      "event_hash": "0743272980ada3a3033acfb73e4402f209b06fe5e522aa2aa30d0e5e68e5f8ac"
+    },
+    {
+      "sequence": 25,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-01T20:52:24.653760+00:00",
+      "payload": {
+        "response_id": "gen-1785617536-wtFqVpkU4XBo1iYRGlMo",
+        "token_usage": {
+          "cache_write_tokens": 3970,
+          "cached_tokens": 9417,
+          "input_tokens": 13390,
+          "output_tokens": 982,
+          "reasoning_tokens": 0,
+          "requests": 1,
+          "total_tokens": 14372
+        }
+      },
+      "previous_hash": "0743272980ada3a3033acfb73e4402f209b06fe5e522aa2aa30d0e5e68e5f8ac",
+      "event_hash": "34676b0324312ecd96aea6b4fa2560248e11d3089f90fbeed501f3957e55649c"
+    },
+    {
+      "sequence": 26,
+      "type": "verification.authoritative_started",
+      "occurred_at": "2026-08-01T20:52:24.680027+00:00",
+      "payload": {},
+      "previous_hash": "34676b0324312ecd96aea6b4fa2560248e11d3089f90fbeed501f3957e55649c",
+      "event_hash": "142a75894259037d460120d5b0fd6c8a0f4158c2a88cb2a2523054e089b7b4f1"
+    },
+    {
+      "sequence": 27,
+      "type": "claim.date_variant",
+      "occurred_at": "2026-08-01T20:52:24.698143+00:00",
+      "payload": {
+        "evidence_count": 2,
+        "statement": "Assets under management is reported at different dates: $146.1 billion (as of 31 December 2025) and $142 billion (on 31 March 2026)",
+        "verification_notes": []
+      },
+      "previous_hash": "142a75894259037d460120d5b0fd6c8a0f4158c2a88cb2a2523054e089b7b4f1",
+      "event_hash": "ccedba57e6e4bd7cb8f5396fadb553ee1cb956ca5ee17deed14a7e1ea882fb68"
+    },
+    {
+      "sequence": 28,
+      "type": "claim.conflict",
+      "occurred_at": "2026-08-01T20:52:24.719961+00:00",
+      "payload": {
+        "evidence_count": 3,
+        "statement": "Fee-earning AUM is reported with conflicting values: $82 billion (ended the year) and $8.2 billion (February call)",
+        "verification_notes": [
+          "A verified quotation explicitly characterizes the values as erroneous or incompatible."
+        ]
+      },
+      "previous_hash": "ccedba57e6e4bd7cb8f5396fadb553ee1cb956ca5ee17deed14a7e1ea882fb68",
+      "event_hash": "8ead8bf9f94056dfa72092da480cb5c6d32745076a5fc3bab0f65e8d252dff57"
+    },
+    {
+      "sequence": 29,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-01T20:52:24.734894+00:00",
+      "payload": {
+        "evidence_count": 1,
+        "statement": "Fee-related earnings: $345 million",
+        "verification_notes": []
+      },
+      "previous_hash": "8ead8bf9f94056dfa72092da480cb5c6d32745076a5fc3bab0f65e8d252dff57",
+      "event_hash": "ddc4e12f24b3a7edabbb28b0a008c0c31d85f2d58d3fedf17f4d4455caf36efb"
+    },
+    {
+      "sequence": 30,
+      "type": "run.completed",
+      "occurred_at": "2026-08-01T20:52:24.749379+00:00",
+      "payload": {
+        "authoritative": true,
+        "status": "completed"
+      },
+      "previous_hash": "ddc4e12f24b3a7edabbb28b0a008c0c31d85f2d58d3fedf17f4d4455caf36efb",
+      "event_hash": "db0fb3475822239e3208a0ab9c4942aad0dbe198179657c710c19908502d1e02"
+    }
+  ],
+  "openai_calls": [
+    {
+      "duration_ms": 4520.41,
+      "ended_at": "2026-08-01T20:51:56.104903+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785617512-ensMCJZUbjsFV61nk68H",
+      "retry_count": 0,
+      "sequence": 1,
+      "started_at": "2026-08-01T20:51:51.584513+00:00",
+      "token_usage": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 1515,
+        "input_tokens": 1518,
+        "output_tokens": 71,
+        "reasoning_tokens": 15,
+        "requests": 1,
+        "total_tokens": 1589
+      }
+    },
+    {
+      "duration_ms": 643.679,
+      "ended_at": "2026-08-01T20:51:56.777715+00:00",
+      "error": null,
+      "model": "text-embedding-3-small",
+      "operation": "embedding",
+      "request_id": null,
+      "response_id": "gen-emb-1785617516-t6IjmSs2Rbr7MVUfLIJ6",
+      "retry_count": 0,
+      "sequence": 2,
+      "started_at": "2026-08-01T20:51:56.134037+00:00",
+      "token_usage": {
+        "cost": 2.2e-07,
+        "cost_details": {
+          "upstream_inference_completions_cost": 0,
+          "upstream_inference_cost": 2.2e-07,
+          "upstream_inference_prompt_cost": 2.2e-07
+        },
+        "is_byok": false,
+        "prompt_tokens": 11,
+        "total_tokens": 11
+      }
+    },
+    {
+      "duration_ms": 1587.763,
+      "ended_at": "2026-08-01T20:51:58.728733+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785617517-JnvUjez0iiYmJnagPOJj",
+      "retry_count": 0,
+      "sequence": 3,
+      "started_at": "2026-08-01T20:51:57.140981+00:00",
+      "token_usage": {
+        "cache_write_tokens": 1329,
+        "cached_tokens": 1515,
+        "input_tokens": 2847,
+        "output_tokens": 67,
+        "reasoning_tokens": 17,
+        "requests": 1,
+        "total_tokens": 2914
+      }
+    },
+    {
+      "duration_ms": 8429.878,
+      "ended_at": "2026-08-01T20:52:07.203081+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785617519-qFQYxhy29z5PcYnuyG0A",
+      "retry_count": 0,
+      "sequence": 4,
+      "started_at": "2026-08-01T20:51:58.773214+00:00",
+      "token_usage": {
+        "cache_write_tokens": 2647,
+        "cached_tokens": 2844,
+        "input_tokens": 5494,
+        "output_tokens": 1121,
+        "reasoning_tokens": 415,
+        "requests": 1,
+        "total_tokens": 6615
+      }
+    },
+    {
+      "duration_ms": 7939.915,
+      "ended_at": "2026-08-01T20:52:15.207207+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785617527-lgkahMigrfqsSmr4qYPj",
+      "retry_count": 0,
+      "sequence": 5,
+      "started_at": "2026-08-01T20:52:07.267305+00:00",
+      "token_usage": {
+        "cache_write_tokens": 3926,
+        "cached_tokens": 5491,
+        "input_tokens": 9420,
+        "output_tokens": 1083,
+        "reasoning_tokens": 203,
+        "requests": 1,
+        "total_tokens": 10503
+      }
+    },
+    {
+      "duration_ms": 9366.016,
+      "ended_at": "2026-08-01T20:52:24.640061+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785617536-wtFqVpkU4XBo1iYRGlMo",
+      "retry_count": 0,
+      "sequence": 6,
+      "started_at": "2026-08-01T20:52:15.274061+00:00",
+      "token_usage": {
+        "cache_write_tokens": 3970,
+        "cached_tokens": 9417,
+        "input_tokens": 13390,
+        "output_tokens": 982,
+        "reasoning_tokens": 0,
+        "requests": 1,
+        "total_tokens": 14372
+      }
+    }
+  ],
+  "configuration": {
+    "model": "gpt-5.6-terra",
+    "reasoning_effort": "medium",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_dimensions": 768,
+    "embedding_l2_normalized": true,
+    "turbovec_version": "0.8.0",
+    "turbovec_bit_width": 4,
+    "retrieval_modes": [
+      "dense",
+      "sqlite_fts5",
+      "rrf_hybrid"
+    ],
+    "parallel_tool_calls": false,
+    "max_turns": 8,
+    "trace_include_sensitive_data": false
+  },
+  "provenance": {
+    "application_version": "0.1.0",
+    "git_commit_sha": "de807daedb86e430bf01b58de6a9e9d6aa360997",
+    "dependency_lock_digests": {
+      "uv.lock": "af3efb2e036cf7035126cdb48b13082bf5e5431c3ea114668d294deaf0b04e43",
+      "pnpm-lock.yaml": "5d09ae7de1f42d59544a0d3ec6a60a99ab94b179e5dc9eacdeac95e00fa9d497"
+    },
+    "agent_instruction_hash": "83ff33260196b7d79378e20364ac9b26c65d7fbef6e431766a6013b9e5b9ffb9",
+    "tool_schema_hash": "b11889d6954d66029248163c937d7996b8dc886fe7e1054d0dee2ffb23ec8e1f",
+    "verifier_version": "deterministic-verifier-v2-anchored",
+    "trace_id": "trace_d07dcbb6d5134e9199b9aa2f3d1bacd6",
+    "sealed_at": "2026-08-01T20:52:24.767624+00:00",
+    "event_chain_head": "db0fb3475822239e3208a0ab9c4942aad0dbe198179657c710c19908502d1e02"
+  },
+  "error": null,
+  "rehearsal": null,
+  "receipt_sha256": "092515b2f24e81cf58a02a193c1735982ac84b6aad6a2eb30e88d1a57364a2a0"
+}

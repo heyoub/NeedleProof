@@ -1,0 +1,289 @@
+---
+import { satelliteAttrs } from '@czap/astro';
+import { layout } from '../boundaries/layout.boundaries.js';
+import Base from '../layouts/Base.astro';
+---
+
+<Base>
+  <header class="masthead">
+    <a class="wordmark" href="/" aria-label="NeedleProof home">
+      Needle<span>Proof</span>
+    </a>
+    <div class="mast-meta">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span id="corpus-label">Loading corpus manifest…</span>
+    </div>
+  </header>
+
+  <main {...satelliteAttrs({ boundary: layout, class: 'shell' })}>
+    <section class="hero" aria-labelledby="hero-title">
+      <p class="eyebrow"><span>Corpus investigator</span> / sealed evidence</p>
+      <h1 id="hero-title">Ask the corpus.<br /><em>Inspect the proof.</em></h1>
+      <p class="dek">
+        NeedleProof turns every corpus answer into a reproducible evidence investigation.
+      </p>
+
+      <form id="question-form" class="question-card">
+        <label for="question">Investigation question</label>
+        <textarea
+          id="question"
+          name="question"
+          rows="3"
+          required
+          minlength="3"
+          maxlength="4000"
+          placeholder="What were the company’s most important scale and fee metrics, and did the source contain inconsistencies?"
+        ></textarea>
+        <div class="question-actions">
+          <p>One immutable corpus version · exact quotes required</p>
+          <button id="ask-button" class="primary" type="submit">
+            <span>Begin investigation</span><span aria-hidden="true">↗</span>
+          </button>
+        </div>
+      </form>
+
+      <div class="prompt-row" aria-label="Example investigations">
+        <span>Try</span>
+        <button type="button" data-prompt="What assets-under-management figures appear in the corpus?">AUM date variants</button>
+        <button type="button" data-prompt="Did the source contain conflicting fee-earning AUM figures?">Find the planted conflict</button>
+        <button type="button" data-prompt="What was total headcount?">Missing evidence</button>
+      </div>
+    </section>
+
+    <section id="investigation" class="investigation" aria-labelledby="investigation-title" hidden>
+      <div class="section-rule">
+        <p class="eyebrow">Live execution record</p>
+        <div class="run-controls">
+          <span id="connection-state" class="connection-state">Connecting</span>
+          <button id="cancel-button" class="text-button" type="button">Cancel run</button>
+        </div>
+      </div>
+
+      <div class="investigation-grid">
+        <aside class="trail-panel" aria-labelledby="investigation-title">
+          <div class="panel-heading">
+            <p>01</p>
+            <h2 id="investigation-title">Investigation trail</h2>
+          </div>
+          <ol id="activity-ledger" class="activity-ledger" aria-live="polite" aria-relevant="additions"></ol>
+        </aside>
+
+        <article class="answer-panel" aria-labelledby="answer-title">
+          <div class="panel-heading">
+            <p>02</p>
+            <h2 id="answer-title">Verified answer</h2>
+          </div>
+          <div id="answer-waiting" class="answer-waiting">
+            <div class="scan-line" aria-hidden="true"></div>
+            <p>The answer stays sealed until every factual claim has passed deterministic verification.</p>
+          </div>
+          <div id="answer-content" hidden>
+            <p id="answer-status" class="answer-status"></p>
+            <p id="answer-copy" class="answer-copy"></p>
+            <div id="claims" class="claims"></div>
+            <div class="answer-actions">
+              <a id="receipt-link" class="primary-link" href="#">Inspect full receipt <span aria-hidden="true">↗</span></a>
+              <a id="receipt-json-link" class="secondary-link" href="#" download>Download canonical JSON</a>
+              <button id="quote-challenge" class="text-button" type="button" hidden>Test an altered quotation</button>
+            </div>
+            <p id="quote-challenge-result" class="challenge-result" aria-live="polite"></p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="method" aria-labelledby="method-title">
+      <div>
+        <p class="eyebrow">The trust boundary</p>
+        <h2 id="method-title">No chain-of-thought theater.<br />Just observable work.</h2>
+      </div>
+      <div class="method-grid">
+        <p><span>Search</span> Queries, TurboVec IDs, retrieval modes, and scores are recorded.</p>
+        <p><span>Inspect</span> Every opened passage keeps its document, page, and content hash.</p>
+        <p><span>Verify</span> Exact quotes and values are checked again after the model finishes.</p>
+        <p><span>Seal</span> The final receipt is hash-chained to one immutable corpus version.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Finance of the Future · Philadelphia · 2026</p>
+    <p>Public and fictional event material only. Confidential uploads are unsupported.</p>
+    <button id="rehearsal-button" class="text-button" type="button">Replay rehearsal receipt</button>
+  </footer>
+
+  <dialog id="evidence-dialog" class="evidence-dialog" aria-labelledby="evidence-title">
+    <div class="drawer-head">
+      <div>
+        <p class="eyebrow">Verified source passage</p>
+        <h2 id="evidence-title">Evidence</h2>
+      </div>
+      <button id="close-evidence" class="close-button" type="button" aria-label="Close evidence drawer">×</button>
+    </div>
+    <div class="evidence-split">
+      <section class="passage-pane">
+        <div class="evidence-meta">
+          <span id="evidence-relation" class="status-label"></span>
+          <p id="evidence-location"></p>
+          <code id="evidence-chunk"></code>
+        </div>
+        <blockquote id="evidence-quote"></blockquote>
+        <dl>
+          <div><dt>Quote match</dt><dd id="evidence-quote-match"></dd></div>
+          <div><dt>Value match</dt><dd id="evidence-value-match"></dd></div>
+          <div><dt>Chunk digest</dt><dd><code id="evidence-sha"></code></dd></div>
+        </dl>
+        <p class="coordinate-note">Passage highlighting is shown in normalized extraction; the original PDF page appears beside it.</p>
+      </section>
+      <section class="pdf-pane" aria-label="Original PDF page">
+        <iframe id="evidence-pdf" title="Original document page"></iframe>
+      </section>
+    </div>
+  </dialog>
+
+  <div id="announcer" class="sr-only" aria-live="assertive"></div>
+
+  <script src="../scripts/investigation.ts"></script>
+</Base>
+
+<style>
+  .masthead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 76px;
+    padding: 0 clamp(1.1rem, 4vw, 4.5rem);
+    color: var(--paper);
+    background: var(--graphite);
+    border-bottom: 1px solid #454942;
+  }
+
+  .wordmark {
+    color: inherit;
+    font-family: var(--serif);
+    font-size: clamp(1.55rem, 2.4vw, 2.15rem);
+    font-weight: 700;
+    letter-spacing: -0.045em;
+    text-decoration: none;
+  }
+
+  .wordmark span { color: var(--verify); }
+  .mast-meta { display: flex; align-items: center; gap: .65rem; font: 700 .69rem/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .live-dot { width: .6rem; height: .6rem; background: var(--verify); border: 2px solid var(--graphite); border-radius: 50%; box-shadow: 0 0 0 1px var(--verify); }
+
+  .shell { max-width: 1440px; margin: 0 auto; padding: 0 clamp(1.1rem, 4vw, 4.5rem); }
+  .hero { padding: clamp(3.5rem, 7vw, 7.2rem) 0 clamp(3rem, 6vw, 5.5rem); }
+  .eyebrow { margin: 0; color: var(--muted); font: 700 .7rem/1.2 var(--mono); letter-spacing: .11em; text-transform: uppercase; }
+  .eyebrow span { color: var(--verify-deep); }
+  h1 { max-width: 1040px; margin: 1.15rem 0 1.2rem; font: 400 clamp(3.25rem, 7.6vw, 7.9rem)/.83 var(--serif); letter-spacing: -.065em; }
+  h1 em { color: var(--verify-deep); font-weight: 400; }
+  .dek { max-width: 670px; margin: 0 0 2.5rem; color: var(--graphite-soft); font: 400 clamp(1.05rem, 1.55vw, 1.35rem)/1.45 var(--sans); }
+
+  .question-card { position: relative; max-width: 1120px; padding: clamp(1rem, 2vw, 1.6rem); background: var(--paper); border: 1px solid var(--graphite); box-shadow: 9px 9px 0 var(--graphite); }
+  .question-card label { display: block; margin-bottom: .55rem; font: 700 .7rem/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .question-card textarea { width: 100%; min-height: 116px; padding: .5rem 0; resize: vertical; color: var(--graphite); background: transparent; border: 0; border-bottom: 1px solid var(--rule); font: 400 clamp(1.25rem, 2.2vw, 2rem)/1.25 var(--serif); }
+  .question-card textarea:focus { outline: none; border-bottom-color: var(--verify); }
+  .question-card textarea::placeholder { color: #8a857b; opacity: 1; }
+  .question-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: 1rem; }
+  .question-actions p { margin: 0; color: var(--muted); font-size: .75rem; }
+  .primary, .primary-link { display: inline-flex; align-items: center; justify-content: space-between; gap: 1.8rem; min-width: 230px; padding: .9rem 1rem; color: #fff; background: var(--verify-deep); border: 1px solid var(--verify-deep); font-size: .82rem; font-weight: 800; text-decoration: none; cursor: pointer; }
+  .primary:hover, .primary-link:hover { background: var(--graphite); border-color: var(--graphite); }
+  .primary:disabled { cursor: wait; opacity: .55; }
+  .prompt-row { display: flex; flex-wrap: wrap; align-items: center; gap: .55rem; max-width: 1120px; padding-top: 1.35rem; }
+  .prompt-row > span { margin-right: .3rem; color: var(--muted); font: 700 .66rem var(--mono); text-transform: uppercase; }
+  .prompt-row button { padding: .46rem .7rem; color: var(--graphite-soft); background: transparent; border: 1px solid var(--rule-dark); border-radius: 99px; font-size: .73rem; cursor: pointer; }
+  .prompt-row button:hover { color: var(--paper); background: var(--graphite); }
+
+  .investigation { margin-bottom: 5rem; background: var(--paper); border: 1px solid var(--graphite); }
+  .section-rule { display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: .75rem 1rem; border-bottom: 1px solid var(--graphite); }
+  .run-controls { display: flex; align-items: center; gap: 1rem; }
+  .connection-state { font: 700 .66rem var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .connection-state::before { content: ''; display: inline-block; width: .45rem; height: .45rem; margin-right: .45rem; background: var(--verify); border-radius: 50%; }
+  .text-button { padding: .2rem 0; color: var(--graphite); background: transparent; border: 0; border-bottom: 1px solid currentColor; font: 700 .68rem var(--mono); text-transform: uppercase; cursor: pointer; }
+  .investigation-grid { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(0, 1.65fr); min-height: 470px; }
+  .trail-panel { padding: 1.3rem; border-right: 1px solid var(--graphite); }
+  .answer-panel { padding: 1.3rem clamp(1.3rem, 3.5vw, 3.5rem) 2.5rem; }
+  .panel-heading { display: flex; align-items: baseline; gap: .8rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--rule); }
+  .panel-heading p { margin: 0; color: var(--verify-deep); font: 700 .68rem var(--mono); }
+  .panel-heading h2 { margin: 0; font: 400 1.4rem var(--serif); }
+  .activity-ledger { margin: 0; padding: 1rem 0 0; list-style: none; }
+  .activity-ledger li { position: relative; padding: .7rem .35rem .7rem 2rem; border-bottom: 1px solid #ddd7ca; color: var(--graphite-soft); font-size: .78rem; }
+  .activity-ledger li::before { content: '·'; position: absolute; left: .45rem; top: .63rem; color: var(--verify-deep); font: 900 1.2rem/1 var(--mono); }
+  .activity-ledger li[data-state='done']::before { content: '✓'; font-size: .8rem; top: .78rem; }
+  .activity-ledger li[data-state='error']::before { content: '!'; color: var(--warn); font-size: .8rem; top: .78rem; }
+  .activity-ledger code { display: block; margin-top: .2rem; color: var(--muted); font-size: .62rem; }
+  .answer-waiting { position: relative; display: grid; place-items: center; min-height: 350px; overflow: hidden; }
+  .answer-waiting p { z-index: 1; max-width: 440px; margin: 0; color: var(--muted); font: italic 1.25rem/1.5 var(--serif); text-align: center; }
+  .scan-line { position: absolute; inset: 48% 8% auto; height: 1px; background: linear-gradient(90deg, transparent, var(--verify), transparent); animation: scan 2.5s ease-in-out infinite; }
+  @keyframes scan { 0%, 100% { transform: translateY(-90px); opacity: .2; } 50% { transform: translateY(90px); opacity: 1; } }
+  .answer-status { display: inline-block; margin: 1.5rem 0 1rem; padding: .35rem .55rem; color: var(--verify-deep); border: 1px solid currentColor; font: 800 .68rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .answer-status[data-status='failed'], .answer-status[data-status='incomplete'], .answer-status[data-status='cancelled'] { color: var(--warn); }
+  .answer-copy { max-width: 850px; margin: 0 0 2rem; font: 400 clamp(1.6rem, 3vw, 2.75rem)/1.12 var(--serif); letter-spacing: -.025em; }
+  .claim { margin: 0 0 1rem; padding: 1rem 0; border-top: 1px solid var(--rule); }
+  .claim-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+  .claim h3 { margin: 0; font-size: .86rem; line-height: 1.45; }
+  .status-label { flex: none; padding: .25rem .42rem; color: var(--verify-deep); border: 1px solid currentColor; font: 800 .59rem var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+  .status-label[data-status='conflict'], .status-label[data-status='possible_conflict'], .status-label[data-status='unverified'] { color: var(--warn); }
+  .evidence-list { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .8rem; }
+  .evidence-button { padding: .48rem .62rem; color: var(--graphite); background: #ece7dc; border: 1px solid var(--rule-dark); font: 700 .67rem var(--mono); cursor: pointer; }
+  .evidence-button:hover { color: var(--paper); background: var(--graphite); }
+  .answer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem; margin-top: 2rem; }
+  .secondary-link { color: var(--graphite); font-size: .75rem; font-weight: 800; text-underline-offset: .25rem; }
+  .challenge-result { margin: .8rem 0 0; color: var(--warn); font: 700 .67rem/1.4 var(--mono); }
+
+  .method { display: grid; grid-template-columns: .9fr 1.1fr; gap: clamp(2rem, 7vw, 8rem); padding: 1rem 0 6rem; }
+  .method h2 { margin: 1rem 0 0; font: 400 clamp(2rem, 4vw, 4rem)/1 var(--serif); letter-spacing: -.04em; }
+  .method-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--graphite); border-left: 1px solid var(--graphite); }
+  .method-grid p { margin: 0; padding: 1.2rem; border-right: 1px solid var(--graphite); border-bottom: 1px solid var(--graphite); color: var(--graphite-soft); font-size: .8rem; }
+  .method-grid span { display: block; margin-bottom: .45rem; color: var(--verify-deep); font: 800 .67rem var(--mono); text-transform: uppercase; }
+
+  footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.4rem clamp(1.1rem, 4vw, 4.5rem); color: #c9ccc5; background: var(--graphite); font-size: .68rem; }
+  footer p { margin: 0; }
+  footer .text-button { color: var(--verify); }
+
+  .evidence-dialog { width: min(1180px, calc(100vw - 2rem)); max-width: none; height: min(760px, calc(100dvh - 2rem)); max-height: none; padding: 0; color: var(--graphite); background: var(--paper); border: 1px solid var(--graphite); box-shadow: 18px 18px 0 rgba(0, 0, 0, .35); }
+  .evidence-dialog::backdrop { background: rgba(17, 18, 16, .74); backdrop-filter: blur(2px); }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between; min-height: 78px; padding: 1rem 1.25rem; color: var(--paper); background: var(--graphite); }
+  .drawer-head h2 { margin: .3rem 0 0; font: 400 1.6rem var(--serif); }
+  .drawer-head .eyebrow { color: #b7bbb3; }
+  .close-button { width: 2.5rem; height: 2.5rem; color: var(--paper); background: transparent; border: 1px solid #72766e; font-size: 1.7rem; line-height: 1; cursor: pointer; }
+  .evidence-split { display: grid; grid-template-columns: .86fr 1.14fr; height: calc(100% - 78px); }
+  .passage-pane { overflow: auto; padding: clamp(1.25rem, 3vw, 2.4rem); border-right: 1px solid var(--graphite); }
+  .evidence-meta p { margin: .8rem 0 .25rem; font-size: .8rem; font-weight: 800; }
+  .evidence-meta code { color: var(--muted); font-size: .66rem; }
+  .passage-pane blockquote { margin: 2rem 0; padding: 1.4rem 0 1.4rem 1.4rem; border-left: 4px solid var(--verify); font: 400 clamp(1.2rem, 2.2vw, 1.8rem)/1.4 var(--serif); }
+  .passage-pane dl { margin: 0; }
+  .passage-pane dl div { display: grid; grid-template-columns: 120px 1fr; gap: .8rem; padding: .6rem 0; border-top: 1px solid var(--rule); }
+  .passage-pane dt { color: var(--muted); font: 700 .64rem var(--mono); text-transform: uppercase; }
+  .passage-pane dd { margin: 0; overflow-wrap: anywhere; font-size: .72rem; }
+  .coordinate-note { margin: 1.5rem 0 0; color: var(--muted); font-size: .68rem; }
+  .pdf-pane { min-height: 0; background: #383b36; }
+  .pdf-pane iframe { width: 100%; height: 100%; border: 0; }
+
+  @quantize layout {
+    mobile {
+      .masthead { align-items: flex-start; gap: .8rem; padding-top: 1rem; padding-bottom: 1rem; }
+      .mast-meta { max-width: 52%; justify-content: flex-end; text-align: right; }
+      h1 { font-size: clamp(3.15rem, 15vw, 5.2rem); }
+      .question-card { box-shadow: 5px 5px 0 var(--graphite); }
+      .question-actions { align-items: stretch; flex-direction: column; }
+      .primary { width: 100%; }
+      .investigation-grid, .method, .evidence-split { grid-template-columns: 1fr; }
+      .trail-panel { border-right: 0; border-bottom: 1px solid var(--graphite); }
+      .answer-copy { font-size: 1.65rem; }
+      .method-grid { grid-template-columns: 1fr; }
+      footer { align-items: flex-start; flex-direction: column; }
+      .evidence-dialog { width: 100vw; height: 100dvh; }
+      .passage-pane { max-height: 55dvh; border-right: 0; border-bottom: 1px solid var(--graphite); }
+      .pdf-pane { min-height: 45dvh; }
+    }
+
+    tablet {
+      .investigation-grid { grid-template-columns: minmax(250px, .72fr) minmax(0, 1.28fr); }
+    }
+
+    desktop {
+      .investigation-grid { grid-template-columns: minmax(290px, .82fr) minmax(0, 1.68fr); }
+    }
+  }
+</style>
