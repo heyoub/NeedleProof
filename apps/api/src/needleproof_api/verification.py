@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 
 from .chunk_ids import ChunkId
@@ -46,6 +46,7 @@ _WORD = re.compile(r"[^\W_]+")
 _COORDINATED_MODIFIER_PREPOSITIONS = frozenset(
     {"across", "among", "by", "for", "from", "in", "of", "through", "with", "without"}
 )
+_SINGULAR_SUBJECT_PREDICATES = frozenset({"has", "is", "was"})
 _PARTICIPIAL_CONTINUATIONS = frozenset(
     {
         "decreasing",
@@ -152,6 +153,10 @@ def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
     return signatures
 
 
+def _numeric_signature_sequence(text: str) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple(_numeric_signature(match) for match in _NUMERIC.finditer(text))
+
+
 def _word_phrase_spans(needle: str, haystack: str) -> list[tuple[int, int]]:
     expected = _WORD.findall(needle.casefold())
     observed = list(_WORD.finditer(haystack.casefold()))
@@ -183,7 +188,7 @@ def reported_value_found(value: str, quote: str) -> bool:
 
 def _first_matching_measure_spans(
     text: str,
-    expected: set[tuple[str, str, str, str]],
+    expected: Sequence[tuple[str, str, str, str]],
     *,
     start: int = 0,
 ) -> list[tuple[int, int]] | None:
@@ -191,27 +196,28 @@ def _first_matching_measure_spans(
         (_numeric_signature(match), (match.start(), match.end()))
         for match in _NUMERIC.finditer(text, pos=start)
     ]
-    expected_groups: dict[tuple[str, str], set[tuple[str, str, str, str]]] = {}
-    for target in expected:
-        expected_groups.setdefault((target[1], target[3]), set()).add(target)
-
     spans: list[tuple[int, int]] = []
-    for (target_currency, target_unit), targets in expected_groups.items():
-        comparable = [
-            (signature, span)
-            for signature, span in observed
-            if signature[1] == target_currency and signature[3] == target_unit
-        ]
-        prefix = comparable[: len(targets)]
-        if len(prefix) != len(targets) or {signature for signature, _span in prefix} != targets:
+    observed_index = 0
+    for target in expected:
+        while observed_index < len(observed):
+            signature, span = observed[observed_index]
+            observed_index += 1
+            if signature[1] != target[1] or signature[3] != target[3]:
+                continue
+            if signature != target:
+                return None
+            spans.append(span)
+            break
+        else:
             return None
-        spans.extend(span for _signature, span in prefix)
-    return sorted(spans) if expected else None
+    return spans if expected else None
 
 
 def _subject_refers_to_metric(subject: str, metric: str) -> bool:
-    if _metric_occurrence_spans(subject, metric):
-        return True
+    for metric_start, _metric_end in _metric_occurrence_spans(subject, metric):
+        prefix_words = _WORD.findall(subject[:metric_start])
+        if not prefix_words or all(word in {"a", "an", "the"} for word in prefix_words):
+            return True
     return any(
         not _WORD.findall(subject[match.end() :]) for match in _SUBJECT_ANAPHORA.finditer(subject)
     )
@@ -260,6 +266,20 @@ def _continues_metric_subject(value: str) -> bool:
         )
         or all(word in _SUBJECT_CONTINUATIONS for word in words)
     )
+
+
+def _continues_coordinated_modifier(value: str) -> bool:
+    """Accept only a narrow coordinated noun tail that retains a singular subject.
+
+    For example, ``revenue from products and services was`` retains ``revenue``.
+    A plural predicate or multiword subject instead signals that the text after
+    ``and`` introduced a competing metric, so verification fails closed.
+    """
+
+    if _continues_metric_subject(value):
+        return True
+    words = _WORD.findall(value.strip().casefold())
+    return len(words) == 2 and words[1] in _SINGULAR_SUBJECT_PREDICATES
 
 
 def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
@@ -346,6 +366,7 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
             separator.group() == "and"
             and preceding_words & _COORDINATED_MODIFIER_PREPOSITIONS
             and not preceding_words & _PREDICATE_VERBS
+            and _continues_coordinated_modifier(segment)
         ):
             continue
         if not _continues_metric_subject(segment):
@@ -412,7 +433,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     if not normalized_value or not normalized_metric:
         return False
 
-    expected = numeric_signatures(normalized_value)
+    expected = _numeric_signature_sequence(normalized_value)
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
         metric_clauses = _metric_predicate_clauses(sentence, normalized_metric)

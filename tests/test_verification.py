@@ -306,6 +306,18 @@ def test_coordinated_metric_modifier_remains_linked():
     )
 
 
+@pytest.mark.parametrize(
+    ("quote", "competing_metric"),
+    [
+        ("Revenue from products and expenses were $2 million.", "expenses"),
+        ("Revenue across regions and operating costs reached $2 million.", "operating costs"),
+    ],
+)
+def test_coordinated_modifier_cannot_hide_competing_metric(quote, competing_metric):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", competing_metric, quote)
+
+
 def test_participial_continuation_remains_linked():
     assert reported_value_linked_to_metric(
         "$2 million",
@@ -526,6 +538,14 @@ def test_value_first_continuation_allows_repeated_metric_subject():
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+def test_value_first_competing_subject_cannot_borrow_mentioned_metric():
+    quote = (
+        "Revenue was flat. At $2 million, operating expenses attributable to revenue were stable."
+    )
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
 def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
     quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
 
@@ -548,6 +568,11 @@ def test_repeated_unit_compound_value_matches_ordered_prefix():
         "$3 million",
         "Revenue",
         "Revenue was $2 million and $3 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$2 million and $3 million",
+        "Revenue",
+        "Revenue was $3 million and $2 million.",
     )
 
 
