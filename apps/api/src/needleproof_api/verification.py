@@ -29,13 +29,17 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
 _ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
 _POST_VALUE_ANAPHORA = re.compile(r"^(?:which|who|whose|where|when|the\s+figure|it|this|that)\b")
+_VALUE_FIRST_SENTENCE = re.compile(r"^(?:by|at|as\s+of)\b")
+_SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
 # These separators introduce an independent predicate. Keeping metric/value matching
 # inside one such clause makes ambiguous compound sentences fail closed.
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*")
 _VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
 _PARENTHETICAL_MODIFIER = re.compile(
-    r"^\s*(?:adjusted\s+for|after|before|despite|excluding|including|net\s+of|with|without)\b"
+    r"^\s*(?:adjusted\s+for|after|before|despite|excluding|including|net\s+of|"
+    r"which|who|whose|where|with|without)\b"
 )
+_PARENTHETICAL_SPAN = re.compile(r"\((?P<body>[^()]*)\)")
 _WORD = re.compile(r"[^\W_]+")
 _SUBJECT_CONTINUATIONS = frozenset(
     {
@@ -209,6 +213,14 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
         return not words or all(word in _SUBJECT_CONTINUATIONS for word in words)
 
     ignored_parenthetical_separators: set[int] = set()
+    for parenthetical in _PARENTHETICAL_SPAN.finditer(between):
+        if not _PARENTHETICAL_MODIFIER.match(parenthetical.group("body")):
+            continue
+        ignored_parenthetical_separators.update(
+            index
+            for index, separator in enumerate(separators)
+            if parenthetical.start() < separator.start() < parenthetical.end()
+        )
     for opening_index, opening in enumerate(separators):
         if opening.group() != "," or opening_index in ignored_parenthetical_separators:
             continue
@@ -239,6 +251,21 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
     return True
 
 
+def _metric_occurrence_spans(sentence: str, metric: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    while (metric_start := sentence.find(metric, search_from)) >= 0:
+        metric_end = metric_start + len(metric)
+        starts_inside_word = metric_start > 0 and bool(_WORD.fullmatch(sentence[metric_start - 1]))
+        ends_inside_word = metric_end < len(sentence) and bool(
+            _WORD.fullmatch(sentence[metric_end])
+        )
+        if not starts_inside_word and not ends_inside_word:
+            spans.append((metric_start, metric_end))
+        search_from = metric_start + 1
+    return spans
+
+
 def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:
     """Return predicate clauses containing the complete metric anchor.
 
@@ -250,16 +277,7 @@ def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int
     boundaries = list(_PREDICATE_CLAUSE_BOUNDARY.finditer(sentence))
     clauses: list[tuple[str, int]] = []
     seen: set[tuple[int, int]] = set()
-    search_from = 0
-    while (metric_start := sentence.find(metric, search_from)) >= 0:
-        metric_end = metric_start + len(metric)
-        starts_inside_word = metric_start > 0 and bool(_WORD.fullmatch(sentence[metric_start - 1]))
-        ends_inside_word = metric_end < len(sentence) and bool(
-            _WORD.fullmatch(sentence[metric_end])
-        )
-        if starts_inside_word or ends_inside_word:
-            search_from = metric_start + 1
-            continue
+    for metric_start, metric_end in _metric_occurrence_spans(sentence, metric):
         clause_start = max(
             (boundary.end() for boundary in boundaries if boundary.end() <= metric_start),
             default=0,
@@ -273,8 +291,16 @@ def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int
             clause = sentence[clause_start:clause_end]
             clauses.append((clause, metric_start - clause_start))
             seen.add(span)
-        search_from = metric_end
     return clauses
+
+
+def _metric_is_final_subject(sentence: str, metric: str) -> bool:
+    boundaries = list(_PREDICATE_CLAUSE_BOUNDARY.finditer(sentence))
+    return any(
+        not any(boundary.start() >= metric_end for boundary in boundaries)
+        and _value_retains_metric_subject(sentence, metric_end, len(sentence))
+        for _metric_start, metric_end in _metric_occurrence_spans(sentence, metric)
+    )
 
 
 def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) -> bool:
@@ -312,10 +338,25 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 for position, _ in phrase_positions
             ):
                 return True
-        if metric_clauses and index + 1 < len(sentences):
+        if _metric_is_final_subject(sentence, normalized_metric) and index + 1 < len(sentences):
             following = sentences[index + 1].strip()
             following_spans = (
                 _first_matching_measure_spans(following, expected) if expected else None
+            )
+            first_value_start = (
+                min(start for start, _end in following_spans) if following_spans else None
+            )
+            subject_precedes_value = bool(
+                first_value_start is not None
+                and any(
+                    match.start() < first_value_start
+                    for match in _SUBJECT_ANAPHORA.finditer(following)
+                )
+            )
+            needs_value_first_tail_guard = bool(
+                first_value_start is not None
+                and _VALUE_FIRST_SENTENCE.match(following)
+                and not subject_precedes_value
             )
             if (
                 expected
@@ -323,8 +364,14 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 and following_spans
                 and all(
                     _value_retains_metric_subject(following, 0, start)
-                    and not _tail_introduces_competing_subject(following, end)
-                    for start, end in following_spans
+                    for start, _end in following_spans
+                )
+                and (
+                    not needs_value_first_tail_guard
+                    or not _tail_introduces_competing_subject(
+                        following,
+                        max(end for _start, end in following_spans),
+                    )
                 )
             ):
                 return True

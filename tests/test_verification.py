@@ -348,6 +348,23 @@ def test_compound_parenthetical_modifier_retains_original_metric_subject():
     )
 
 
+def test_relative_clause_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$905 billion",
+        "Assets under advisement",
+        "Assets under advisement, which include several mandates and sit across "
+        "markets, reached $905 billion.",
+    )
+
+
+def test_parenthesized_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue (excluding discontinued operations and foreign exchange effects) was $2 million.",
+    )
+
+
 def test_unrecognized_comma_pair_cannot_hide_competing_metric_subject():
     assert not reported_value_linked_to_metric(
         "$2 million",
@@ -395,6 +412,18 @@ def test_cross_sentence_anaphora_requires_metric_in_immediately_prior_sentence()
 
 
 @pytest.mark.parametrize(
+    "quote",
+    [
+        "Although revenue declined, operating income remained stable. It was $2 million.",
+        "Revenue declined while operating income remained stable. It was $2 million.",
+    ],
+)
+def test_cross_sentence_anaphora_uses_final_metric_subject(quote):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating income", quote)
+
+
+@pytest.mark.parametrize(
     "following",
     [
         "At $2 million, operating expenses were stable.",
@@ -419,6 +448,18 @@ def test_value_first_continuation_preserves_anaphora_and_context(following):
     quote = f"Revenue was flat. {following}"
 
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
+    quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_compound_value_first_continuation_checks_tail_after_complete_value():
+    quote = "Revenue was flat. At $2 million and 50 percent, it was unchanged."
+
+    assert reported_value_linked_to_metric("$2 million and 50 percent", "Revenue", quote)
 
 
 @pytest.mark.parametrize(
