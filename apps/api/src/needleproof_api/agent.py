@@ -519,7 +519,10 @@ async def investigate(
             draft = AgentDraft.model_validate(draft)
         return InvestigationOutcome(draft=draft, trace_id=trace_id, searches=context.searches)
     finally:
-        await session.close()
+        try:
+            await session.clear_session()
+        finally:
+            await session.close()
 
 
 def agent_contract_snapshot() -> str:

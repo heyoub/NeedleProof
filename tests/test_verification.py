@@ -335,6 +335,39 @@ def test_temporal_anchor_must_exist_in_same_quote(corpus):
     assert any("temporal anchor" in note for note in verified.verification_notes)
 
 
+def test_temporal_anchor_must_be_bound_to_its_reported_value(corpus):
+    quote = (
+        "Starting with scale. Assets under management were $146.1 billion as of 31 "
+        "December 2025. By the fiscal year end on 31 March 2026 the figure was $142 "
+        "billion, which is up about $4 billion or 3 percent against the prior year even "
+        "though it is down against December."
+    )
+    evidence = reference(MEMO_CHUNK, quote, "Assets under management")
+    claim = DraftClaim(
+        metric="assets under management",
+        status="supported",
+        values=[
+            ReportedValue(
+                value="$146.1 billion",
+                temporal_anchor="31 March 2026",
+                evidence=[evidence],
+            )
+        ],
+        evidence=[evidence],
+    )
+
+    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].quote_found
+    assert not verified.evidence[0].temporal_anchors_found
+
+
+def test_nonnumeric_reported_value_requires_a_complete_phrase(corpus):
+    assert not reported_value_found("high", "Fees were highlighted in the report.")
+    assert reported_value_found("high", "Fees were high in the report.")
+
+
 def test_freeform_multi_proposition_statement_is_not_in_draft_contract():
     assert "statement" not in DraftClaim.model_json_schema()["properties"]
 

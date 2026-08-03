@@ -27,6 +27,7 @@ _NUMERIC = re.compile(
 )
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
+_WORD = re.compile(r"[^\W_]+")
 
 
 def _numeric_signature(match: re.Match[str]) -> tuple[str, str, str, str]:
@@ -46,6 +47,15 @@ def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
     return signatures
 
 
+def _word_phrase_found(needle: str, haystack: str) -> bool:
+    expected = _WORD.findall(needle.casefold())
+    observed = _WORD.findall(haystack.casefold())
+    if not expected:
+        return False
+    width = len(expected)
+    return any(observed[index : index + width] == expected for index in range(len(observed)))
+
+
 def reported_value_found(value: str, quote: str) -> bool:
     normalized_value, _ = normalize_evidence_text(value)
     normalized_quote, _ = normalize_evidence_text(quote)
@@ -55,7 +65,7 @@ def reported_value_found(value: str, quote: str) -> bool:
     if expected:
         observed = numeric_signatures(normalized_quote)
         return expected.issubset(observed)
-    return normalized_value.casefold() in normalized_quote.casefold()
+    return _word_phrase_found(normalized_value, normalized_quote)
 
 
 def _first_matching_measure_is_expected(
@@ -99,7 +109,9 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
         if not expected:
             clauses = re.split(r"[,;:]\s+", sentence)
             if any(
-                normalized_metric in clause and normalized_value in clause for clause in clauses
+                _word_phrase_found(normalized_metric, clause)
+                and _word_phrase_found(normalized_value, clause)
+                for clause in clauses
             ):
                 return True
         if index + 1 < len(sentences):
@@ -111,6 +123,23 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
             ):
                 return True
     return False
+
+
+def temporal_anchor_linked_to_value(
+    value: str,
+    temporal_anchor: str,
+    metric_anchor: str,
+    quote: str,
+) -> bool:
+    """Require a temporal anchor to occur with its value in one source sentence."""
+
+    normalized_quote = normalize_evidence_text(quote)[0]
+    if not reported_value_linked_to_metric(value, metric_anchor, normalized_quote):
+        return False
+    return any(
+        reported_value_found(value, sentence) and _word_phrase_found(temporal_anchor, sentence)
+        for sentence in _SENTENCE_BOUNDARY.split(normalized_quote)
+    )
 
 
 def _all_evidence(claim: DraftClaim) -> list[EvidenceReference]:
@@ -281,7 +310,7 @@ def _has_explicit_conflict(evidence: list[VerifiedEvidence]) -> bool:
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v3-strict-signatures"
+    version = "deterministic-verifier-v4-bound-anchors"
 
     def __init__(self, corpus: CorpusStore):
         self.corpus = corpus
@@ -365,7 +394,14 @@ class EvidenceVerifier:
                 value.temporal_anchor for value in relevant_values if value.temporal_anchor
             ]
             temporal_anchors_found = all(
-                _text_found(anchor, reference.exact_quote) for anchor in temporal_anchors
+                not value.temporal_anchor
+                or temporal_anchor_linked_to_value(
+                    value.value,
+                    value.temporal_anchor,
+                    reference.metric_anchor,
+                    reference.exact_quote,
+                )
+                for value in relevant_values
             )
             if not chunk:
                 missing_reference = True
