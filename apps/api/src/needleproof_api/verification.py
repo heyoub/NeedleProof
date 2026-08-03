@@ -37,9 +37,51 @@ _INDEPENDENT_PREDICATE = (
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(
     r"\s*(?:;|\b(?:while|whereas|although|though|but)\b)\s*"
     rf"|\s+and\s+{_INDEPENDENT_PREDICATE}"
-    rf"|[,:]\s*{_INDEPENDENT_PREDICATE}"
 )
 _WORD = re.compile(r"[^\W_]+")
+_SUBJECT_CONTINUATIONS = frozenset(
+    {
+        "about",
+        "amounted",
+        "approximately",
+        "are",
+        "around",
+        "as",
+        "at",
+        "by",
+        "closed",
+        "declined",
+        "decreased",
+        "ended",
+        "fell",
+        "from",
+        "generated",
+        "grew",
+        "had",
+        "has",
+        "have",
+        "increased",
+        "is",
+        "just",
+        "nearly",
+        "now",
+        "of",
+        "only",
+        "reached",
+        "remained",
+        "reported",
+        "rose",
+        "roughly",
+        "stood",
+        "still",
+        "then",
+        "to",
+        "totaled",
+        "totalled",
+        "was",
+        "were",
+    }
+)
 
 
 def _numeric_signature(match: re.Match[str]) -> tuple[str, str, str, str]:
@@ -59,13 +101,21 @@ def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
     return signatures
 
 
-def _word_phrase_found(needle: str, haystack: str) -> bool:
+def _word_phrase_spans(needle: str, haystack: str) -> list[tuple[int, int]]:
     expected = _WORD.findall(needle.casefold())
-    observed = _WORD.findall(haystack.casefold())
+    observed = list(_WORD.finditer(haystack.casefold()))
     if not expected:
-        return False
+        return []
     width = len(expected)
-    return any(observed[index : index + width] == expected for index in range(len(observed)))
+    return [
+        (observed[index].start(), observed[index + width - 1].end())
+        for index in range(len(observed) - width + 1)
+        if [match.group() for match in observed[index : index + width]] == expected
+    ]
+
+
+def _word_phrase_found(needle: str, haystack: str) -> bool:
+    return bool(_word_phrase_spans(needle, haystack))
 
 
 def reported_value_found(value: str, quote: str) -> bool:
@@ -80,23 +130,41 @@ def reported_value_found(value: str, quote: str) -> bool:
     return _word_phrase_found(normalized_value, normalized_quote)
 
 
-def _first_matching_measure_is_expected(
+def _first_matching_measure_positions(
     text: str,
     expected: set[tuple[str, str, str, str]],
     *,
     start: int = 0,
-) -> bool:
+) -> list[int] | None:
+    positions: list[int] = []
     for target in expected:
         _sign, target_currency, _number, target_unit = target
         comparable = [
-            _numeric_signature(match)
+            (_numeric_signature(match), match.start())
             for match in _NUMERIC.finditer(text, pos=start)
             if (match.group("currency") or "") == target_currency
             and re.sub(r"\s+", " ", (match.group("unit") or "").lower()) == target_unit
         ]
-        if not comparable or comparable[0] != target:
-            return False
-    return bool(expected)
+        if not comparable or comparable[0][0] != target:
+            return None
+        positions.append(comparable[0][1])
+    return positions if expected else None
+
+
+def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) -> bool:
+    """Fail closed when punctuation introduces a different metric before a value.
+
+    Text after the last comma or colon may continue the original metric only with
+    a trusted predicate/modifier. An unrecognized leading word is treated as a new
+    subject, avoiding an open-ended list of verbs used by competing predicates.
+    """
+
+    between = text[metric_end:value_start]
+    punctuation = max(between.rfind(","), between.rfind(":"))
+    if punctuation < 0:
+        return True
+    continuation = _WORD.findall(between[punctuation + 1 :].casefold())
+    return not continuation or all(word in _SUBJECT_CONTINUATIONS for word in continuation)
 
 
 def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:
@@ -141,23 +209,42 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
         for clause, metric_position in _metric_predicate_clauses(sentence, normalized_metric):
-            if expected and _first_matching_measure_is_expected(
-                clause,
-                expected,
-                start=metric_position + len(normalized_metric),
+            metric_end = metric_position + len(normalized_metric)
+            measure_positions = (
+                _first_matching_measure_positions(
+                    clause,
+                    expected,
+                    start=metric_end,
+                )
+                if expected
+                else None
+            )
+            if measure_positions and all(
+                _value_retains_metric_subject(clause, metric_end, position)
+                for position in measure_positions
             ):
                 return True
-            if not expected and _word_phrase_found(
-                normalized_value,
-                clause[metric_position + len(normalized_metric) :],
+            phrase_positions = (
+                _word_phrase_spans(normalized_value, clause[metric_end:]) if not expected else []
+            )
+            if any(
+                _value_retains_metric_subject(clause, metric_end, metric_end + position)
+                for position, _ in phrase_positions
             ):
                 return True
         if index + 1 < len(sentences):
             following = sentences[index + 1].strip()
+            following_positions = (
+                _first_matching_measure_positions(following, expected) if expected else None
+            )
             if (
                 expected
                 and _ANAPHORIC_SENTENCE.match(following)
-                and _first_matching_measure_is_expected(following, expected)
+                and following_positions
+                and all(
+                    _value_retains_metric_subject(following, 0, position)
+                    for position in following_positions
+                )
             ):
                 return True
     return False

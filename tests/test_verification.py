@@ -323,6 +323,30 @@ def test_non_predicate_punctuation_remains_inside_metric_clause():
     )
 
 
+@pytest.mark.parametrize("separator", [",", ":"])
+@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
+def test_unlisted_predicate_verbs_do_not_leak_numeric_value_to_prior_metric(separator, predicate):
+    quote = f"Revenue was flat{separator} operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_punctuation_continuation_can_retain_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, excluding discontinued operations, declined to $2 million.",
+    )
+
+
+def test_metric_name_starting_with_continuation_word_still_introduces_new_subject():
+    quote = "Revenue was flat, increased costs were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "increased costs", quote)
+
+
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
     first = reference(
         MEMO_CHUNK,
