@@ -352,6 +352,13 @@ def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
             continue
         numeric = _NUMERIC.search(following)
         continuation_prefix = following[: numeric.start()] if numeric else following
+        if boundary.group("boundary") == "since" and "," in continuation_prefix:
+            temporal_modifier, continuation = continuation_prefix.split(",", 1)
+            modifier_words = _WORD.findall(temporal_modifier.casefold())
+            if not any(
+                word in _PREDICATE_VERBS for word in modifier_words
+            ) and _continues_metric_subject(continuation):
+                continue
         if boundary.group("boundary") in {"—", "–"}:
             if not _continues_metric_subject(continuation_prefix):
                 boundaries.append(boundary)

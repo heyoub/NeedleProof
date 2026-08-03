@@ -673,6 +673,22 @@ def test_explanatory_causal_clause_retains_metric_subject():
     )
 
 
+def test_temporal_since_modifier_retains_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue has increased since the acquisition, reaching $2 million.",
+    )
+
+
+def test_since_clause_with_competing_subject_does_not_transfer_value():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue was flat since operating expenses rose, reaching $2 million.",
+    )
+
+
 @pytest.mark.parametrize(
     "quote",
     [
