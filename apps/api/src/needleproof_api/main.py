@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Literal, assert_never
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -35,6 +35,7 @@ from .security import (
 from .service import (
     TERMINAL_EVENT_TYPES,
     InvestigationService,
+    ReceiptRecoveryOutcome,
     RunCapacityError,
     SessionLiveRunError,
 )
@@ -274,7 +275,8 @@ async def run_events(
     async def stream() -> AsyncIterator[str]:
         cursor = after
         quiet_polls = 0
-        reconciliation_attempted = False
+        reconciliation_failures = 0
+        next_reconciliation_at = 0.0
         while True:
             if await request.is_disconnected():
                 break
@@ -297,11 +299,30 @@ async def run_events(
                         if receipt_state == "pending":
                             # A valid receipt with a mismatched status can still be
                             # reconciled without losing the intended terminal event.
-                            if not reconciliation_attempted:
-                                reconciled = await service.reconcile_pending_receipt(run_id)
-                                reconciliation_attempted = True
-                                if not reconciled:
-                                    return
+                            now = asyncio.get_running_loop().time()
+                            if now >= next_reconciliation_at:
+                                outcome = await service.reconcile_pending_receipt(run_id)
+                                match outcome:
+                                    case ReceiptRecoveryOutcome.UNRECOVERABLE:
+                                        return
+                                    case ReceiptRecoveryOutcome.RETRYABLE:
+                                        reconciliation_failures = min(
+                                            reconciliation_failures + 1,
+                                            6,
+                                        )
+                                        retry_delay = min(
+                                            0.1 * (2 ** (reconciliation_failures - 1)),
+                                            2.0,
+                                        )
+                                        next_reconciliation_at = now + retry_delay
+                                    case (
+                                        ReceiptRecoveryOutcome.RECOVERED
+                                        | ReceiptRecoveryOutcome.NOT_PENDING
+                                    ):
+                                        reconciliation_failures = 0
+                                        next_reconciliation_at = 0.0
+                                    case _ as unreachable:
+                                        assert_never(unreachable)
                             break
                         if receipt_state == "invalid":
                             # Permanent receipt corruption is not startup-recoverable

@@ -415,6 +415,59 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_terminal_sse_retries_transient_receipt_reconciliation_on_same_connection(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    original_commit = service._commit_terminal
+    commit_attempts = 0
+
+    async def fail_twice_then_recover(envelope, receipt_path, error):
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts <= 2:
+            raise OSError("injected transient terminal persistence failure")
+        await original_commit(envelope, receipt_path, error)
+
+    monkeypatch.setattr(service, "_commit_terminal", fail_twice_then_recover)
+    created = await service.create_run(
+        RunCreateRequest(question="Retry recovery without reconnecting", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    interrupted = await database.get_run_row(created.run_id)
+    assert interrupted is not None
+    assert interrupted["status"] == RunStatus.INTERRUPTED.value
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+
+    async def read_terminal_event() -> str:
+        async for chunk in response.body_iterator:
+            if "run.completed" in chunk:
+                return chunk
+        raise AssertionError("SSE stream closed before terminal recovery")
+
+    terminal_chunk = await asyncio.wait_for(read_terminal_event(), timeout=2)
+
+    assert "run.interrupted" not in terminal_chunk
+    assert commit_attempts == 3
+    recovered = await database.get_run_row(created.run_id)
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("corrupt_receipt", ["{not valid json", "null", '{"events": null}'])
 async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path, corrupt_receipt):
     service, database, _settings = lifecycle_service(tmp_path)

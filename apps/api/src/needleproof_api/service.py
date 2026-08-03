@@ -5,6 +5,7 @@ import json
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,13 @@ class TerminalState:
     error: dict[str, Any] | None = None
     trace_id: str | None = None
     rehearsal_metadata: dict[str, Any] | None = None
+
+
+class ReceiptRecoveryOutcome(StrEnum):
+    RECOVERED = "recovered"
+    RETRYABLE = "retryable"
+    UNRECOVERABLE = "unrecoverable"
+    NOT_PENDING = "not_pending"
 
 
 class RunCapacityError(RuntimeError):
@@ -210,16 +218,16 @@ class InvestigationService:
                 lambda completed: completed.exception() if not completed.cancelled() else None
             )
 
-    async def _recover_sealed_receipt(self, row: dict[str, object]) -> bool | None:
+    async def _recover_sealed_receipt(self, row: dict[str, object]) -> ReceiptRecoveryOutcome:
         run_id = str(row["run_id"])
         receipt_path = self.settings.receipts_dir / f"{run_id}.json"
         if not receipt_path.exists():
-            return False
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
             receipt_text = receipt_path.read_text(encoding="utf-8")
         except OSError:
             logger.exception("Could not read sealed receipt for run %s", run_id)
-            return None
+            return ReceiptRecoveryOutcome.RETRYABLE
         try:
             receipt = json.loads(receipt_text)
             errors = validate_receipt(receipt)
@@ -239,33 +247,31 @@ class InvestigationService:
             )
         except (AttributeError, KeyError, TypeError, ValueError):
             receipt_path.unlink(missing_ok=True)
-            return False
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
             await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
         except Exception:
             logger.exception("Could not persist validated receipt recovery for run %s", run_id)
-            return None
-        return True
+            return ReceiptRecoveryOutcome.RETRYABLE
+        return ReceiptRecoveryOutcome.RECOVERED
 
-    async def reconcile_pending_receipt(self, run_id: str) -> bool:
+    async def reconcile_pending_receipt(self, run_id: str) -> ReceiptRecoveryOutcome:
         async with self._reconciliation_lock:
             row = await self.database.get_run_row(run_id)
             if not row:
-                return False
+                return ReceiptRecoveryOutcome.UNRECOVERABLE
             if row.get("status") != RunStatus.INTERRUPTED.value:
-                return row.get("status") in {
-                    RunStatus.COMPLETED.value,
-                    RunStatus.INCOMPLETE.value,
-                    RunStatus.CANCELLED.value,
-                    RunStatus.FAILED.value,
-                }
-            return await self._recover_sealed_receipt(row) is True
+                return ReceiptRecoveryOutcome.NOT_PENDING
+            return await self._recover_sealed_receipt(row)
 
     async def reconcile_abandoned_runs(self) -> None:
         for row in await self.database.list_recoverable_runs():
             run_id = str(row["run_id"])
             receipt_recovery = await self._recover_sealed_receipt(row)
-            if receipt_recovery is not False:
+            if receipt_recovery in {
+                ReceiptRecoveryOutcome.RECOVERED,
+                ReceiptRecoveryOutcome.RETRYABLE,
+            }:
                 continue
 
             bound_corpus = (
