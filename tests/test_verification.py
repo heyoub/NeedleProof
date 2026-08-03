@@ -290,6 +290,30 @@ def test_value_in_metric_clause_remains_linked_before_contrasting_clause():
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
 
 
+def test_elided_subject_remains_linked_across_contrasting_predicate():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue declined but still reached $2 million.",
+    )
+
+
+def test_coordinated_metric_modifier_remains_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue from products and services was $2 million.",
+    )
+
+
+def test_participial_continuation_remains_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue increased year over year, reaching $2 million.",
+    )
+
+
 def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
     metric = "Research and development expenses"
 
@@ -362,6 +386,14 @@ def test_parenthesized_modifier_retains_original_metric_subject():
         "$2 million",
         "Revenue",
         "Revenue (excluding discontinued operations and foreign exchange effects) was $2 million.",
+    )
+
+
+def test_value_inside_competing_parenthetical_is_not_linked_to_outer_metric():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue (excluding operating expenses which were $2 million) was $3 million.",
     )
 
 
@@ -460,6 +492,26 @@ def test_compound_value_first_continuation_checks_tail_after_complete_value():
     quote = "Revenue was flat. At $2 million and 50 percent, it was unchanged."
 
     assert reported_value_linked_to_metric("$2 million and 50 percent", "Revenue", quote)
+
+
+def test_repeated_unit_compound_value_matches_ordered_prefix():
+    assert reported_value_linked_to_metric(
+        "$2 million and $3 million",
+        "Revenue",
+        "Revenue was $2 million and $3 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$3 million",
+        "Revenue",
+        "Revenue was $2 million and $3 million.",
+    )
+
+
+def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
+    quote = "Revenue was flat because operating expenses rose. It was $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
 
 
 @pytest.mark.parametrize(
