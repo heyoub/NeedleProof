@@ -79,6 +79,16 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
     return folded, operations
 
 
+def evidence_text_contains(needle: str, haystack: str) -> bool:
+    """Apply the canonical evidence normalization and case-folding containment rule."""
+
+    normalized_needle, _ = normalize_evidence_text(needle)
+    if not normalized_needle:
+        return False
+    normalized_haystack, _ = normalize_evidence_text(haystack)
+    return normalized_needle.casefold() in normalized_haystack.casefold()
+
+
 def estimate_tokens(text: str) -> int:
     # Stable, dependency-free estimate suitable for deterministic chunk boundaries.
     words = len(re.findall(r"\S+", text))

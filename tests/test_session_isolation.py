@@ -81,6 +81,17 @@ async def test_browser_sessions_isolate_every_run_surface(tmp_path):
         )
         assert challenge.status_code == 200
         assert challenge.json()["status"] == "rejected"
+        case_variant = await alice.post(
+            "/api/verify/quote",
+            json={
+                "run_id": run_id,
+                "corpus_version": alice_run.json()["corpus_version"],
+                "chunk_id": evidence["chunk_id"],
+                "quote": evidence["quote"].swapcase(),
+            },
+        )
+        assert case_variant.status_code == 200
+        assert case_variant.json()["status"] == "verified"
         empty_challenge = await alice.post(
             "/api/verify/quote",
             json={

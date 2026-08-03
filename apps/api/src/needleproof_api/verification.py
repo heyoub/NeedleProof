@@ -16,7 +16,7 @@ from .models import (
     VerifiedEvidence,
 )
 from .retrieval import CorpusStore
-from .util import normalize_evidence_text
+from .util import evidence_text_contains, normalize_evidence_text
 
 _NUMERIC = re.compile(
     r"(?P<currency>[$£€])?\s*(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
@@ -142,9 +142,7 @@ def _canonical_metric(value: str) -> str:
 
 
 def _text_found(needle: str, haystack: str) -> bool:
-    normalized_needle, _ = normalize_evidence_text(needle)
-    normalized_haystack, _ = normalize_evidence_text(haystack)
-    return normalized_needle.casefold() in normalized_haystack.casefold()
+    return evidence_text_contains(needle, haystack)
 
 
 def _reference_key(

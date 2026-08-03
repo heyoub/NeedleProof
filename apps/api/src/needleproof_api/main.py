@@ -35,7 +35,7 @@ from .service import (
     RunCapacityError,
     SessionLiveRunError,
 )
-from .util import normalize_evidence_text
+from .util import evidence_text_contains, normalize_evidence_text
 
 TERMINAL_STATUSES = {
     RunStatus.COMPLETED,
@@ -402,7 +402,7 @@ async def quote_challenge(request: Request, body: QuoteChallengeRequest) -> JSON
     normalized_quote, operations = normalize_evidence_text(body.quote)
     if not normalized_quote:
         raise HTTPException(status_code=422, detail="Quote contains no evidence text")
-    matched = normalized_quote in chunks[0].normalized_text
+    matched = evidence_text_contains(normalized_quote, chunks[0].normalized_text)
     return JSONResponse(
         {
             "chunk_id": body.chunk_id,
