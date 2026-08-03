@@ -326,6 +326,31 @@ def test_coordinated_metric_modifier_remains_linked():
     )
 
 
+@pytest.mark.parametrize("predicate", ["reached", "totaled", "amounted to"])
+def test_coordinated_metric_modifier_supports_non_copular_predicates(predicate):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue from products and services {predicate} $2 million.",
+    )
+
+
+def test_multiword_coordinated_metric_modifiers_remain_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue from product sales and service fees was $2 million.",
+    )
+
+
+def test_plural_metric_agreement_preserves_coordinated_modifier():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Assets",
+        "Assets from products and services were $2 million.",
+    )
+
+
 def test_coordinated_metric_subjects_share_predicate_and_value():
     quote = "Revenue and operating income each reached $2 million."
 

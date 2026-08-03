@@ -394,16 +394,12 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         assert "run.completed" not in chunk
         assert "run.interrupted" not in chunk
 
-    terminal_chunk = asyncio.create_task(anext(iterator))
-    await asyncio.sleep(0.15)
-    assert not terminal_chunk.done()
-
     for route in (receipt_json, receipt_page):
         with pytest.raises(HTTPException, match="awaiting terminal-state reconciliation") as raised:
             await route(request, created.run_id)
         assert raised.value.status_code == 409
 
-    await service.reconcile_abandoned_runs()
+    terminal_chunk = asyncio.create_task(anext(iterator))
     chunk = await asyncio.wait_for(terminal_chunk, timeout=1)
     assert "run.completed" in chunk
     assert "run.interrupted" not in chunk

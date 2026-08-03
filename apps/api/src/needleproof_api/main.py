@@ -258,7 +258,7 @@ async def run_events(
     last_event_id_header: str | None = Header(default=None, alias="Last-Event-ID"),
     last_event_id_query: int | None = Query(default=None, alias="lastEventId"),
 ) -> StreamingResponse:
-    database, _, _ = _services(request)
+    database, _, service = _services(request)
     await _owned_run_row(request, run_id)
     try:
         after = (
@@ -272,6 +272,7 @@ async def run_events(
     async def stream() -> AsyncIterator[str]:
         cursor = after
         quiet_polls = 0
+        reconciliation_attempted = False
         while True:
             if await request.is_disconnected():
                 break
@@ -294,6 +295,11 @@ async def run_events(
                         if receipt_state == "pending":
                             # A valid receipt with a mismatched status can still be
                             # reconciled without losing the intended terminal event.
+                            if not reconciliation_attempted:
+                                reconciled = await service.reconcile_pending_receipt(run_id)
+                                reconciliation_attempted = True
+                                if not reconciled:
+                                    return
                             break
                         if receipt_state == "invalid":
                             # Permanent receipt corruption is not startup-recoverable

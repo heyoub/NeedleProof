@@ -54,6 +54,7 @@ _COORDINATED_MODIFIER_PREPOSITIONS = frozenset(
     {"across", "among", "by", "for", "from", "in", "of", "through", "with", "without"}
 )
 _SINGULAR_SUBJECT_PREDICATES = frozenset({"has", "is", "was"})
+_PLURAL_SUBJECT_PREDICATES = frozenset({"are", "have", "were"})
 _PARTICIPIAL_CONTINUATIONS = frozenset(
     {
         "decreasing",
@@ -286,18 +287,40 @@ def _continues_metric_subject(value: str) -> bool:
     )
 
 
-def _continues_coordinated_modifier(value: str) -> bool:
-    """Accept only a narrow coordinated noun tail that retains a singular subject.
+def _metric_is_grammatically_plural(metric: str) -> bool:
+    words = _WORD.findall(metric.casefold())
+    return bool(words and words[-1].endswith("s") and words[-1] not in {"business"})
 
-    For example, ``revenue from products and services was`` retains ``revenue``.
-    A plural predicate or multiword subject instead signals that the text after
-    ``and`` introduced a competing metric, so verification fails closed.
-    """
+
+def _continues_coordinated_modifier(preceding: str, value: str, metric: str) -> bool:
+    """Accept parallel prepositional objects whose predicate agrees with the metric."""
 
     if _continues_metric_subject(value):
         return True
+    preceding_words = _WORD.findall(preceding.strip().casefold())
     words = _WORD.findall(value.strip().casefold())
-    return len(words) == 2 and words[1] in _SINGULAR_SUBJECT_PREDICATES
+    preposition_indexes = [
+        index
+        for index, word in enumerate(preceding_words)
+        if word in _COORDINATED_MODIFIER_PREPOSITIONS
+    ]
+    predicate_index = next(
+        (index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS),
+        None,
+    )
+    if not preposition_indexes or predicate_index is None:
+        return False
+    left_modifier = preceding_words[preposition_indexes[-1] + 1 :]
+    right_modifier = words[:predicate_index]
+    if not left_modifier or len(left_modifier) != len(right_modifier):
+        return False
+    predicate = words[predicate_index]
+    metric_is_plural = _metric_is_grammatically_plural(metric)
+    if predicate in _SINGULAR_SUBJECT_PREDICATES:
+        return not metric_is_plural
+    if predicate in _PLURAL_SUBJECT_PREDICATES:
+        return metric_is_plural
+    return True
 
 
 def _is_coordinated_subject_with_shared_predicate(value: str) -> bool:
@@ -331,7 +354,12 @@ def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
     return boundaries
 
 
-def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) -> bool:
+def _value_retains_metric_subject(
+    text: str,
+    metric_end: int,
+    value_start: int,
+    metric: str,
+) -> bool:
     """Fail closed when punctuation introduces a different metric before a value.
 
     Separator-delimited text may continue the original metric only with a trusted
@@ -401,7 +429,7 @@ def _value_retains_metric_subject(text: str, metric_end: int, value_start: int) 
             separator.group() == "and"
             and preceding_words & _COORDINATED_MODIFIER_PREPOSITIONS
             and not preceding_words & _PREDICATE_VERBS
-            and _continues_coordinated_modifier(segment)
+            and _continues_coordinated_modifier(preceding, segment, metric)
         ):
             continue
         if not _continues_metric_subject(segment):
@@ -456,7 +484,7 @@ def _metric_is_final_subject(sentence: str, metric: str) -> bool:
     boundaries = _predicate_clause_boundaries(sentence)
     return any(
         not any(boundary.start() >= metric_end for boundary in boundaries)
-        and _value_retains_metric_subject(sentence, metric_end, len(sentence))
+        and _value_retains_metric_subject(sentence, metric_end, len(sentence), metric)
         for _metric_start, metric_end in _metric_occurrence_spans(sentence, metric)
     )
 
@@ -484,7 +512,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 else None
             )
             if measure_spans and all(
-                _value_retains_metric_subject(clause, metric_end, start)
+                _value_retains_metric_subject(clause, metric_end, start, normalized_metric)
                 for start, _end in measure_spans
             ):
                 return True
@@ -492,7 +520,12 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 _word_phrase_spans(normalized_value, clause[metric_end:]) if not expected else []
             )
             if any(
-                _value_retains_metric_subject(clause, metric_end, metric_end + position)
+                _value_retains_metric_subject(
+                    clause,
+                    metric_end,
+                    metric_end + position,
+                    normalized_metric,
+                )
                 for position, _ in phrase_positions
             ):
                 return True
@@ -521,7 +554,7 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
                 and _ANAPHORIC_SENTENCE.match(following)
                 and following_spans
                 and all(
-                    _value_retains_metric_subject(following, 0, start)
+                    _value_retains_metric_subject(following, 0, start, normalized_metric)
                     and not _text_introduces_competing_subject(
                         following[:start],
                         normalized_metric,
