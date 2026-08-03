@@ -29,13 +29,17 @@ class ModelAvailability:
             try:
                 if not os.getenv("OPENAI_API_KEY"):
                     raise RuntimeError("OPENAI_API_KEY is not configured")
-                await AsyncOpenAI(timeout=10.0).responses.create(
-                    model=self.settings.model,
-                    input="Reply with OK.",
-                    reasoning={"effort": "none"},
-                    max_output_tokens=16,
-                    store=False,
-                )
+                client = AsyncOpenAI(timeout=10.0)
+                try:
+                    await client.responses.create(
+                        model=self.settings.model,
+                        input="Reply with OK.",
+                        reasoning={"effort": self.settings.reasoning_effort},
+                        max_output_tokens=16,
+                        store=False,
+                    )
+                finally:
+                    await client.close()
             except Exception as exc:  # noqa: BLE001 - readiness records sanitized failure
                 self.ready = False
                 self.error = type(exc).__name__

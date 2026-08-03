@@ -1,6 +1,9 @@
 .git
 .codebase-memory
 .env
+.env.*
+**/.env
+**/.env.*
 .venv
 .uv-cache
 **/__pycache__
@@ -8,5 +11,8 @@
 **/dist
 **/node_modules
 data/needleproof.sqlite3*
+data/corpora/.build-*
+data/corpora/**/corpus.sqlite3-shm
+data/corpora/**/corpus.sqlite3-wal
 data/receipts/*
 !.gitkeep

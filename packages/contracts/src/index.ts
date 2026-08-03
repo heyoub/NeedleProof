@@ -35,11 +35,22 @@ export interface Evidence {
   source_url: string;
 }
 
+export interface EvidenceReference {
+  chunk_id: string;
+  metric_anchor: string;
+  exact_quote: string;
+  relation: 'supports' | 'contradicts' | 'contextualizes';
+}
+
 export interface VerifiedClaim {
   statement: string;
   metric: string;
   status: ClaimStatus;
-  values: Array<{ value: string; temporal_anchor: string | null }>;
+  values: Array<{
+    value: string;
+    temporal_anchor: string | null;
+    evidence: EvidenceReference[];
+  }>;
   evidence: Evidence[];
   verification_notes: string[];
 }
@@ -62,5 +73,6 @@ export interface LedgerEvent {
   type: string;
   occurred_at: string;
   payload: Record<string, unknown>;
+  previous_hash: string;
   event_hash: string;
 }

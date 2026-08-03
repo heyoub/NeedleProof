@@ -19,19 +19,24 @@ from .retrieval import CorpusStore
 from .util import evidence_text_contains, normalize_evidence_text
 
 _NUMERIC = re.compile(
-    r"(?P<currency>[$£€])?\s*(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-    r"(?P<unit>billion|million|thousand|basis\s+points?|bps|percent|%|per\s+share)?",
+    r"(?P<open>\()?\s*(?P<sign_before>[+-])?\s*(?P<currency>[$£€])?\s*"
+    r"(?P<sign_after>[+-])?\s*(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+    r"(?P<unit>billion|million|thousand|basis\s+points?|bps|percent|%|per\s+share)?"
+    r"\s*(?P<close>\))?",
     re.IGNORECASE,
 )
 
 
-def numeric_signatures(text: str) -> set[tuple[str, str, str]]:
-    signatures: set[tuple[str, str, str]] = set()
+def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
+    signatures: set[tuple[str, str, str, str]] = set()
     for match in _NUMERIC.finditer(text):
+        parenthesized = bool(match.group("open") and match.group("close"))
+        explicit_sign = match.group("sign_before") or match.group("sign_after")
+        sign = "-" if parenthesized or explicit_sign == "-" else "+"
         currency = match.group("currency") or ""
         number = match.group("number").replace(",", "")
         unit = re.sub(r"\s+", " ", (match.group("unit") or "").lower())
-        signatures.add((currency, number, unit))
+        signatures.add((sign, currency, number, unit))
     return signatures
 
 
@@ -69,8 +74,8 @@ def _distinct_values(values: Iterable[ReportedValue]) -> set[str]:
     for value in values:
         signatures = numeric_signatures(value.value)
         if signatures:
-            canonical: list[tuple[str, str, str]] = []
-            for currency, number, unit in signatures:
+            canonical: list[tuple[str, str, str, str]] = []
+            for sign, currency, number, unit in signatures:
                 try:
                     number = format(Decimal(number).normalize(), "f")
                 except InvalidOperation:
@@ -80,7 +85,7 @@ def _distinct_values(values: Iterable[ReportedValue]) -> set[str]:
                     "basis point": "basis points",
                     "%": "percent",
                 }.get(unit, unit)
-                canonical.append((currency, number, unit))
+                canonical.append((sign, currency, number, unit))
             output.add(repr(sorted(canonical)))
         else:
             output.add(normalize_evidence_text(value.value)[0].casefold())
@@ -110,7 +115,7 @@ _MONTHS = {
 }
 
 
-def _temporal_signature(value: str) -> str:
+def _temporal_signature(value: str) -> str | None:
     normalized = normalize_evidence_text(value)[0].casefold()
     iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso:
@@ -129,11 +134,23 @@ def _temporal_signature(value: str) -> str:
     if month_first:
         month, day, year = month_first.groups()
         return f"date:{year}-{_MONTHS[month]:02d}-{int(day):02d}"
-    return normalized
+    fiscal_period = re.search(
+        r"\b(?:fy|fiscal\s+year)\s*(\d{4})\b|\bq([1-4])\s*(\d{4})\b",
+        normalized,
+    )
+    if fiscal_period:
+        fiscal_year, quarter, quarter_year = fiscal_period.groups()
+        if fiscal_year:
+            return f"fiscal-year:{fiscal_year}"
+        return f"quarter:{quarter_year}-q{quarter}"
+    return None
 
 
 def _distinct_temporal_anchors(values: Iterable[ReportedValue]) -> set[str]:
-    return {_temporal_signature(value.temporal_anchor) for value in values if value.temporal_anchor}
+    signatures = (
+        _temporal_signature(value.temporal_anchor) for value in values if value.temporal_anchor
+    )
+    return {signature for signature in signatures if signature is not None}
 
 
 def _canonical_metric(value: str) -> str:
@@ -201,16 +218,25 @@ def _has_explicit_conflict(evidence: list[VerifiedEvidence]) -> bool:
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v2-anchored"
+    version = "deterministic-verifier-v3-strict-signatures"
 
     def __init__(self, corpus: CorpusStore):
         self.corpus = corpus
 
     def verify_claims(
-        self, claims: list[DraftClaim], *, completed_searches: int
+        self,
+        claims: list[DraftClaim],
+        *,
+        completed_searches: int,
+        completed_search_records: list[dict[str, object]] | None = None,
     ) -> EvidenceVerificationResult:
         verified = [
-            self.verify_claim(claim, completed_searches=completed_searches) for claim in claims
+            self.verify_claim(
+                claim,
+                completed_searches=completed_searches,
+                completed_search_records=completed_search_records,
+            )
+            for claim in claims
         ]
         authoritative = all(
             claim.status
@@ -224,7 +250,13 @@ class EvidenceVerifier:
         )
         return EvidenceVerificationResult(claims=verified, all_claims_authoritative=authoritative)
 
-    def verify_claim(self, claim: DraftClaim, *, completed_searches: int) -> VerifiedClaim:
+    def verify_claim(
+        self,
+        claim: DraftClaim,
+        *,
+        completed_searches: int,
+        completed_search_records: list[dict[str, object]] | None = None,
+    ) -> VerifiedClaim:
         notes: list[str] = []
         references = _all_evidence(claim)
         chunks = self.corpus.get_chunks([reference.chunk_id for reference in references])
@@ -333,15 +365,24 @@ class EvidenceVerifier:
         explicit_conflict = _has_explicit_conflict(evidence)
 
         if claim.status == "not_found":
-            if completed_searches >= 4 and not references and not claim.values:
+            canonical_claim_metric = _canonical_metric(claim.metric)
+            relevant_searches = {
+                str(record.get("signature"))
+                for record in completed_search_records or []
+                if _canonical_metric(str(record.get("metric") or "")) == canonical_claim_metric
+                and canonical_claim_metric in _canonical_metric(str(record.get("query") or ""))
+            }
+            if len(relevant_searches) >= 4 and not references and not claim.values:
                 status = ClaimStatus.NOT_FOUND
                 notes.append(
-                    f"Not found after {completed_searches} searches across corpus version {self.corpus.corpus_version}."
+                    f"Not found after {len(relevant_searches)} metric-targeted searches "
+                    f"across corpus version {self.corpus.corpus_version}."
                 )
             else:
                 status = ClaimStatus.UNVERIFIED
                 notes.append(
-                    "A not-found conclusion requires four completed searches and no evidence."
+                    "A not-found conclusion requires four distinct completed searches tagged "
+                    "with the claimed metric and no evidence."
                 )
         elif not claim.values:
             status = ClaimStatus.UNVERIFIED
@@ -379,7 +420,11 @@ class EvidenceVerifier:
                 notes.append(
                     "A verified quotation explicitly characterizes the values as erroneous or incompatible."
                 )
-            elif len(distinct_values) >= 2 and len(distinct_temporal_anchors) >= 2:
+            elif (
+                len(distinct_values) >= 2
+                and len(distinct_temporal_anchors) >= 2
+                and len(distinct_temporal_anchors) == len(claim.values)
+            ):
                 status = ClaimStatus.DATE_VARIANT
             else:
                 status = ClaimStatus.POSSIBLE_CONFLICT

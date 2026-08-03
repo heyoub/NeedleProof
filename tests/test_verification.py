@@ -70,6 +70,13 @@ def test_numeric_value_must_match_the_complete_signature():
     assert not reported_value_found("142", quote)
 
 
+def test_numeric_value_preserves_explicit_and_accounting_signs():
+    assert reported_value_found("-$4 billion", "The loss was -$4 billion.")
+    assert reported_value_found("($4 billion)", "The loss was ($4 billion).")
+    assert not reported_value_found("-$4 billion", "The gain was $4 billion.")
+    assert not reported_value_found("$4 billion", "The loss was ($4 billion).")
+
+
 def test_modified_or_fabricated_quote_is_rejected(corpus):
     quote = "Fee-related earnings were $346 million for the year."
     evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
@@ -177,11 +184,32 @@ def test_not_found_requires_four_searches_and_names_corpus_version(corpus):
         status="not_found",
     )
     verifier = EvidenceVerifier(corpus)
-    assert verifier.verify_claim(claim, completed_searches=3).status == ClaimStatus.UNVERIFIED
-    verified = verifier.verify_claim(claim, completed_searches=4)
+    searches = [
+        {
+            "query": f"total headcount wording {index}",
+            "metric": "total headcount",
+            "signature": f"headcount-{index}",
+        }
+        for index in range(4)
+    ]
+    assert (
+        verifier.verify_claim(
+            claim,
+            completed_searches=3,
+            completed_search_records=searches[:3],
+        ).status
+        == ClaimStatus.UNVERIFIED
+    )
+    verified = verifier.verify_claim(
+        claim,
+        completed_searches=4,
+        completed_search_records=searches,
+    )
     assert verified.status == ClaimStatus.NOT_FOUND
     answer = compose_authoritative_answer([verified], 4, corpus.corpus_version)
-    assert f"after 4 searches across corpus version {corpus.corpus_version}" in answer
+    assert (
+        f"after 4 metric-targeted searches across corpus version {corpus.corpus_version}" in answer
+    )
 
 
 def test_right_number_attached_to_wrong_metric_is_rejected(corpus):
@@ -275,6 +303,13 @@ def test_possible_conflict_is_excluded_from_authoritative_answer(corpus):
 def test_equivalent_date_formats_have_one_temporal_signature():
     assert _temporal_signature("31 December 2025") == _temporal_signature("December 31, 2025")
     assert _temporal_signature("on 31 March 2026") == _temporal_signature("2026-03-31")
+
+
+def test_free_text_is_not_a_temporal_signature():
+    assert _temporal_signature("first figure") is None
+    assert _temporal_signature("February call") is None
+    assert _temporal_signature("FY 2026") == "fiscal-year:2026"
+    assert _temporal_signature("Q2 2026") == "quarter:2026-q2"
 
 
 def test_duplicate_numeric_formatting_is_not_a_distinct_value():

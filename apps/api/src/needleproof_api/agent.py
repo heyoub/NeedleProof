@@ -53,6 +53,8 @@ Different values tied to different dates are date variants, not automatically co
 values for the same metric and reporting period must both be reported as a conflict. When the
 relationship cannot be established, use possible_conflict. When evidence is missing, run four
 meaningfully different searches, then use not_found.
+For every search used toward a not_found conclusion, set the search tool's metric field to the exact
+canonical metric you are trying to find. Searches tagged for another metric do not count.
 
 Create one claim per metric or evidence relationship. Never combine a conflict conclusion with an
 unrelated period qualification in the same claim. If the source explicitly calls two values
@@ -97,6 +99,7 @@ class InvestigationContext:
             {
                 "query": " ".join(str(arguments["query"]).casefold().split()),
                 "mode": arguments["mode"],
+                "metric": " ".join(str(arguments.get("metric") or "").casefold().split()),
                 "document_ids": sorted(arguments.get("document_ids") or []),
                 "date_from": arguments.get("date_from"),
                 "date_to": arguments.get("date_to"),
@@ -107,6 +110,7 @@ class InvestigationContext:
             {
                 "query": arguments["query"],
                 "mode": arguments["mode"],
+                "metric": arguments.get("metric"),
                 "signature": signature,
             }
         )
@@ -127,6 +131,7 @@ async def search_corpus(
     query: str,
     top_k: int = 8,
     mode: Literal["dense", "lexical", "hybrid"] = "hybrid",
+    metric: str | None = None,
     document_ids: list[str] | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
@@ -137,6 +142,7 @@ async def search_corpus(
         query: Focused search wording.
         top_k: Number of results, from 1 through 20.
         mode: Dense TurboVec, lexical SQLite FTS5, or fused hybrid retrieval.
+        metric: Exact canonical metric targeted by this search. Required when building a not-found conclusion.
         document_ids: Optional exact document allowlist.
         date_from: Optional inclusive ISO date filter.
         date_to: Optional inclusive ISO date filter.
@@ -144,10 +150,12 @@ async def search_corpus(
     state = context.context
     await state.use_tool("search_corpus")
     state.begin_search()
+    top_k = max(1, min(top_k, state.settings.max_top_k))
     arguments = {
         "query": query,
         "top_k": top_k,
         "mode": mode,
+        "metric": metric,
         "document_ids": document_ids,
         "date_from": date_from,
         "date_to": date_to,
@@ -333,7 +341,11 @@ async def verify_evidence(
         },
     )
     clock = time.perf_counter()
-    result = state.verifier.verify_claims(claims, completed_searches=state.searches)
+    result = state.verifier.verify_claims(
+        claims,
+        completed_searches=state.searches,
+        completed_search_records=state.completed_search_records,
+    )
     for claim in result.claims:
         await state.ledger.append(
             "claim.verified"

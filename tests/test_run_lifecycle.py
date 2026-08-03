@@ -62,6 +62,79 @@ async def test_rehearsal_cancellation_seals_terminal_receipt(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_retention_delete_cascades_to_run_children(tmp_path):
+    database = AppDatabase(tmp_path / "cascade.sqlite3")
+    await database.initialize()
+    run_id = new_run_id()
+    await database.create_run(
+        run_id=run_id,
+        session_id="cascade-owner",
+        rehearsal=True,
+        question="Verify cascade cleanup",
+        corpus_id="corpus",
+        corpus_version="v_0123456789abcdef",
+        manifest_sha256="digest",
+    )
+    await database.append_event_row(
+        run_id=run_id,
+        sequence=1,
+        event_type="run.started",
+        occurred_at=utc_now_iso(),
+        payload={},
+        previous_hash="0" * 64,
+        event_hash="1" * 64,
+    )
+    await database.append_openai_call(
+        run_id,
+        1,
+        {"operation": "embedding", "started_at": utc_now_iso(), "token_usage": {}},
+    )
+
+    await database.delete_runs_created_before("9999-12-31T23:59:59+00:00")
+
+    async with database._connect() as connection:
+        event_cursor = await connection.execute("SELECT COUNT(*) FROM ledger_events")
+        call_cursor = await connection.execute("SELECT COUNT(*) FROM openai_calls")
+        event_count = (await event_cursor.fetchone())[0]
+        call_count = (await call_cursor.fetchone())[0]
+    assert event_count == 0
+    assert call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_transient_receipt_read_failure_does_not_delete_sealed_file(tmp_path, monkeypatch):
+    service, database, settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    run_id = new_run_id()
+    await database.create_run(
+        run_id=run_id,
+        session_id="receipt-owner",
+        rehearsal=True,
+        question="Preserve unreadable receipt",
+        corpus_id=service.corpus.corpus_id,
+        corpus_version=service.corpus.corpus_version,
+        manifest_sha256=service.corpus.manifest_sha256,
+    )
+    settings.receipts_dir.mkdir(parents=True, exist_ok=True)
+    receipt_path = settings.receipts_dir / f"{run_id}.json"
+    receipt_path.write_text("{}", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_only_for_receipt(path, *args, **kwargs):
+        if path == receipt_path:
+            raise PermissionError("temporary read failure")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_only_for_receipt)
+    await service.reconcile_abandoned_runs()
+
+    assert receipt_path.exists()
+    row = await database.get_run_row(run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.QUEUED.value
+
+
+@pytest.mark.asyncio
 async def test_immediate_cancellation_still_enters_guarded_finalizer(tmp_path):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()

@@ -21,6 +21,7 @@ def search_arguments(query: str = "total headcount") -> dict[str, object]:
     return {
         "query": query,
         "mode": "hybrid",
+        "metric": "total headcount",
         "document_ids": None,
         "date_from": None,
         "date_to": None,
@@ -37,7 +38,11 @@ def test_duplicate_searches_do_not_authorize_not_found(corpus):
     assert state.completed_searches == 4
     assert state.searches == 1
     claim = DraftClaim(metric="total headcount", status="not_found")
-    verified = state.verifier.verify_claim(claim, completed_searches=state.searches)
+    verified = state.verifier.verify_claim(
+        claim,
+        completed_searches=state.searches,
+        completed_search_records=state.completed_search_records,
+    )
     assert verified.status == ClaimStatus.UNVERIFIED
 
 
@@ -60,6 +65,23 @@ def test_rejected_fifth_search_does_not_increment_attempt_count(corpus):
     assert state.attempted_searches == 4
     assert state.completed_searches == 4
     assert state.searches == 4
+
+
+def test_searches_for_another_metric_do_not_authorize_not_found(corpus):
+    state = context(Settings(max_searches=4), corpus)
+    for index in range(4):
+        arguments = search_arguments(f"assets under management wording {index}")
+        arguments["metric"] = "total headcount"
+        state.begin_search()
+        state.complete_search(arguments)
+
+    claim = DraftClaim(metric="total headcount", status="not_found")
+    verified = state.verifier.verify_claim(
+        claim,
+        completed_searches=state.searches,
+        completed_search_records=state.completed_search_records,
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
 
 
 def test_agent_enforces_configured_output_token_cap():

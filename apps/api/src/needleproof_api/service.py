@@ -30,7 +30,7 @@ from .models import (
 from .receipt import RunLedger, validate_receipt
 from .retrieval import CorpusStore
 from .security import PublicUsageLimiter
-from .util import new_run_id, utc_now_iso
+from .util import canonical_json, new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
 VERIFIER_VERSION = EvidenceVerifier.version
@@ -84,10 +84,15 @@ def compose_authoritative_answer(
     for claim in accepted:
         statement = claim.statement.strip().rstrip(".")
         if claim.status == ClaimStatus.NOT_FOUND:
-            sentences.append(
-                f"{statement}. Not found after {searches} searches across corpus version "
-                f"{corpus_version}."
+            bounded_search_note = next(
+                (
+                    note.rstrip(".")
+                    for note in claim.verification_notes
+                    if note.startswith("Not found after ")
+                ),
+                f"Not found after {searches} searches across corpus version {corpus_version}",
             )
+            sentences.append(f"{statement}. {bounded_search_note}.")
         elif claim.status == ClaimStatus.CONFLICT:
             sentences.append(f"{statement}. The verified sources contain a conflict.")
         elif claim.status == ClaimStatus.DATE_VARIANT:
@@ -209,7 +214,12 @@ class InvestigationService:
             receipt_path = self.settings.receipts_dir / f"{run_id}.json"
             if receipt_path.exists():
                 try:
-                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    receipt_text = receipt_path.read_text(encoding="utf-8")
+                except OSError:
+                    logger.exception("Could not read sealed receipt for run %s", run_id)
+                    continue
+                try:
+                    receipt = json.loads(receipt_text)
                     errors = validate_receipt(receipt)
                     if errors:
                         raise ValueError("; ".join(errors))
@@ -228,7 +238,7 @@ class InvestigationService:
                         receipt_url=f"/api/runs/{run_id}/receipt",
                         receipt_json_url=f"/api/runs/{run_id}/receipt.json",
                     )
-                except Exception:  # noqa: BLE001 - replace only an invalid receipt
+                except (AttributeError, KeyError, TypeError, ValueError):
                     receipt_path.unlink(missing_ok=True)
                 else:
                     try:
@@ -412,7 +422,9 @@ class InvestigationService:
         )
         await ledger.append("verification.authoritative_started", {})
         verification = self.verifier.verify_claims(
-            outcome.draft.claims, completed_searches=context.searches
+            outcome.draft.claims,
+            completed_searches=context.searches,
+            completed_search_records=context.completed_search_records,
         )
         claims = verification.claims
         for claim in claims:
@@ -502,7 +514,16 @@ class InvestigationService:
             event.get("type") == "tool.search.completed" for event in receipt.get("events", [])
         )
         verification = self.verifier.verify_claims(
-            draft_claims, completed_searches=completed_searches
+            draft_claims,
+            completed_searches=completed_searches,
+            completed_search_records=[
+                {
+                    **(event.get("payload", {}).get("arguments") or {}),
+                    "signature": canonical_json(event.get("payload", {}).get("arguments") or {}),
+                }
+                for event in receipt.get("events", [])
+                if event.get("type") == "tool.search.completed"
+            ],
         )
         if not verification.all_claims_authoritative:
             raise ValueError("Rehearsal evidence failed current deterministic verification")

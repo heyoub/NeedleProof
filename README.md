@@ -128,7 +128,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The multi-stage image builds the LiteShip static frontend and serves it from FastAPI. Compose binds `./data` into the container so SQLite runs, receipts, corpus manifests, and `.tvim` files survive restarts.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The multi-stage image builds the LiteShip static frontend and serves it from FastAPI. Compose initializes a named `needleproof-data` volume from the image's validated corpus, then persists SQLite runs, receipts, corpus manifests, and `.tvim` files across restarts.
 
 ## Corpus lifecycle
 

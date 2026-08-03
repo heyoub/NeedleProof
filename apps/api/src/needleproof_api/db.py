@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -67,9 +69,18 @@ class AppDatabase:
     def __init__(self, path: Path):
         self.path = path
 
+    @asynccontextmanager
+    async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
+        connection = await aiosqlite.connect(self.path)
+        try:
+            await connection.execute("PRAGMA foreign_keys = ON")
+            yield connection
+        finally:
+            await connection.close()
+
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.executescript(SCHEMA)
             cursor = await connection.execute("PRAGMA table_info(runs)")
             columns = {row[1] for row in await cursor.fetchall()}
@@ -92,7 +103,7 @@ class AppDatabase:
         corpus_version: str,
         manifest_sha256: str,
     ) -> None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute(
                 """
                 INSERT INTO runs (
@@ -134,7 +145,7 @@ class AppDatabase:
         values = [
             value.value if isinstance(value, RunStatus) else value for value in fields.values()
         ]
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute(
                 f"UPDATE runs SET {assignments} WHERE run_id = ?",
                 (*values, run_id),
@@ -142,14 +153,14 @@ class AppDatabase:
             await connection.commit()
 
     async def get_run_row(self, run_id: str) -> dict[str, Any] | None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             connection.row_factory = aiosqlite.Row
             cursor = await connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,))
             row = await cursor.fetchone()
             return dict(row) if row else None
 
     async def list_recoverable_runs(self) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             connection.row_factory = aiosqlite.Row
             cursor = await connection.execute(
                 """
@@ -166,7 +177,7 @@ class AppDatabase:
             return [dict(row) for row in await cursor.fetchall()]
 
     async def delete_runs_created_before(self, cutoff: str) -> list[str]:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             cursor = await connection.execute(
                 "SELECT receipt_path FROM runs WHERE created_at < ? AND receipt_path IS NOT NULL",
                 (cutoff,),
@@ -196,7 +207,7 @@ class AppDatabase:
     ) -> str | None:
         """Atomically check persisted usage plus active reservations and reserve capacity."""
 
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute("PRAGMA busy_timeout = 5000")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -281,7 +292,7 @@ class AppDatabase:
         return unreserved_window_actual + active_commitment
 
     async def release_model_token_reservation(self, run_id: str) -> None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute(
                 "DELETE FROM model_token_reservations WHERE run_id = ?", (run_id,)
             )
@@ -299,7 +310,7 @@ class AppDatabase:
     ) -> str | None:
         """Reserve enough remaining capacity before the next model call is sent."""
 
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute("PRAGMA busy_timeout = 5000")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -353,7 +364,7 @@ class AppDatabase:
         return total
 
     async def get_model_token_reservation(self, run_id: str) -> int | None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             cursor = await connection.execute(
                 "SELECT reserved_tokens FROM model_token_reservations WHERE run_id = ?",
                 (run_id,),
@@ -362,7 +373,7 @@ class AppDatabase:
             return int(row[0]) if row else None
 
     async def release_terminal_or_orphan_token_reservations(self) -> int:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             cursor = await connection.execute(
                 """
                 DELETE FROM model_token_reservations
@@ -378,7 +389,7 @@ class AppDatabase:
             return max(cursor.rowcount, 0)
 
     async def sum_model_tokens_since(self, started_at: str) -> int:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             return await self._sum_model_tokens(connection, started_at)
 
     async def get_envelope(self, run_id: str) -> RunEnvelope | None:
@@ -410,7 +421,7 @@ class AppDatabase:
         previous_hash: str,
         event_hash: str,
     ) -> None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute(
                 """
                 INSERT INTO ledger_events (
@@ -431,7 +442,7 @@ class AppDatabase:
             await connection.commit()
 
     async def list_events(self, run_id: str, after: int = 0) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             connection.row_factory = aiosqlite.Row
             cursor = await connection.execute(
                 """
@@ -454,7 +465,7 @@ class AppDatabase:
         ]
 
     async def append_openai_call(self, run_id: str, sequence: int, record: dict[str, Any]) -> None:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             await connection.execute("PRAGMA busy_timeout = 5000")
             await connection.execute("BEGIN IMMEDIATE")
             try:
@@ -481,7 +492,7 @@ class AppDatabase:
                 raise
 
     async def list_openai_calls(self, run_id: str) -> list[dict[str, Any]]:
-        async with aiosqlite.connect(self.path) as connection:
+        async with self._connect() as connection:
             connection.row_factory = aiosqlite.Row
             cursor = await connection.execute(
                 "SELECT record_json FROM openai_calls WHERE run_id = ? ORDER BY sequence",

@@ -19,12 +19,15 @@ from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, u
 
 
 def _git_sha() -> str | None:
-    result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
     return result.stdout.strip() if result.returncode == 0 else None
 
 

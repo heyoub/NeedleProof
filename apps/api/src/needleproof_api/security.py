@@ -85,11 +85,25 @@ class PublicUsageLimiter:
         while window and window[0] < threshold:
             window.popleft()
 
+    def _prune_attempt_maps(self, now: float) -> None:
+        for attempts in (self._session_attempts, self._ip_attempts):
+            for key, window in list(attempts.items()):
+                self._prune(window, now)
+                if not window:
+                    del attempts[key]
+        threshold = now - 3600
+        self._attempt_by_run = {
+            run_id: attempt
+            for run_id, attempt in self._attempt_by_run.items()
+            if attempt[2] >= threshold
+        }
+
     async def admit(
         self, *, run_id: str, session_id: str, client_ip: str, rehearsal: bool
     ) -> UsageDecision:
         now = time.monotonic()
         async with self._lock:
+            self._prune_attempt_maps(now)
             session_window = self._session_attempts[session_id]
             ip_window = self._ip_attempts[client_ip]
             self._prune(session_window, now)
@@ -156,10 +170,16 @@ class PublicUsageLimiter:
                 return
             session_id, client_ip, admitted_at = attempt
             for window in (
-                self._session_attempts[session_id],
-                self._ip_attempts[client_ip],
+                self._session_attempts.get(session_id),
+                self._ip_attempts.get(client_ip),
             ):
+                if window is None:
+                    continue
                 try:
                     window.remove(admitted_at)
                 except ValueError:
                     pass
+            if not self._session_attempts.get(session_id):
+                self._session_attempts.pop(session_id, None)
+            if not self._ip_attempts.get(client_ip):
+                self._ip_attempts.pop(client_ip, None)

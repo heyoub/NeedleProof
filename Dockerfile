@@ -26,5 +26,9 @@ COPY apps/api apps/api
 RUN uv sync --frozen --no-dev
 COPY data data
 COPY --from=web /app/apps/web/dist apps/web/dist
+RUN groupadd --system --gid 10001 needleproof \
+    && useradd --system --uid 10001 --gid needleproof --home-dir /app needleproof \
+    && chown -R needleproof:needleproof /app/data
+USER needleproof
 EXPOSE 8000
 CMD ["/app/.venv/bin/uvicorn", "needleproof_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

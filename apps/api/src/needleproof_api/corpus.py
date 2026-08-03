@@ -6,6 +6,7 @@ import re
 import shutil
 import sqlite3
 import uuid
+from contextlib import closing
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
@@ -112,7 +113,9 @@ def stored_document_artifacts_match(version_dir: Path, manifest: dict[str, Any])
         document["document_id"]: document["source_sha256"]
         for document in manifest.get("documents", [])
     }
-    with sqlite3.connect(f"file:{version_dir / 'corpus.sqlite3'}?mode=ro", uri=True) as connection:
+    with closing(
+        sqlite3.connect(f"file:{version_dir / 'corpus.sqlite3'}?mode=ro", uri=True)
+    ) as connection:
         stored = connection.execute(
             "SELECT document_id, source_file, source_sha256 FROM documents"
         ).fetchall()
@@ -549,7 +552,7 @@ class CorpusBuilder:
 
             if len(index) != len(all_chunks):
                 raise ValueError("TurboVec length does not match chunk count")
-            with sqlite3.connect(db_path) as validation_connection:
+            with closing(sqlite3.connect(db_path)) as validation_connection:
                 row_count = validation_connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[
                     0
                 ]

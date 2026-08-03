@@ -13,6 +13,26 @@ class RehearsalDatabase:
     """Rehearsal admissions never touch persisted model-token capacity."""
 
 
+@pytest.mark.asyncio
+async def test_limiter_evicts_expired_attempt_map_keys(monkeypatch):
+    limiter = PublicUsageLimiter(Settings(), RehearsalDatabase())  # type: ignore[arg-type]
+    limiter._session_attempts["stale-session"].append(0.0)
+    limiter._ip_attempts["192.0.2.1"].append(0.0)
+    limiter._attempt_by_run["run_stale"] = ("stale-session", "192.0.2.1", 0.0)
+    monkeypatch.setattr("needleproof_api.security.time.monotonic", lambda: 7201.0)
+
+    await limiter.admit(
+        run_id="run_fresh",
+        session_id="fresh-session",
+        client_ip="192.0.2.2",
+        rehearsal=True,
+    )
+
+    assert "stale-session" not in limiter._session_attempts
+    assert "192.0.2.1" not in limiter._ip_attempts
+    assert "run_stale" not in limiter._attempt_by_run
+
+
 async def add_model_usage(
     database: AppDatabase,
     *,

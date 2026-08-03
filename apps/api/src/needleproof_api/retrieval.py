@@ -5,6 +5,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -73,7 +74,7 @@ class CorpusStore:
         if sha256_file(index_path) != expected_index_sha:
             raise ValueError("TurboVec artifact digest verification failed")
 
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as connection:
             document_count = connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
             chunk_count = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
             if document_count != int(self.manifest["document_count"]):
@@ -93,7 +94,7 @@ class CorpusStore:
                 raise ValueError(f"Source artifact digest failed for {document_id}")
 
     def _validate_index_ids(self) -> None:
-        with sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True) as connection:
+        with closing(sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)) as connection:
             ids = [
                 row[0]
                 for row in connection.execute("SELECT chunk_external_id FROM chunks").fetchall()
@@ -187,7 +188,7 @@ class CorpusStore:
             "SELECT c.chunk_external_id FROM chunks c JOIN documents d USING(document_id) WHERE "
             + " AND ".join(conditions)
         )
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             rows = connection.execute(query, params).fetchall()
         return [row[0] for row in rows]
 
@@ -218,7 +219,7 @@ class CorpusStore:
         sql += " ORDER BY rank LIMIT ?"
         params.append(max(k * 4, 32))
         try:
-            with sqlite3.connect(self.db_path) as connection:
+            with closing(sqlite3.connect(self.db_path)) as connection:
                 rows = connection.execute(sql, params).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -328,7 +329,7 @@ class CorpusStore:
             return []
         wanted: list[ChunkId] = []
         seen: set[ChunkId] = set()
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             connection.row_factory = sqlite3.Row
             for original_id in chunk_ids:
                 frontier = [original_id]
@@ -354,7 +355,7 @@ class CorpusStore:
         wanted = self.resolve_chunk_ids(chunk_ids, neighbor_radius)
         if not wanted:
             return []
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             connection.row_factory = sqlite3.Row
             placeholders = ",".join("?" for _ in wanted)
             rows = connection.execute(
@@ -382,7 +383,7 @@ class CorpusStore:
         return [mapped[value] for value in wanted if value in mapped]
 
     def document_chunk_ids(self, document_id: str, page_from: int, page_to: int) -> list[ChunkId]:
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             rows = connection.execute(
                 """
                 SELECT chunk_external_id FROM chunks
@@ -404,7 +405,7 @@ class CorpusStore:
         if page_to is not None:
             clauses.append("p.physical_page_index <= ?")
             params.append(page_to)
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             connection.row_factory = sqlite3.Row
             document = connection.execute(
                 "SELECT * FROM documents WHERE document_id = ?", (document_id,)
@@ -433,7 +434,7 @@ class CorpusStore:
         }
 
     def source_pdf(self, document_id: str) -> Path:
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             row = connection.execute(
                 "SELECT source_file FROM documents WHERE document_id = ?", (document_id,)
             ).fetchone()
