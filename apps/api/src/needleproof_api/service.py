@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ from .util import new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
 VERIFIER_VERSION = EvidenceVerifier.version
+logger = logging.getLogger(__name__)
 TERMINAL_EVENT_TYPES = {
     "run.completed",
     "run.incomplete",
@@ -226,10 +228,17 @@ class InvestigationService:
                         receipt_url=f"/api/runs/{run_id}/receipt",
                         receipt_json_url=f"/api/runs/{run_id}/receipt.json",
                     )
-                    await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
-                    continue
-                except Exception:  # noqa: BLE001 - recover with a new interrupted receipt
+                except Exception:  # noqa: BLE001 - replace only an invalid receipt
                     receipt_path.unlink(missing_ok=True)
+                else:
+                    try:
+                        await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
+                    except Exception:
+                        logger.exception(
+                            "Could not persist validated receipt recovery for run %s", run_id
+                        )
+                        continue
+                    continue
 
             bound_corpus = (
                 self.corpus

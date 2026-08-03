@@ -293,6 +293,43 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_preserves_valid_receipt_when_commit_is_unavailable(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Preserve this sealed result", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    receipt_path = Path(str(row["receipt_path"]))
+    original_receipt = receipt_path.read_bytes()
+    original_commit = service._commit_terminal
+    await database.update_run(created.run_id, status=RunStatus.INTERRUPTED)
+
+    async def unavailable_commit(_envelope, _receipt_path, _error):
+        raise OSError("injected recovery persistence failure")
+
+    monkeypatch.setattr(service, "_commit_terminal", unavailable_commit)
+    await service.reconcile_abandoned_runs()
+
+    preserved = await database.get_run_row(created.run_id)
+    assert preserved is not None
+    assert preserved["status"] == RunStatus.INTERRUPTED.value
+    assert receipt_path.read_bytes() == original_receipt
+
+    monkeypatch.setattr(service, "_commit_terminal", original_commit)
+    await service.reconcile_abandoned_runs()
+    recovered = await database.get_run_row(created.run_id)
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+    assert receipt_path.read_bytes() == original_receipt
+
+
+@pytest.mark.asyncio
 async def test_receipt_write_failure_becomes_recoverable_interruption(tmp_path, monkeypatch):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
