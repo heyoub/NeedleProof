@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -24,8 +25,16 @@ from .config import Settings
 from .models import AgentDraft, DraftClaim
 from .receipt import RunLedger
 from .retrieval import CorpusStore
-from .util import canonical_json, sha256_text, utc_now_iso
+from .util import canonical_json, normalize_evidence_text, sha256_text, utc_now_iso
 from .verification import EvidenceVerifier
+
+
+def _search_text_signature(value: object) -> str:
+    """Collapse punctuation, whitespace, case, and token-order-only query variants."""
+
+    normalized, _ = normalize_evidence_text(str(value or ""))
+    tokens = re.findall(r"[^\W_]+", normalized.casefold())
+    return " ".join(sorted(tokens))
 
 AGENT_INSTRUCTIONS = """
 You are the NeedleProof Corpus Investigator. You investigate a closed document corpus.
@@ -97,9 +106,9 @@ class InvestigationContext:
         self.completed_searches += 1
         signature = canonical_json(
             {
-                "query": " ".join(str(arguments["query"]).casefold().split()),
+                "query": _search_text_signature(arguments["query"]),
                 "mode": arguments["mode"],
-                "metric": " ".join(str(arguments.get("metric") or "").casefold().split()),
+                "metric": _search_text_signature(arguments.get("metric")),
                 "document_ids": sorted(arguments.get("document_ids") or []),
                 "date_from": arguments.get("date_from"),
                 "date_to": arguments.get("date_to"),

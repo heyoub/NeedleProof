@@ -46,6 +46,21 @@ def test_duplicate_searches_do_not_authorize_not_found(corpus):
     assert verified.status == ClaimStatus.UNVERIFIED
 
 
+def test_punctuation_and_token_order_variants_are_one_search(corpus):
+    state = context(Settings(max_searches=4), corpus)
+    for query in (
+        "total headcount",
+        "Total headcount?",
+        "headcount, total!",
+        "total... headcount",
+    ):
+        state.begin_search()
+        state.complete_search(search_arguments(query))
+
+    assert state.completed_searches == 4
+    assert state.searches == 1
+
+
 def test_failed_search_does_not_count_as_completed(corpus):
     state = context(Settings(max_searches=4), corpus)
     state.begin_search()

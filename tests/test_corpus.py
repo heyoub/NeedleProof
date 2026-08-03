@@ -61,6 +61,17 @@ def test_oversized_paragraph_is_split_into_bounded_overlapping_chunks():
     assert set(chunks[0].split()[-20:]) & set(chunks[1].split()[:100])
 
 
+def test_medium_paragraph_overlap_does_not_exceed_chunk_maximum():
+    first = " ".join(f"alpha-{index}" for index in range(400))
+    second = " ".join(f"bravo-{index}" for index in range(400))
+
+    chunks = chunk_page(f"{first}\n\n{second}")
+
+    assert len(chunks) == 2
+    assert all(estimate_tokens(chunk) <= 700 for chunk in chunks)
+    assert set(chunks[0].split()[-20:]) & set(chunks[1].split()[:100])
+
+
 def configured_builder(tmp_path, documents):
     source_path = tmp_path / "source.json"
     source_path.write_text(

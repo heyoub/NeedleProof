@@ -171,6 +171,24 @@ def _split_oversized_paragraph(paragraph: str, *, target_max: int, overlap: int)
     return segments
 
 
+def _bounded_tail_overlap(text: str, *, token_budget: int) -> str:
+    """Return the longest whole-word suffix that fits the overlap budget."""
+
+    if token_budget <= 0:
+        return ""
+    words = text.split()
+    low = 0
+    high = len(words)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        candidate = " ".join(words[-midpoint:])
+        if estimate_tokens(candidate) <= token_budget:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return " ".join(words[-low:]) if low else ""
+
+
 def chunk_page(
     raw_text: str, *, target_min: int = 500, target_max: int = 700, overlap: int = 80
 ) -> list[str]:
@@ -189,15 +207,17 @@ def chunk_page(
         paragraph_tokens = estimate_tokens(paragraph)
         if current and current_tokens + paragraph_tokens > target_max:
             chunks.append(current)
-            carry: list[str] = []
-            carry_tokens = 0
-            for prior in reversed(current):
-                if carry and carry_tokens >= overlap:
-                    break
-                carry.insert(0, prior)
-                carry_tokens += estimate_tokens(prior)
-            current = carry
-            current_tokens = carry_tokens
+            carry_budget = min(overlap, max(0, target_max - paragraph_tokens))
+            carry_text = _bounded_tail_overlap(
+                "\n\n".join(current), token_budget=carry_budget
+            )
+            while (
+                carry_text
+                and estimate_tokens(f"{carry_text}\n\n{paragraph}") > target_max
+            ):
+                carry_text = " ".join(carry_text.split()[1:])
+            current = [carry_text] if carry_text else []
+            current_tokens = estimate_tokens(carry_text) if carry_text else 0
         current.append(paragraph)
         current_tokens += paragraph_tokens
         if current_tokens >= target_min and current_tokens >= target_max * 0.9:
