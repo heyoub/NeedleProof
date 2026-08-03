@@ -91,6 +91,21 @@ def test_modified_or_fabricated_quote_is_rejected(corpus):
     assert not result.evidence[0].quote_found
 
 
+def test_whitespace_only_evidence_quote_is_not_reported_as_found(corpus):
+    evidence = reference(MEMO_CHUNK, " \t\n ", "Fee-related earnings")
+    claim = DraftClaim(
+        metric="fee-related earnings",
+        status="supported",
+        values=[ReportedValue(value="$345 million", evidence=[evidence])],
+        evidence=[evidence],
+    )
+
+    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
+
+    assert result.status == ClaimStatus.UNVERIFIED
+    assert not result.evidence[0].quote_found
+
+
 def test_missing_chunk_reference_makes_entire_claim_non_authoritative(corpus):
     quote = (
         "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "

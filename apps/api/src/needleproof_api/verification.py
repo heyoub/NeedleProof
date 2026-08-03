@@ -270,7 +270,7 @@ class EvidenceVerifier:
             chunk = chunks_by_id.get(reference.chunk_id)
             normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
             quote_found = bool(
-                chunk and normalized_quote.casefold() in chunk.normalized_text.casefold()
+                chunk and evidence_text_contains(reference.exact_quote, chunk.normalized_text)
             )
             relevant_values = [
                 value
