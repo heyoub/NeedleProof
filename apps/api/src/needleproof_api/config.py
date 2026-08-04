@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 768
     data_dir: Path = Path("data")
     corpus_source: Path = Path("data/corpus-source.json")
-    top_k: int = 8
-    max_top_k: int = 20
+    top_k: int = Field(default=8, ge=1, le=20)
+    max_top_k: int = Field(default=20, ge=1, le=20)
     max_turns: int = 6
     max_tool_calls: int = 12
     max_searches: int = 4
@@ -65,6 +65,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Model-token reservation per run cannot exceed the hourly or daily budget"
             )
+        if self.top_k > self.max_top_k:
+            raise ValueError("Default top_k cannot exceed max_top_k")
         try:
             for cidr in self.trusted_proxy_cidrs:
                 ip_network(cidr, strict=False)

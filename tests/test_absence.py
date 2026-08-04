@@ -12,8 +12,11 @@ from needleproof_api.models import (
     SearchHit,
     SearchResult,
 )
+from needleproof_api.service import _metric_key as service_metric_key
 from needleproof_api.service import compose_authoritative_answer
+from needleproof_api.util import canonical_metric_key
 from needleproof_api.verification import EvidenceVerifier
+from needleproof_api.verification import _canonical_metric as verifier_metric_key
 
 
 @pytest.mark.asyncio
@@ -47,6 +50,14 @@ async def test_bounded_absence_probe_rejects_metric_with_returned_value(corpus):
 
 def test_metric_phrase_matching_does_not_match_inside_trauma():
     assert word_phrase_spans("AUM", "trauma") == []
+
+
+def test_claim_and_absence_probe_share_one_metric_identity_normalizer():
+    metric = "Fee-earn-\ning AUM_2026"
+    expected = canonical_metric_key(metric)
+    assert expected == "fee earning aum 2026"
+    assert service_metric_key(metric) == expected
+    assert verifier_metric_key(metric) == expected
 
 
 def test_model_search_counts_cannot_authorize_not_found(corpus):

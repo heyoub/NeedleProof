@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from needleproof_api.receipt import _git_sha, receipt_contract_schema, validate_receipt
+from needleproof_api.receipt import (
+    _git_sha,
+    _optional_env,
+    receipt_contract_schema,
+    validate_receipt,
+)
 
 
 def test_featured_rehearsal_receipt_is_sealed(settings):
@@ -76,3 +81,8 @@ def test_git_sha_is_optional_when_git_executable_is_missing(monkeypatch):
 
     monkeypatch.setattr("needleproof_api.receipt.subprocess.run", missing_git)
     assert _git_sha() is None
+
+
+def test_empty_build_provenance_is_normalized_to_none(monkeypatch):
+    monkeypatch.setenv("NEEDLEPROOF_IMAGE_REVISION", "")
+    assert _optional_env("NEEDLEPROOF_IMAGE_REVISION") is None

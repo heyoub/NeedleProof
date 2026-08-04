@@ -46,6 +46,8 @@ export interface Evidence {
   assertion_found: boolean;
   temporal_anchor: string | null;
   temporal_value_bound: boolean;
+  observation_kind: ObservationKind | null;
+  value_text: string | null;
   quote: string;
   normalized_quote: string;
   normalization_operations: string[];

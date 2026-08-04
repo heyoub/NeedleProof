@@ -182,12 +182,16 @@ class CompletedSearchRecord(BaseModel):
 
 
 class MetricOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     chunk_id: ChunkId
     sentence: str
     span: tuple[int, int]
 
 
 class ValueCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     chunk_id: ChunkId
     metric_anchor: str
     value_text: str
@@ -196,6 +200,8 @@ class ValueCandidate(BaseModel):
 
 
 class AbsenceProbeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     protocol_version: str
     metric: str
     searches: list[CompletedSearchRecord]
@@ -220,6 +226,8 @@ class VerifiedEvidence(BaseModel):
     assertion_found: bool
     temporal_anchor: str | None = None
     temporal_value_bound: bool
+    observation_kind: ObservationKind | None = None
+    value_text: str | None = None
     quote: str
     normalized_quote: str
     normalization_operations: list[str] = Field(default_factory=list)

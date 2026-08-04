@@ -109,6 +109,7 @@ def test_modified_quote_is_rejected(corpus):
     )
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].quote_found
+    assert any("exact quotations" in note for note in verified.verification_notes)
 
 
 def test_any_evidence_reference_from_another_corpus_version_rejects_claim(corpus):
@@ -119,7 +120,7 @@ def test_any_evidence_reference_from_another_corpus_version_rejects_claim(corpus
     draft.context_evidence.append(missing)
     verified = EvidenceVerifier(corpus).verify_claim(draft)
     assert verified.status == ClaimStatus.UNVERIFIED
-    assert any("not part of this corpus version" in note for note in verified.verification_notes)
+    assert any("do not resolve" in note for note in verified.verification_notes)
 
 
 def test_right_number_attached_to_wrong_metric_is_rejected(corpus):
@@ -130,6 +131,30 @@ def test_right_number_attached_to_wrong_metric_is_rejected(corpus):
     )
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].metric_value_bound
+    assert any("metric anchors" in note for note in verified.verification_notes)
+
+
+def test_shared_reference_is_bound_independently_for_each_observation(corpus):
+    quote = (
+        "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
+        "improving to 50 percent from 48 percent."
+    )
+    shared = reference(MEMO_CHUNK, quote, "Fee-related earnings", assertion=quote)
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim(
+            "Fee-related earnings",
+            observation("$999 million", shared),
+            observation("$345 million", shared),
+        )
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert [item.value_text for item in verified.evidence] == [
+        "$999 million",
+        "$345 million",
+    ]
+    assert not verified.evidence[0].metric_value_bound
+    assert verified.evidence[1].metric_value_bound
 
 
 @pytest.mark.parametrize(

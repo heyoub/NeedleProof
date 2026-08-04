@@ -63,6 +63,7 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 _LINE_HYPHEN = re.compile(r"(?<=\w)-\s*\n\s*(?=\w)")
 _WHITESPACE = re.compile(r"\s+")
+_METRIC_WORD = re.compile(r"[^\W_]+")
 
 
 def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
@@ -77,6 +78,13 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
     if folded != dehyphenated:
         operations.append("whitespace_folding")
     return folded, operations
+
+
+def canonical_metric_key(value: str) -> str:
+    """Return one normalized complete-word key for claim/probe identity."""
+
+    normalized, _ = normalize_evidence_text(value)
+    return " ".join(_METRIC_WORD.findall(normalized.casefold()))
 
 
 def evidence_text_contains(needle: str, haystack: str) -> bool:

@@ -36,6 +36,11 @@ def _git_sha() -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _optional_env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value if value else None
+
+
 class ReceiptConfiguration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -298,7 +303,7 @@ class RunLedger:
                 "numeric_contract_sha256": NUMERIC_CONTRACT_SHA256,
                 "absence_protocol_version": ABSENCE_PROTOCOL_VERSION,
                 "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
-                "image_revision": os.getenv("NEEDLEPROOF_IMAGE_REVISION"),
+                "image_revision": _optional_env("NEEDLEPROOF_IMAGE_REVISION"),
                 "trace_id": trace_id,
                 "sealed_at": utc_now_iso(),
                 "event_chain_head": events[-1]["event_hash"] if events else "0" * 64,
@@ -412,12 +417,12 @@ def validate_receipt(receipt: object) -> list[str]:
         errors.append("OpenAI call sequences must be contiguous and start at 1.")
 
     status = receipt.get("status")
-    expected_terminal_event = {
-        "completed": "run.completed",
-        "incomplete": "run.incomplete",
-        "cancelled": "run.cancelled",
-        "failed": "run.failed",
-        "interrupted": "run.interrupted",
+    expected_terminal_events = {
+        "completed": {"run.completed"},
+        "incomplete": {"run.incomplete", "run.timeout"},
+        "cancelled": {"run.cancelled"},
+        "failed": {"run.failed"},
+        "interrupted": {"run.interrupted"},
     }.get(status)
     terminal_events = [
         event.get("type")
@@ -426,8 +431,8 @@ def validate_receipt(receipt: object) -> list[str]:
         and str(event.get("type", "")).startswith("run.")
         and event.get("type") != "run.started"
     ]
-    if expected_terminal_event and (
-        not terminal_events or terminal_events[-1] != expected_terminal_event
+    if expected_terminal_events and (
+        not terminal_events or terminal_events[-1] not in expected_terminal_events
     ):
         errors.append("Receipt status does not agree with its final terminal event.")
     claims = receipt.get("claims")

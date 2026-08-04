@@ -5,6 +5,7 @@ from needleproof_api.agent import InvestigationContext, build_agent
 from needleproof_api.config import Settings
 from needleproof_api.models import ClaimStatus, DraftClaim, SearchResult
 from needleproof_api.verification import EvidenceVerifier
+from pydantic import ValidationError
 
 
 def context(settings: Settings, corpus) -> InvestigationContext:
@@ -131,3 +132,10 @@ def test_scoped_searches_do_not_authorize_corpus_wide_not_found(corpus):
 def test_agent_enforces_configured_output_token_cap():
     agent = build_agent(Settings(max_model_output_tokens_per_call=4_321))
     assert agent.model_settings.max_tokens == 4_321
+
+
+def test_top_k_configuration_cannot_exceed_public_tool_contract():
+    with pytest.raises(ValidationError):
+        Settings(max_top_k=21)
+    with pytest.raises(ValidationError):
+        Settings(top_k=9, max_top_k=8)

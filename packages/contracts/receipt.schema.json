@@ -10,6 +10,7 @@
       "type": "string"
     },
     "AbsenceProbeResult": {
+      "additionalProperties": false,
       "properties": {
         "protocol_version": {
           "title": "Protocol Version",
@@ -302,6 +303,7 @@
       "type": "string"
     },
     "MetricOccurrence": {
+      "additionalProperties": false,
       "properties": {
         "chunk_id": {
           "pattern": "^chk_[0-9a-f]{16}$",
@@ -779,6 +781,7 @@
       "type": "object"
     },
     "ValueCandidate": {
+      "additionalProperties": false,
       "properties": {
         "chunk_id": {
           "pattern": "^chk_[0-9a-f]{16}$",
@@ -943,6 +946,29 @@
         "temporal_value_bound": {
           "title": "Temporal Value Bound",
           "type": "boolean"
+        },
+        "observation_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Text"
         },
         "quote": {
           "title": "Quote",

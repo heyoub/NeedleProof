@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
 from needleproof_api.main import get_run, receipt_json, receipt_page, run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
-from needleproof_api.receipt import RunLedger
+from needleproof_api.receipt import RunLedger, validate_receipt
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter
 from needleproof_api.service import InvestigationService, ReceiptRecoveryOutcome
@@ -207,7 +208,11 @@ async def test_hard_timeout_covers_the_entire_live_pipeline(tmp_path, monkeypatc
     row = await database.get_run_row(created.run_id)
     assert row is not None
     assert row["status"] == RunStatus.INCOMPLETE.value
-    assert Path(str(row["receipt_path"])).exists()
+    receipt_path = Path(str(row["receipt_path"]))
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["events"][-1]["type"] == "run.timeout"
+    assert validate_receipt(receipt) == []
     events = await database.list_events(created.run_id)
     assert events[-1]["type"] == "run.timeout"
 

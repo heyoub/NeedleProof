@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
 from needleproof_api.main import create_run
-from needleproof_api.models import RunCreateRequest, RunStatus
+from needleproof_api.models import ClaimStatus, RunCreateRequest, RunStatus, VerifiedClaim
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.service import (
     InvestigationService,
@@ -32,6 +32,18 @@ async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
     shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
     (tmp_path / "rehearsal").mkdir()
     shutil.copy2(Path("data/rehearsal/featured.json"), tmp_path / "rehearsal/featured.json")
+    rehearsal_path = tmp_path / "rehearsal" / "featured.json"
+    source = json.loads(rehearsal_path.read_text(encoding="utf-8"))
+    source["claims"].append(
+        VerifiedClaim(
+            statement="total headcount",
+            metric="total headcount",
+            status=ClaimStatus.NOT_FOUND,
+            verification_notes=["Fixture requests current bounded absence reverification."],
+        ).model_dump(mode="json")
+    )
+    reseal_receipt(source)
+    rehearsal_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
 
     settings = Settings(data_dir=tmp_path)
     database = AppDatabase(settings.app_db_path)
@@ -53,6 +65,16 @@ async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
     events = await database.list_events(run_id)
     assert events[0]["type"] == "run.started"
     assert events[-1]["type"] == "run.completed"
+    current_probe_events = [
+        event
+        for event in events
+        if event["type"] in {"absence_probe.started", "absence_probe.completed"}
+        and event["payload"].get("rehearsal_reverification") is True
+    ]
+    assert [event["type"] for event in current_probe_events] == [
+        "absence_probe.started",
+        "absence_probe.completed",
+    ]
 
 
 @pytest.mark.asyncio

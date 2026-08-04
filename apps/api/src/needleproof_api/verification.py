@@ -14,7 +14,6 @@ from .binding import (
     numeric_signature_sequence,
     numeric_signatures,
 )
-from .chunk_ids import ChunkId
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
@@ -29,7 +28,7 @@ from .models import (
     VerifiedEvidence,
 )
 from .retrieval import CorpusStore
-from .util import evidence_text_contains, normalize_evidence_text
+from .util import canonical_metric_key, evidence_text_contains, normalize_evidence_text
 
 _WORD = re.compile(r"[^\W_]+")
 _MONTHS = {month.casefold(): index for index, month in enumerate(calendar.month_name) if month}
@@ -49,8 +48,7 @@ class _VerifiedObservation:
 
 
 def _canonical_metric(value: str) -> str:
-    normalized, _ = normalize_evidence_text(value)
-    return " ".join(_WORD.findall(normalized.casefold()))
+    return canonical_metric_key(value)
 
 
 def _word_phrase_found(needle: str, haystack: str) -> bool:
@@ -191,30 +189,6 @@ def _distinct_temporal_anchors(observations: Iterable[DraftObservation]) -> set[
     }
 
 
-def _reference_key(reference: EvidenceReference) -> tuple[ChunkId, str, str, str, EvidenceRelation]:
-    return (
-        reference.chunk_id,
-        reference.metric_anchor,
-        reference.exact_assertion,
-        reference.exact_quote,
-        reference.relation,
-    )
-
-
-def _unique_references(claim: DraftClaim) -> list[EvidenceReference]:
-    references = list(claim.context_evidence)
-    for observation in claim.observations:
-        references.extend(observation.evidence)
-    output: list[EvidenceReference] = []
-    seen: set[tuple[ChunkId, str, str, str, EvidenceRelation]] = set()
-    for reference in references:
-        key = _reference_key(reference)
-        if key not in seen:
-            seen.add(key)
-            output.append(reference)
-    return output
-
-
 def _has_explicit_conflict(evidence: Iterable[VerifiedEvidence], metric: str) -> bool:
     return any(
         item.relation == EvidenceRelation.SUPPORTS
@@ -307,27 +281,32 @@ class EvidenceVerifier:
     ) -> VerifiedClaim:
         del completed_searches, completed_search_records
         notes: list[str] = []
-        references = _unique_references(claim)
+        reference_pairs: list[tuple[EvidenceReference, DraftObservation | None]] = [
+            (reference, None) for reference in claim.context_evidence
+        ]
+        reference_pairs.extend(
+            (reference, observation)
+            for observation in claim.observations
+            for reference in observation.evidence
+        )
+        references = [reference for reference, _observation in reference_pairs]
         chunks = self.corpus.get_chunks([reference.chunk_id for reference in references])
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-        verified_by_reference: dict[
-            tuple[ChunkId, str, str, str, EvidenceRelation], VerifiedEvidence
-        ] = {}
+        missing_chunk_ids: set[str] = set()
 
-        observation_by_reference: dict[
-            tuple[ChunkId, str, str, str, EvidenceRelation], DraftObservation
-        ] = {}
-        for observation in claim.observations:
-            for reference in observation.evidence:
-                observation_by_reference[_reference_key(reference)] = observation
-
-        for reference in references:
-            key = _reference_key(reference)
+        def verify_reference(
+            reference: EvidenceReference,
+            observation: DraftObservation | None,
+        ) -> VerifiedEvidence | None:
             chunk = chunks_by_id.get(reference.chunk_id)
+            if chunk is None:
+                missing_chunk_ids.add(str(reference.chunk_id))
+                return None
             normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
             operations = [*operations, "unicode_casefold_comparison"]
-            quote_found = bool(
-                chunk and evidence_text_contains(reference.exact_quote, chunk.normalized_text)
+            quote_found = evidence_text_contains(
+                reference.exact_quote,
+                chunk.normalized_text,
             )
             assertion_found = evidence_text_contains(
                 reference.exact_assertion,
@@ -337,7 +316,6 @@ class EvidenceVerifier:
                 reference.metric_anchor,
                 reference.exact_assertion,
             )
-            observation = observation_by_reference.get(key)
             binding = None
             value_text_found = False
             failure_reason: str | None = None
@@ -352,13 +330,10 @@ class EvidenceVerifier:
                 binding = result.match
                 value_text_found = result.value_text_found
                 failure_reason = result.failure_reason
-            if chunk is None:
-                notes.append(f"Chunk {reference.chunk_id} is not part of this corpus version.")
-                continue
             metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
                 claim.metric
             )
-            verified_by_reference[key] = VerifiedEvidence(
+            return VerifiedEvidence(
                 chunk_id=chunk.chunk_id,
                 document_id=chunk.document_id,
                 document_name=chunk.document_name,
@@ -371,15 +346,12 @@ class EvidenceVerifier:
                 temporal_anchor=observation.temporal_anchor if observation else None,
                 temporal_value_bound=bool(
                     binding
-                    and _temporal_anchor_is_valid(
-                        observation.temporal_anchor if observation else None
-                    )
-                    and (
-                        observation is None
-                        or observation.temporal_anchor is None
-                        or binding.temporal_span is not None
-                    )
+                    and observation
+                    and _temporal_anchor_is_valid(observation.temporal_anchor)
+                    and (observation.temporal_anchor is None or binding.temporal_span is not None)
                 ),
+                observation_kind=observation.kind if observation else None,
+                value_text=observation.value_text if observation else None,
                 quote=reference.exact_quote,
                 normalized_quote=normalized_quote,
                 normalization_operations=operations,
@@ -401,13 +373,17 @@ class EvidenceVerifier:
                 ),
             )
 
-        evidence = list(verified_by_reference.values())
+        context_evidence = [
+            verified
+            for reference in claim.context_evidence
+            if (verified := verify_reference(reference, None)) is not None
+        ]
         verified_observations: list[_VerifiedObservation] = []
         for observation in claim.observations:
             observation_evidence = tuple(
-                verified_by_reference[key]
+                verified
                 for reference in observation.evidence
-                if (key := _reference_key(reference)) in verified_by_reference
+                if (verified := verify_reference(reference, observation)) is not None
             )
             supporting = any(
                 item.relation == EvidenceRelation.SUPPORTS
@@ -424,6 +400,11 @@ class EvidenceVerifier:
                 _VerifiedObservation(observation, observation_evidence, supporting)
             )
 
+        evidence = [
+            *context_evidence,
+            *(item for observation in verified_observations for item in observation.evidence),
+        ]
+
         authorized = [item.observation for item in verified_observations if item.authorized]
         all_observations_authorized = bool(claim.observations) and len(authorized) == len(
             claim.observations
@@ -432,12 +413,21 @@ class EvidenceVerifier:
         distinct_temporal = _distinct_temporal_anchors(authorized)
         temporal_count = sum(bool(observation.temporal_anchor) for observation in authorized)
         explicit_conflict = _has_explicit_conflict(evidence, claim.metric)
-        all_references_valid = len(evidence) == len(references) and all(
-            item.quote_found
-            and item.assertion_found
-            and item.metric_anchor_found
-            and _canonical_metric(item.metric_anchor) == _canonical_metric(claim.metric)
+        unresolved_references = len(evidence) != len(references)
+        missing_quotes = any(not item.quote_found for item in evidence)
+        unmatched_assertions = any(not item.assertion_found for item in evidence)
+        invalid_metric_anchors = any(
+            not item.metric_anchor_found
+            or _canonical_metric(item.metric_anchor) != _canonical_metric(claim.metric)
             for item in evidence
+        )
+        all_references_valid = not any(
+            (
+                unresolved_references,
+                missing_quotes,
+                unmatched_assertions,
+                invalid_metric_anchors,
+            )
         )
 
         if claim.request_absence_probe:
@@ -460,13 +450,23 @@ class EvidenceVerifier:
             notes.append("An authoritative factual claim requires at least one observation.")
         elif not all_references_valid or not all_observations_authorized:
             status = ClaimStatus.UNVERIFIED
-            if not all_references_valid:
+            if unresolved_references:
                 notes.append(
-                    "Every cited evidence reference must resolve inside this corpus version."
+                    "Evidence references do not resolve inside this corpus version: "
+                    + ", ".join(sorted(missing_chunk_ids))
                 )
-            notes.append(
-                "Every observation requires a supporting quotation with one authorized positive binding profile."
-            )
+            if missing_quotes:
+                notes.append("One or more exact quotations were not found in their cited chunks.")
+            if unmatched_assertions:
+                notes.append("One or more exact assertions were not found inside their quotations.")
+            if invalid_metric_anchors:
+                notes.append(
+                    "One or more metric anchors were absent from the assertion or did not match the canonical claim metric."
+                )
+            if not all_observations_authorized:
+                notes.append(
+                    "Every observation requires a supporting quotation with one authorized positive binding profile."
+                )
         elif len(distinct_values) >= 2:
             if explicit_conflict:
                 status = ClaimStatus.CONFLICT

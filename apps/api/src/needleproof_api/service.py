@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
@@ -32,7 +31,7 @@ from .models import (
 from .receipt import RunLedger, validate_receipt
 from .retrieval import CorpusStore
 from .security import PublicUsageLimiter
-from .util import new_run_id, utc_now_iso
+from .util import canonical_metric_key, new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
 VERIFIER_VERSION = EvidenceVerifier.version
@@ -48,7 +47,7 @@ TERMINAL_EVENT_TYPES = {
 
 
 def _metric_key(value: str) -> str:
-    return " ".join(re.findall(r"[^\W_]+", value.casefold()))
+    return canonical_metric_key(value)
 
 
 @dataclass(slots=True)
@@ -571,8 +570,24 @@ class InvestigationService:
         absence_probes = {}
         for claim in draft_claims:
             if claim.request_absence_probe:
-                probe = await probe_metric_absence(self.corpus, claim.metric, top_k=8)
+                await ledger.append(
+                    "absence_probe.started",
+                    {"metric": claim.metric, "rehearsal_reverification": True},
+                )
+                probe = await probe_metric_absence(
+                    self.corpus,
+                    claim.metric,
+                    top_k=8,
+                    recorder=ledger.record_openai_call,
+                )
                 absence_probes[_metric_key(claim.metric)] = probe
+                await ledger.append(
+                    "absence_probe.completed",
+                    {
+                        **probe.model_dump(mode="json"),
+                        "rehearsal_reverification": True,
+                    },
+                )
         verification = self.verifier.verify_claims(
             draft_claims,
             absence_probes=absence_probes,
