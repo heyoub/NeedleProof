@@ -213,6 +213,100 @@ def test_quote_may_begin_after_a_real_chunk_sentence_boundary():
 
 
 @pytest.mark.parametrize(
+    ("quote", "assertion", "expected_reason"),
+    [
+        (
+            "Forecast 2025 Revenue was $2 million.",
+            "2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
+        (
+            "Target as of 2025 Revenue was $2 million.",
+            "as of 2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
+    ],
+)
+def test_temporal_led_binding_cannot_crop_role_prefix_from_quote(
+    quote,
+    assertion,
+    expected_reason,
+):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 931),
+        document_id="doc_temporal_role_prefix_quote",
+        document_name="Temporal role prefix quote fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="c" * 64,
+        token_estimate=8,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue", assertion=assertion)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == expected_reason
+
+
+def test_temporal_led_quote_cannot_crop_role_prefix_from_chunk():
+    chunk_text = "Forecast 2025 Revenue was $2 million."
+    quote = "2025 Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 932),
+        document_id="doc_temporal_role_prefix_chunk",
+        document_name="Temporal role prefix chunk fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="d" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
+
+
+@pytest.mark.parametrize(
+    "chunk_text",
+    [
+        "2025 Revenue was $2 million.",
+        "The forecast was withdrawn. 2025 Revenue was $2 million.",
+    ],
+)
+def test_temporal_led_binding_preserves_real_source_boundaries(chunk_text):
+    quote = "2025 Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 933),
+        document_id="doc_temporal_source_boundary",
+        document_name="Temporal source boundary fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="e" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+@pytest.mark.parametrize(
     "followup",
     ["This was a forecast.", "That amount was a target.", "It was only an estimate."],
 )

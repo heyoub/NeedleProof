@@ -6,9 +6,11 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -85,6 +87,16 @@ def _optional_env(name: str) -> str | None:
 
 _SHA256_PATTERN = re.compile(r"[a-f0-9]{64}")
 Sha256Digest: TypeAlias = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+
+_FEATURED_MIGRATION_SOURCE_SHA256 = (
+    "547f8cc77017f9df449b8a2a0fb6df0a29dbc5f98c47f09a353f76512ace0526"
+)
+TRUSTED_MIGRATION_SOURCE_FILES: Mapping[str, Path] = MappingProxyType(
+    {
+        _FEATURED_MIGRATION_SOURCE_SHA256: Path(__file__).with_name("migration_sources")
+        / f"{_FEATURED_MIGRATION_SOURCE_SHA256}.json",
+    }
+)
 
 
 def _optional_sha256_env(name: str) -> str | None:
@@ -486,7 +498,63 @@ def receipt_html(receipt: dict[str, Any]) -> str:
 <h2>Execution ledger</h2><ol>{events}</ol></body></html>"""
 
 
-def validate_receipt(receipt: object) -> list[str]:
+def _validate_migration_lineage(
+    receipt: dict[Any, Any],
+    trusted_sources: Mapping[str, Path],
+) -> list[str]:
+    """Bind a migrated receipt to an operator-trusted, hash-addressed source artifact."""
+
+    provenance = receipt.get("provenance")
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("receipt_derivation") != "contract_migration"
+    ):
+        return []
+    source_digest = provenance.get("source_receipt_sha256")
+    if not isinstance(source_digest, str) or _SHA256_PATTERN.fullmatch(source_digest) is None:
+        return []  # The receipt contract reports the malformed digest.
+    source_path = trusted_sources.get(source_digest)
+    if source_path is None:
+        return ["Migrated receipt source is not present in the trusted source registry."]
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return ["Migrated receipt source artifact is unavailable or unreadable."]
+    if not isinstance(source, dict):
+        return ["Migrated receipt source artifact must be an object."]
+
+    errors: list[str] = []
+    embedded_digest = source.get("receipt_sha256")
+    source_unsigned = {key: value for key, value in source.items() if key != "receipt_sha256"}
+    canonical_digest = sha256_text(canonical_json(source_unsigned))
+    if embedded_digest != source_digest or canonical_digest != source_digest:
+        errors.append("Migrated receipt source artifact does not match its trusted digest.")
+
+    for field in (
+        "run_id",
+        "status",
+        "question",
+        "corpus_id",
+        "corpus_version",
+        "corpus_manifest_sha256",
+    ):
+        if source.get(field) != receipt.get(field):
+            errors.append(f"Migrated receipt source identity differs at {field}.")
+
+    source_provenance = source.get("provenance")
+    source_verifier = (
+        source_provenance.get("verifier_version") if isinstance(source_provenance, dict) else None
+    )
+    if source_verifier != provenance.get("source_verifier_version"):
+        errors.append("Migrated receipt source verifier identity does not match provenance.")
+    return errors
+
+
+def validate_receipt(
+    receipt: object,
+    *,
+    trusted_migration_sources: Mapping[str, Path] = TRUSTED_MIGRATION_SOURCE_FILES,
+) -> list[str]:
     """Validate arbitrary decoded JSON without leaking shape exceptions."""
 
     if not isinstance(receipt, dict):
@@ -508,6 +576,8 @@ def validate_receipt(receipt: object) -> list[str]:
             f"Receipt contract violation at {'.'.join(map(str, item['loc']))}: {item['msg']}"
             for item in exc.errors()
         )
+    if schema_version == "1.4":
+        errors.extend(_validate_migration_lineage(receipt, trusted_migration_sources))
     expected_digest = receipt.get("receipt_sha256")
     unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     actual_digest = sha256_text(canonical_json(unsigned))

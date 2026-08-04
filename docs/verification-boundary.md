@@ -48,7 +48,8 @@ after a partial or ambiguous metric phrase.
 
 The selected assertion must preserve its structural boundary inside the exact quotation, and the
 quotation must preserve the same metric boundary inside the immutable chunk. A direct metric
-subject cannot be cropped out of a preceding word-level prefix at either layer, and a cropped tail
+subject or an atomic binding beginning with a leading temporal anchor cannot be cropped out of a
+preceding word-level prefix at either layer, and a cropped tail
 must begin at a terminal boundary or one named comma-commentary/coordination shape. Therefore a draft cannot
 turn `Forecast revenue was $2 million` or `Revenue was $2 million, a forecast for next year` into a
 clean reported level by cropping the role qualifier. Authorized comparative commentary remains
@@ -161,6 +162,9 @@ carry the source receipt digest and verifier version. Retained schema-1.2 receip
 through an exact read-only legacy validator; they cannot be replayed as current receipts. Checked-in rehearsal receipts that are
 re-verified after a contract change record `receipt_derivation=contract_migration` together with
 the original sealed receipt digest and verifier version; they are not represented as fresh model runs.
+The application accepts that lineage only when the digest is registered in code, the retained
+hash-addressed source artifact reproduces it, and the source run, corpus, status, question, and
+verifier identity match. This is an application trust boundary, not a third-party signature.
 
 ## Static analysis
 

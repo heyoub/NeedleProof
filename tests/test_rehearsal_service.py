@@ -282,7 +282,10 @@ async def test_one_active_live_run_per_browser_session(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mutation", ["tampered", "wrong_corpus", "fabricated_quote"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["tampered", "wrong_corpus", "fabricated_quote", "forged_migration_source"],
+)
 async def test_rehearsal_rejects_untrusted_or_stale_source_receipts(tmp_path, mutation):
     shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
     (tmp_path / "rehearsal").mkdir()
@@ -291,6 +294,9 @@ async def test_rehearsal_rejects_untrusted_or_stale_source_receipts(tmp_path, mu
         source["answer"] = f"{source['answer']} tampered"
     elif mutation == "wrong_corpus":
         source["corpus_manifest_sha256"] = "0" * 64
+        reseal_receipt(source)
+    elif mutation == "forged_migration_source":
+        source["provenance"]["source_receipt_sha256"] = "0" * 64
         reseal_receipt(source)
     else:
         claim = next(claim for claim in source["claims"] if claim["status"] == "verified")

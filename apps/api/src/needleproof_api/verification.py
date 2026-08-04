@@ -91,6 +91,11 @@ _DIRECT_ASSERTION_QUOTE_BOUNDARY = re.compile(
     r"(?:[.!?;]|[,;:]\s*(?:and|but|while|whereas))\s*$",
     re.IGNORECASE,
 )
+_TEMPORAL_ATTRIBUTION_PREFIX = re.compile(
+    r"\b(?:note|report|filing|memo|source|statement|record)\s+"
+    r"(?:from|for|on|during|at)\s+(?:the)?\s*$",
+    re.IGNORECASE,
+)
 _COMMA_ASSERTION_COMMENTARY = re.compile(
     r"\s*,\s*(?:"
     r"(?:up|down|compared|versus)\b|"
@@ -156,6 +161,8 @@ def _fragment_respects_context_boundaries(
     fragment: str,
     context: str,
     metric_span: Span,
+    *,
+    requires_atomic_prefix: bool = False,
 ) -> bool:
     """Reject a clean fragment cropped out of role-changing enclosing context."""
 
@@ -167,6 +174,7 @@ def _fragment_respects_context_boundaries(
             normalized_context,
             metric_span,
             occurrence,
+            requires_atomic_prefix=requires_atomic_prefix,
         )
         for occurrence in re.finditer(re.escape(normalized_fragment), normalized_context)
     )
@@ -177,6 +185,8 @@ def _occurrence_respects_context_boundaries(
     normalized_context: str,
     metric_span: Span,
     occurrence: re.Match[str],
+    *,
+    requires_atomic_prefix: bool = False,
 ) -> bool:
     """Check one exact fragment occurrence so nested evidence spans cannot be mixed."""
 
@@ -185,8 +195,11 @@ def _occurrence_respects_context_boundaries(
     )
     prefix = normalized_context[: occurrence.start()].rstrip()
     suffix = normalized_context[occurrence.end() :]
-    if direct_metric_subject and prefix and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None:
-        return False
+    if prefix and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None:
+        if direct_metric_subject:
+            return False
+        if requires_atomic_prefix and _TEMPORAL_ATTRIBUTION_PREFIX.search(prefix) is None:
+            return False
     if (
         suffix
         and normalized_fragment.rstrip()[-1:] not in ".!?"
@@ -222,14 +235,21 @@ def _binding_respects_quote_boundaries(
 ) -> bool:
     """Reject a clean relationship cropped out of role-changing quote context."""
 
-    return _fragment_respects_context_boundaries(assertion, quote, binding.metric_span)
+    return _fragment_respects_context_boundaries(
+        assertion,
+        quote,
+        binding.metric_span,
+        requires_atomic_prefix=True,
+    )
 
 
 def _quote_respects_chunk_boundaries(
     assertion: str,
     quote: str,
     chunk_text: str,
-    metric_span: Span,
+    binding_boundary_span: Span,
+    *,
+    requires_atomic_prefix: bool = False,
 ) -> bool:
     """Require the enclosing quote to preserve the chunk context around the same metric."""
 
@@ -243,20 +263,22 @@ def _quote_respects_chunk_boundaries(
         if not _occurrence_respects_context_boundaries(
             normalized_assertion,
             normalized_quote,
-            metric_span,
+            binding_boundary_span,
             assertion_occurrence,
+            requires_atomic_prefix=requires_atomic_prefix,
         ):
             continue
-        quote_metric_span = (
-            assertion_occurrence.start() + metric_span[0],
-            assertion_occurrence.start() + metric_span[1],
+        quote_boundary_span = (
+            assertion_occurrence.start() + binding_boundary_span[0],
+            assertion_occurrence.start() + binding_boundary_span[1],
         )
         if any(
             _occurrence_respects_context_boundaries(
                 normalized_quote,
                 normalized_chunk,
-                quote_metric_span,
+                quote_boundary_span,
                 quote_occurrence,
+                requires_atomic_prefix=requires_atomic_prefix,
             )
             for quote_occurrence in re.finditer(re.escape(normalized_quote), normalized_chunk)
         ):
@@ -729,7 +751,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v25-bounded-qualitative-conflict-operands"
+    version = "deterministic-verifier-v26-atomic-temporal-boundaries"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -839,6 +861,7 @@ class EvidenceVerifier:
                     reference.exact_quote,
                     chunk.normalized_text,
                     binding.metric_span,
+                    requires_atomic_prefix=True,
                 ):
                     binding = None
                     assertion_found = False

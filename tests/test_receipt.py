@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from hypothesis import given
 from hypothesis import strategies as st
 from needleproof_api.main import _validated_receipt
 from needleproof_api.receipt import (
+    TRUSTED_MIGRATION_SOURCE_FILES,
     ReceiptProvenance,
     _git_sha,
     _optional_env,
@@ -18,6 +20,11 @@ from needleproof_api.receipt import (
 )
 from needleproof_api.util import canonical_json, sha256_text
 from pydantic import TypeAdapter
+
+
+def reseal_receipt(receipt: dict[str, object]) -> None:
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = sha256_text(canonical_json(unsigned))
 
 
 def test_featured_rehearsal_receipt_is_sealed(settings):
@@ -33,6 +40,16 @@ def test_featured_rehearsal_receipt_is_sealed(settings):
     assert receipt["provenance"]["receipt_derivation"] == "contract_migration"
     assert receipt["provenance"]["source_receipt_sha256"]
     assert receipt["provenance"]["source_verifier_version"]
+
+
+def test_trusted_migration_source_registry_is_hash_addressed():
+    assert TRUSTED_MIGRATION_SOURCE_FILES
+    for expected_digest, source_path in TRUSTED_MIGRATION_SOURCE_FILES.items():
+        assert source_path.name == f"{expected_digest}.json"
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        assert source["receipt_sha256"] == expected_digest
+        unsigned = {key: value for key, value in source.items() if key != "receipt_sha256"}
+        assert sha256_text(canonical_json(unsigned)) == expected_digest
 
 
 def test_committed_receipt_schema_is_generated_from_pydantic_contract():
@@ -134,6 +151,72 @@ def test_live_provenance_rejects_migration_source_identity(settings):
     provenance["receipt_derivation"] = "live"
     with pytest.raises(ValueError):
         TypeAdapter(ReceiptProvenance).validate_python(provenance)
+
+
+def test_resealed_migration_cannot_select_an_untrusted_source(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    receipt["provenance"]["source_receipt_sha256"] = "0" * 64
+    reseal_receipt(receipt)
+
+    errors = validate_receipt(receipt)
+    assert "Migrated receipt source is not present in the trusted source registry." in errors
+
+    receipt_path = tmp_path / "forged-migration.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(HTTPException, match="Receipt integrity validation failed"):
+        _validated_receipt(
+            {
+                "receipt_path": str(receipt_path),
+                "receipt_sha256": receipt["receipt_sha256"],
+                "status": receipt["status"],
+            }
+        )
+
+
+def test_trusted_migration_source_content_is_hash_checked(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    source_digest = receipt["provenance"]["source_receipt_sha256"]
+    source = json.loads(TRUSTED_MIGRATION_SOURCE_FILES[source_digest].read_text(encoding="utf-8"))
+    source["question"] = "A modified source question"
+    tampered_source = tmp_path / "source.json"
+    tampered_source.write_text(json.dumps(source), encoding="utf-8")
+
+    errors = validate_receipt(
+        receipt,
+        trusted_migration_sources={source_digest: tampered_source},
+    )
+    assert "Migrated receipt source artifact does not match its trusted digest." in errors
+    assert "Migrated receipt source identity differs at question." in errors
+
+
+def test_unrelated_valid_source_artifact_cannot_donate_lineage(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    original_digest = receipt["provenance"]["source_receipt_sha256"]
+    source = json.loads(TRUSTED_MIGRATION_SOURCE_FILES[original_digest].read_text(encoding="utf-8"))
+    source["run_id"] = "run_" + "f" * 32
+    reseal_receipt(source)
+    unrelated_digest = source["receipt_sha256"]
+    unrelated_source = tmp_path / "unrelated.json"
+    unrelated_source.write_text(json.dumps(source), encoding="utf-8")
+    receipt["provenance"]["source_receipt_sha256"] = unrelated_digest
+    reseal_receipt(receipt)
+
+    errors = validate_receipt(
+        receipt,
+        trusted_migration_sources={unrelated_digest: unrelated_source},
+    )
+    assert "Migrated receipt source identity differs at run_id." in errors
+
+
+def test_migration_source_verifier_identity_must_match(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    receipt["provenance"]["source_verifier_version"] = "forged-verifier"
+    reseal_receipt(receipt)
+
+    assert (
+        "Migrated receipt source verifier identity does not match provenance."
+        in validate_receipt(receipt)
+    )
 
 
 def test_final_ledger_event_must_be_terminal(settings):

@@ -102,9 +102,10 @@ Every sealed receipt includes:
 - exact selected quotations plus quote/value verification outcomes
 - all model and embedding calls, response/request IDs when available, token use, observable retry counts, and sanitized errors; hidden client retries are disabled
 - corpus manifest digest, agent-instruction/tool-schema/binding/absence hashes, verifier version, Git/image revision, dependency-lock digests, and all material runtime limits
-- schema-visible live/migration provenance and read-only integrity validation for retained schema-1.2 receipts
+- schema-visible live/migration provenance, hash-addressed trusted source artifacts for migrated
+  receipts, and read-only integrity validation for retained schema-1.2 receipts
 
-Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed.
+Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed. A migrated receipt is accepted only when its declared source resolves through the code-owned trusted-source registry, the retained source artifact reproduces that canonical digest, and the source run, corpus, status, question, and verifier identity match the migration record.
 
 A server-generated `HttpOnly`, `SameSite=Lax` browser cookie owns every run. Read, SSE, cancel, receipt, and quote-verification routes enforce that ownership; run IDs are identifiers rather than bearer credentials. Live runs are bounded per browser and by per-session/IP rates plus hourly/daily token budgets. Each live admission atomically reserves conservative token capacity in SQLite. Before every model call, NeedleProof reserves a byte-based input ceiling plus an API-enforced output-token cap; each persisted call atomically expands the reservation to at least actual cumulative usage. Forwarded client IPs are honored only when the immediate transport peer belongs to an explicitly configured trusted-proxy CIDR; direct clients cannot forge `CF-Connecting-IP` to rotate their rate-limit key. The trusted proxy must strip client-supplied copies of that header. Receipt routes send `noindex, nofollow`. The event build supports only the bundled public/fictional corpus; confidential uploads are explicitly unsupported.
 
