@@ -27,6 +27,31 @@
           "title": "Searches",
           "type": "array"
         },
+        "exact_metric_scan_completed": {
+          "default": false,
+          "title": "Exact Metric Scan Completed",
+          "type": "boolean"
+        },
+        "exact_metric_scan_chunk_ids": {
+          "items": {
+            "pattern": "^chk_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Exact Metric Scan Chunk Ids",
+          "type": "array"
+        },
+        "exact_metric_scan_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Metric Scan Error"
+        },
         "unique_candidate_chunk_ids": {
           "items": {
             "pattern": "^chk_[0-9a-f]{16}$",
@@ -310,6 +335,130 @@
       "title": "EvidenceRelation",
       "type": "string"
     },
+    "LiveReceiptProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "application_version": {
+          "title": "Application Version",
+          "type": "string"
+        },
+        "git_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Git Commit Sha"
+        },
+        "dependency_lock_digests": {
+          "additionalProperties": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Dependency Lock Digests",
+          "type": "object"
+        },
+        "agent_instruction_hash": {
+          "title": "Agent Instruction Hash",
+          "type": "string"
+        },
+        "tool_schema_hash": {
+          "title": "Tool Schema Hash",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "binding_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binding Contract Sha256",
+          "type": "string"
+        },
+        "numeric_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Numeric Contract Sha256",
+          "type": "string"
+        },
+        "absence_protocol_version": {
+          "title": "Absence Protocol Version",
+          "type": "string"
+        },
+        "absence_protocol_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Absence Protocol Sha256",
+          "type": "string"
+        },
+        "image_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Image Revision"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        },
+        "sealed_at": {
+          "title": "Sealed At",
+          "type": "string"
+        },
+        "event_chain_head": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Chain Head",
+          "type": "string"
+        },
+        "receipt_derivation": {
+          "const": "live",
+          "title": "Receipt Derivation",
+          "type": "string"
+        },
+        "source_receipt_sha256": {
+          "title": "Source Receipt Sha256",
+          "type": "null"
+        },
+        "source_verifier_version": {
+          "title": "Source Verifier Version",
+          "type": "null"
+        }
+      },
+      "required": [
+        "application_version",
+        "git_commit_sha",
+        "dependency_lock_digests",
+        "agent_instruction_hash",
+        "tool_schema_hash",
+        "verifier_version",
+        "binding_contract_sha256",
+        "numeric_contract_sha256",
+        "absence_protocol_version",
+        "absence_protocol_sha256",
+        "image_revision",
+        "trace_id",
+        "sealed_at",
+        "event_chain_head",
+        "receipt_derivation",
+        "source_receipt_sha256",
+        "source_verifier_version"
+      ],
+      "title": "LiveReceiptProvenance",
+      "type": "object"
+    },
     "MetricOccurrence": {
       "additionalProperties": false,
       "properties": {
@@ -343,6 +492,132 @@
         "span"
       ],
       "title": "MetricOccurrence",
+      "type": "object"
+    },
+    "MigratedReceiptProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "application_version": {
+          "title": "Application Version",
+          "type": "string"
+        },
+        "git_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Git Commit Sha"
+        },
+        "dependency_lock_digests": {
+          "additionalProperties": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Dependency Lock Digests",
+          "type": "object"
+        },
+        "agent_instruction_hash": {
+          "title": "Agent Instruction Hash",
+          "type": "string"
+        },
+        "tool_schema_hash": {
+          "title": "Tool Schema Hash",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "binding_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binding Contract Sha256",
+          "type": "string"
+        },
+        "numeric_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Numeric Contract Sha256",
+          "type": "string"
+        },
+        "absence_protocol_version": {
+          "title": "Absence Protocol Version",
+          "type": "string"
+        },
+        "absence_protocol_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Absence Protocol Sha256",
+          "type": "string"
+        },
+        "image_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Image Revision"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        },
+        "sealed_at": {
+          "title": "Sealed At",
+          "type": "string"
+        },
+        "event_chain_head": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Chain Head",
+          "type": "string"
+        },
+        "receipt_derivation": {
+          "const": "contract_migration",
+          "title": "Receipt Derivation",
+          "type": "string"
+        },
+        "source_receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Receipt Sha256",
+          "type": "string"
+        },
+        "source_verifier_version": {
+          "minLength": 1,
+          "title": "Source Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "application_version",
+        "git_commit_sha",
+        "dependency_lock_digests",
+        "agent_instruction_hash",
+        "tool_schema_hash",
+        "verifier_version",
+        "binding_contract_sha256",
+        "numeric_contract_sha256",
+        "absence_protocol_version",
+        "absence_protocol_sha256",
+        "image_revision",
+        "trace_id",
+        "sealed_at",
+        "event_chain_head",
+        "receipt_derivation",
+        "source_receipt_sha256",
+        "source_verifier_version"
+      ],
+      "title": "MigratedReceiptProvenance",
       "type": "object"
     },
     "ObservationKind": {
@@ -632,147 +907,6 @@
         "error"
       ],
       "title": "ReceiptOpenAICall",
-      "type": "object"
-    },
-    "ReceiptProvenance": {
-      "additionalProperties": false,
-      "properties": {
-        "application_version": {
-          "title": "Application Version",
-          "type": "string"
-        },
-        "git_commit_sha": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Git Commit Sha"
-        },
-        "dependency_lock_digests": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Dependency Lock Digests",
-          "type": "object"
-        },
-        "agent_instruction_hash": {
-          "title": "Agent Instruction Hash",
-          "type": "string"
-        },
-        "tool_schema_hash": {
-          "title": "Tool Schema Hash",
-          "type": "string"
-        },
-        "verifier_version": {
-          "title": "Verifier Version",
-          "type": "string"
-        },
-        "binding_contract_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Binding Contract Sha256",
-          "type": "string"
-        },
-        "numeric_contract_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Numeric Contract Sha256",
-          "type": "string"
-        },
-        "absence_protocol_version": {
-          "title": "Absence Protocol Version",
-          "type": "string"
-        },
-        "absence_protocol_sha256": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Absence Protocol Sha256",
-          "type": "string"
-        },
-        "receipt_derivation": {
-          "default": "live",
-          "enum": [
-            "live",
-            "contract_migration"
-          ],
-          "title": "Receipt Derivation",
-          "type": "string"
-        },
-        "source_receipt_sha256": {
-          "anyOf": [
-            {
-              "pattern": "^[a-f0-9]{64}$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Source Receipt Sha256"
-        },
-        "source_verifier_version": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Source Verifier Version"
-        },
-        "image_revision": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Image Revision"
-        },
-        "trace_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Trace Id"
-        },
-        "sealed_at": {
-          "title": "Sealed At",
-          "type": "string"
-        },
-        "event_chain_head": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Event Chain Head",
-          "type": "string"
-        }
-      },
-      "required": [
-        "application_version",
-        "git_commit_sha",
-        "dependency_lock_digests",
-        "agent_instruction_hash",
-        "tool_schema_hash",
-        "verifier_version",
-        "binding_contract_sha256",
-        "numeric_contract_sha256",
-        "absence_protocol_version",
-        "absence_protocol_sha256",
-        "image_revision",
-        "trace_id",
-        "sealed_at",
-        "event_chain_head"
-      ],
-      "title": "ReceiptProvenance",
       "type": "object"
     },
     "ReceiptRehearsal": {
@@ -1186,7 +1320,22 @@
       "$ref": "#/$defs/ReceiptConfiguration"
     },
     "provenance": {
-      "$ref": "#/$defs/ReceiptProvenance"
+      "discriminator": {
+        "mapping": {
+          "contract_migration": "#/$defs/MigratedReceiptProvenance",
+          "live": "#/$defs/LiveReceiptProvenance"
+        },
+        "propertyName": "receipt_derivation"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LiveReceiptProvenance"
+        },
+        {
+          "$ref": "#/$defs/MigratedReceiptProvenance"
+        }
+      ],
+      "title": "Provenance"
     },
     "error": {
       "anyOf": [

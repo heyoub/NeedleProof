@@ -23,7 +23,7 @@ from .corpus import (
     load_current_manifest,
 )
 from .models import ChunkRecord, SearchHit, SearchResult
-from .util import sha256_file, utc_now_iso
+from .util import canonical_metric_key, sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
@@ -234,6 +234,31 @@ class CorpusStore:
             if len(output) >= k:
                 break
         return output
+
+    def find_exact_metric_chunks(self, metric: str) -> list[ChunkRecord]:
+        """Return every chunk containing the complete normalized metric phrase.
+
+        This is an exhaustive corpus primitive for bounded absence, not a ranked
+        retrieval operation. FTS narrows the scan with one phrase query and the
+        caller performs the canonical complete-word check before authorizing any
+        conclusion.
+        """
+
+        phrase = canonical_metric_key(metric)
+        if not phrase:
+            return []
+        fts_phrase = f'"{phrase.replace(chr(34), chr(34) * 2)}"'
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT chunk_external_id
+                FROM chunks_fts
+                WHERE chunks_fts MATCH ?
+                ORDER BY rowid
+                """,
+                (fts_phrase,),
+            ).fetchall()
+        return self.get_chunks([row[0] for row in rows])
 
     async def search(
         self,

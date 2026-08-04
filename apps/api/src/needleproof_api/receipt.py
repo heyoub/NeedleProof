@@ -4,20 +4,22 @@ import asyncio
 import html
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
 from .absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
 from .binding import BINDING_CONTRACT_SHA256, NUMERIC_CONTRACT_SHA256
+from .chunk_ids import ChunkId
 from .config import Settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
-from .models import LedgerEvent, RunEnvelope, VerifiedClaim
+from .models import ClaimStatus, EvidenceRelation, LedgerEvent, RunEnvelope, VerifiedClaim
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
 
 
@@ -39,6 +41,19 @@ def _git_sha() -> str | None:
 def _optional_env(name: str) -> str | None:
     value = os.getenv(name)
     return value if value else None
+
+
+_SHA256_PATTERN = re.compile(r"[a-f0-9]{64}")
+Sha256Digest: TypeAlias = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+
+
+def _optional_sha256_env(name: str) -> str | None:
+    value = _optional_env(name)
+    if value is None:
+        return None
+    if _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    return value
 
 
 class ReceiptConfiguration(BaseModel):
@@ -71,35 +86,123 @@ class ReceiptConfiguration(BaseModel):
     tool_execution_concurrency: int
 
 
-class ReceiptProvenance(BaseModel):
+class _ReceiptProvenanceBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     application_version: str
     git_commit_sha: str | None
-    dependency_lock_digests: dict[str, str]
+    dependency_lock_digests: dict[str, Sha256Digest]
     agent_instruction_hash: str
     tool_schema_hash: str
     verifier_version: str
-    binding_contract_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    numeric_contract_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    binding_contract_sha256: Sha256Digest
+    numeric_contract_sha256: Sha256Digest
     absence_protocol_version: str
-    absence_protocol_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
-    receipt_derivation: Literal["live", "contract_migration"] = "live"
-    source_receipt_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
-    source_verifier_version: str | None = None
+    absence_protocol_sha256: Sha256Digest
     image_revision: str | None
     trace_id: str | None
     sealed_at: str
-    event_chain_head: str = Field(pattern=r"^[a-f0-9]{64}$")
+    event_chain_head: Sha256Digest
 
-    @model_validator(mode="after")
-    def require_consistent_derivation(self) -> ReceiptProvenance:
-        source_fields = (self.source_receipt_sha256, self.source_verifier_version)
-        if self.receipt_derivation == "contract_migration" and not all(source_fields):
-            raise ValueError("Contract-migrated receipts require source receipt provenance")
-        if self.receipt_derivation == "live" and any(source_fields):
-            raise ValueError("Live receipts cannot claim contract-migration source provenance")
-        return self
+
+class LiveReceiptProvenance(_ReceiptProvenanceBase):
+    receipt_derivation: Literal["live"]
+    source_receipt_sha256: None
+    source_verifier_version: None
+
+
+class MigratedReceiptProvenance(_ReceiptProvenanceBase):
+    receipt_derivation: Literal["contract_migration"]
+    source_receipt_sha256: Sha256Digest
+    source_verifier_version: str = Field(min_length=1)
+
+
+ReceiptProvenance: TypeAlias = Annotated[
+    LiveReceiptProvenance | MigratedReceiptProvenance,
+    Field(discriminator="receipt_derivation"),
+]
+
+
+class LegacyReceiptConfigurationV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    reasoning_effort: str
+    embedding_model: str
+    embedding_dimensions: int
+    embedding_l2_normalized: bool
+    turbovec_version: str
+    turbovec_bit_width: int
+    retrieval_modes: list[str]
+    parallel_tool_calls: bool
+    max_turns: int
+    max_model_output_tokens_per_call: int | None = None
+    model_token_reservation_per_run: int | None = None
+    trace_include_sensitive_data: bool
+
+
+class LegacyReceiptProvenanceV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_version: str
+    git_commit_sha: str | None
+    dependency_lock_digests: dict[str, Sha256Digest]
+    agent_instruction_hash: str
+    tool_schema_hash: str
+    verifier_version: str
+    trace_id: str | None
+    sealed_at: str
+    event_chain_head: Sha256Digest
+
+
+class LegacyEvidenceReferenceV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
+    metric_anchor: str = Field(min_length=1)
+    exact_quote: str
+    relation: EvidenceRelation
+
+
+class LegacyReportedValueV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    temporal_anchor: str | None
+    evidence: list[LegacyEvidenceReferenceV12] = Field(min_length=1)
+
+
+class LegacyVerifiedEvidenceV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
+    document_id: str
+    document_name: str
+    physical_page_index: int
+    printed_page_label: str | None
+    metric_anchor: str
+    metric_anchor_found: bool
+    temporal_anchors: list[str]
+    temporal_anchors_found: bool
+    quote: str
+    normalized_quote: str
+    normalization_operations: list[str]
+    relation: EvidenceRelation
+    quote_found: bool
+    value_found: bool
+    chunk_sha256: Sha256Digest
+    source_url: str
+
+
+class LegacyVerifiedClaimV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str
+    metric: str
+    status: ClaimStatus
+    values: list[LegacyReportedValueV12]
+    evidence: list[LegacyVerifiedEvidenceV12]
+    verification_notes: list[str]
 
 
 class ReceiptRehearsal(BaseModel):
@@ -160,6 +263,29 @@ class ReceiptContract(BaseModel):
     error: dict[str, Any] | None
     rehearsal: ReceiptRehearsal | None
     receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LegacyReceiptContractV12(BaseModel):
+    """Exact read-only contract for receipts retained from the previous release."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.2"]
+    run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
+    status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
+    question: str
+    answer: str | None
+    corpus_id: str
+    corpus_version: str = Field(pattern=r"^v_[0-9a-f]{16}$")
+    corpus_manifest_sha256: Sha256Digest
+    claims: list[LegacyVerifiedClaimV12]
+    events: list[ReceiptEvent]
+    openai_calls: list[ReceiptOpenAICall]
+    configuration: LegacyReceiptConfigurationV12
+    provenance: LegacyReceiptProvenanceV12
+    error: dict[str, Any] | None
+    rehearsal: ReceiptRehearsal | None
+    receipt_sha256: Sha256Digest
 
 
 def receipt_contract_schema() -> dict[str, Any]:
@@ -257,14 +383,14 @@ class RunLedger:
         corpus_manifest = self._corpus_manifest or load_current_manifest(self.settings)
         lock_digests = {}
         injected_locks = {
-            "uv.lock": os.getenv("NEEDLEPROOF_UV_LOCK_SHA256"),
-            "pnpm-lock.yaml": os.getenv("NEEDLEPROOF_PNPM_LOCK_SHA256"),
+            "uv.lock": _optional_sha256_env("NEEDLEPROOF_UV_LOCK_SHA256"),
+            "pnpm-lock.yaml": _optional_sha256_env("NEEDLEPROOF_PNPM_LOCK_SHA256"),
         }
         for lock_path in (Path("uv.lock"), Path("pnpm-lock.yaml")):
             if lock_path.exists():
                 lock_digests[lock_path.name] = sha256_file(lock_path)
-            elif injected_locks[lock_path.name]:
-                lock_digests[lock_path.name] = str(injected_locks[lock_path.name])
+            elif digest := injected_locks[lock_path.name]:
+                lock_digests[lock_path.name] = digest
         receipt: dict[str, Any] = {
             "schema_version": "1.4",
             "run_id": envelope.run_id,
@@ -375,8 +501,16 @@ def validate_receipt(receipt: object) -> list[str]:
         return ["Receipt contract violation at root: input must be an object."]
 
     errors: list[str] = []
+    schema_version = receipt.get("schema_version")
+    contract: type[BaseModel]
+    if schema_version == "1.4":
+        contract = ReceiptContract
+    elif schema_version == "1.2":
+        contract = LegacyReceiptContractV12
+    else:
+        return [f"Receipt schema version {schema_version!r} is unsupported."]
     try:
-        ReceiptContract.model_validate(receipt)
+        contract.model_validate(receipt)
     except ValidationError as exc:
         errors.extend(
             f"Receipt contract violation at {'.'.join(map(str, item['loc']))}: {item['msg']}"
@@ -439,15 +573,9 @@ def validate_receipt(receipt: object) -> list[str]:
         "failed": {"run.failed"},
         "interrupted": {"run.interrupted"},
     }.get(status)
-    terminal_events = [
-        event.get("type")
-        for event in events
-        if isinstance(event, dict)
-        and str(event.get("type", "")).startswith("run.")
-        and event.get("type") != "run.started"
-    ]
+    final_event = events[-1] if events else None
     if expected_terminal_events and (
-        not terminal_events or terminal_events[-1] not in expected_terminal_events
+        not isinstance(final_event, dict) or final_event.get("type") not in expected_terminal_events
     ):
         errors.append("Receipt status does not agree with its final terminal event.")
     claims = receipt.get("claims")
@@ -478,8 +606,10 @@ def validate_receipt(receipt: object) -> list[str]:
                     continue
                 if not evidence.get("chunk_sha256"):
                     errors.append("Every receipt evidence item requires a chunk digest.")
-                if corpus_version and f"/api/corpora/{corpus_version}/" not in str(
-                    evidence.get("source_url", "")
+                if (
+                    schema_version == "1.4"
+                    and corpus_version
+                    and f"/api/corpora/{corpus_version}/" not in str(evidence.get("source_url", ""))
                 ):
                     errors.append("Every evidence source URL must bind the receipt corpus version.")
     return errors

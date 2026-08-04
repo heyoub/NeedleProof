@@ -9,6 +9,7 @@ from types import MethodType
 
 import numpy as np
 import pytest
+from needleproof_api.binding import word_phrase_spans
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
 from needleproof_api.retrieval import CorpusStore
@@ -108,6 +109,17 @@ def matching_chunk_ids(store: CorpusStore, passage: str) -> set[str]:
                 (f"%{passage}%",),
             ).fetchall()
         }
+
+
+def test_exact_metric_scan_is_exhaustive_and_phrase_bound(haystack_store):
+    store = haystack_store
+    expected = matching_chunk_ids(store, "Fee-related earnings were $345 million")
+
+    chunks = store.find_exact_metric_chunks("Fee-related earnings")
+    returned = {chunk.chunk_id for chunk in chunks}
+
+    assert expected <= returned
+    assert all(word_phrase_spans("fee related earnings", chunk.normalized_text) for chunk in chunks)
 
 
 @pytest.mark.asyncio

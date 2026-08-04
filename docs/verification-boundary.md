@@ -52,12 +52,17 @@ relationships never enter authoritative prose.
 ## Bounded absence
 
 `not_found` is not inferred from model-controlled search counts. A post-run server protocol issues
-four corpus-wide probes, including an exact lexical metric probe, records result IDs and counts,
-opens every unique candidate, and finds complete-word metric occurrences and nearby numeric
-candidates. Failed probes, scoped searches, duplicate wording, uninspected candidates, or plausible
-metric-adjacent values cannot authorize absence. Any exact metric occurrence also requires review,
-even when the predicate is qualitative and yields no numeric candidate. The conclusion remains bounded to the recorded
-probe and exact corpus version; it never claims that the corpus proves nonexistence.
+four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
+complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
+same complete-word matcher used by verification. The protocol records both result sets, opens every
+unique candidate, and finds complete-word metric occurrences and nearby numeric candidates across
+the metric sentence and its immediate successor. Failed probes, a failed exact scan, scoped
+searches, duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot
+authorize absence. An exact metric occurrence with a numeric candidate or known positive
+qualitative predicate requires review. A bare rubric or instruction mention does not by itself
+claim a value and therefore does not block the bounded conclusion. The conclusion remains bounded
+to the recorded probe and exact corpus version; it never claims that the corpus proves
+nonexistence.
 
 ## Numeric integrity
 
@@ -80,7 +85,10 @@ Floating point is used only outside authoritative financial claim truth:
 Quote containment uses Unicode NFKC, PDF line-break dehyphenation, whitespace folding, and Unicode
 case-folded comparison. The receipt records the operations actually applied. Receipt schema 1.4
 records separate quote, assertion, metric, value, temporal, role, and binding-profile outcomes,
-plus hashes for the binding and bounded-absence contracts. Checked-in rehearsal receipts that are
+plus hashes for the binding and bounded-absence contracts. Provenance uses a schema-visible
+discriminated union: live receipts must have null source identity, while contract migrations must
+carry the source receipt digest and verifier version. Retained schema-1.2 receipts remain readable
+through an exact read-only legacy validator; they cannot be replayed as current receipts. Checked-in rehearsal receipts that are
 re-verified after a contract change record `receipt_derivation=contract_migration` together with
 the original sealed receipt digest and verifier version; they are not represented as fresh model runs.
 

@@ -198,6 +198,9 @@ class AbsenceProbeResult(BaseModel):
     protocol_version: str
     metric: str
     searches: list[CompletedSearchRecord]
+    exact_metric_scan_completed: bool = False
+    exact_metric_scan_chunk_ids: list[ChunkId] = Field(default_factory=list)
+    exact_metric_scan_error: str | None = None
     unique_candidate_chunk_ids: list[ChunkId]
     opened_chunk_ids: list[ChunkId]
     exact_metric_occurrences: list[MetricOccurrence]

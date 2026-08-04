@@ -48,6 +48,13 @@ async def test_bounded_absence_probe_rejects_metric_with_returned_value(corpus):
     assert verified.status == ClaimStatus.UNVERIFIED
 
 
+def test_exact_metric_scan_normalizes_pdf_linebreak_dehyphenation(corpus):
+    chunks = corpus.find_exact_metric_chunks("Fee-earn-\ning AUM")
+
+    assert chunks
+    assert all(word_phrase_spans("fee earning aum", chunk.normalized_text) for chunk in chunks)
+
+
 def test_metric_phrase_matching_does_not_match_inside_trauma():
     assert word_phrase_spans("AUM", "trauma") == []
 
@@ -113,6 +120,10 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
             del neighbor_radius
             return [chunk] if chunk_id in chunk_ids else []
 
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return [chunk]
+
     probe = await probe_metric_absence(Corpus(), "total headcount")
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert probe.supporting_value_candidates[0].binding_profile is None
@@ -171,6 +182,10 @@ async def test_exact_metric_with_qualitative_predicate_requires_review(sentence)
             del neighbor_radius
             return [chunk] if chunk_id in chunk_ids else []
 
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return [chunk]
+
     probe = await probe_metric_absence(Corpus(), "Credit rating")
     verified = EvidenceVerifier(Corpus()).verify_claim(
         DraftClaim(metric="Credit rating", request_absence_probe=True),
@@ -204,6 +219,10 @@ async def test_failed_search_makes_absence_probe_incomplete():
             del chunk_ids, neighbor_radius
             return []
 
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return []
+
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Total headcount")
     verified = EvidenceVerifier(corpus).verify_claim(
@@ -214,3 +233,163 @@ async def test_failed_search_makes_absence_probe_incomplete():
     assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
     assert sum(search.completion_status == "completed" for search in probe.searches) == 3
     assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
+    answer_id = chunk_id_from_uint64(2**63 + 500)
+    answer = ChunkRecord(
+        chunk_id=answer_id,
+        document_id="doc_answer",
+        document_name="Exact answer",
+        physical_page_index=1,
+        chunk_position=0,
+        text="Net revenue was $2 million.",
+        normalized_text="Net revenue was $2 million.",
+        sha256="f" * 64,
+        token_estimate=6,
+    )
+    decoys = [
+        ChunkRecord(
+            chunk_id=chunk_id_from_uint64(2**63 + 600 + index),
+            document_id=f"doc_decoy_{index}",
+            document_name=f"Decoy {index}",
+            physical_page_index=1,
+            chunk_position=0,
+            text=f"Net income commentary and gross revenue context {index}.",
+            normalized_text=f"Net income commentary and gross revenue context {index}.",
+            sha256=f"{index + 1:064x}",
+            token_estimate=8,
+        )
+        for index in range(8)
+    ]
+    by_id = {chunk.chunk_id: chunk for chunk in [*decoys, answer]}
+
+    class Corpus:
+        corpus_version = "v_0000000000000004"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="1" * 64,
+                results=[
+                    SearchHit(
+                        chunk_id=chunk.chunk_id,
+                        score=1.0 - index / 100,
+                        lexical_score=1.0 - index / 100,
+                        lexical_rank=index + 1,
+                        retrieval_mode=mode,
+                        document_id=chunk.document_id,
+                        document_name=chunk.document_name,
+                        physical_page_index=1,
+                        preview=chunk.text,
+                        sha256=chunk.sha256,
+                    )
+                    for index, chunk in enumerate(decoys[:top_k])
+                ],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "net revenue"
+            return [answer]
+
+    probe = await probe_metric_absence(Corpus(), "net revenue")
+
+    assert probe.exact_metric_scan_completed is True
+    assert probe.exact_metric_scan_chunk_ids == [answer_id]
+    assert answer_id in probe.opened_chunk_ids
+    assert probe.supporting_value_candidates
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_failed_exact_metric_scan_makes_absence_probe_incomplete():
+    class Corpus:
+        corpus_version = "v_0000000000000005"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="2" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del chunk_ids, neighbor_radius
+            return []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            raise RuntimeError("injected exact scan failure")
+
+    probe = await probe_metric_absence(Corpus(), "net revenue")
+
+    assert probe.exact_metric_scan_completed is False
+    assert probe.exact_metric_scan_error == "RuntimeError"
+    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+
+
+@pytest.mark.asyncio
+async def test_probe_uses_normalized_metric_and_next_sentence_binding():
+    chunk_id = chunk_id_from_uint64(2**63 + 700)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_anaphoric",
+        document_name="Anaphoric answer",
+        physical_page_index=1,
+        chunk_position=0,
+        text="Fee-earning AUM was stable. It remained at $82 billion.",
+        normalized_text="Fee-earning AUM was stable. It remained at $82 billion.",
+        sha256="3" * 64,
+        token_estimate=10,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000006"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="4" * 64,
+                results=[
+                    SearchHit(
+                        chunk_id=chunk_id,
+                        score=1.0,
+                        lexical_score=1.0,
+                        lexical_rank=1,
+                        retrieval_mode=mode,
+                        document_id=chunk.document_id,
+                        document_name=chunk.document_name,
+                        physical_page_index=1,
+                        preview=chunk.text,
+                        sha256=chunk.sha256,
+                    )
+                ][:top_k],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Fee-earn-\ning AUM"
+            return [chunk]
+
+    probe = await probe_metric_absence(Corpus(), "Fee-earn-\ning AUM")
+
+    assert probe.exact_metric_occurrences
+    assert any(
+        candidate.binding_profile == "next_sentence_anaphoric"
+        for candidate in probe.supporting_value_candidates
+    )
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW

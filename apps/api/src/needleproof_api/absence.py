@@ -21,9 +21,9 @@ from .models import (
     SearchResult,
     ValueCandidate,
 )
-from .util import canonical_json, normalize_evidence_text, sha256_text
+from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v3-exact-occurrence-review"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v4-exhaustive-exact-metric"
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -36,6 +36,13 @@ ABSENCE_PROTOCOL_SPEC = {
     "minimum_searches": 4,
     "minimum_top_k": 8,
     "requires_exact_lexical_probe": True,
+    "requires_exhaustive_exact_metric_scan": True,
+    "exact_metric_scan": {
+        "engine": "sqlite_fts5_phrase",
+        "top_k": None,
+        "post_filter": "complete_word_phrase",
+        "failure": "incomplete_probe",
+    },
     "requires_all_unique_candidates_opened": True,
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
@@ -63,6 +70,8 @@ class AbsenceCorpus(Protocol):
         chunk_ids: list[ChunkId],
         neighbor_radius: int = 0,
     ) -> list[ChunkRecord]: ...
+
+    def find_exact_metric_chunks(self, metric: str) -> list[ChunkRecord]: ...
 
 
 def _normalized_query(value: str) -> str:
@@ -100,19 +109,26 @@ def search_signature(
     )
 
 
-def _sentences(text: str) -> list[tuple[str, int]]:
-    output: list[tuple[str, int]] = []
+def _sentences(text: str) -> list[tuple[str, int, int]]:
+    output: list[tuple[str, int, int]] = []
+
+    def append_sentence(raw_start: int, raw_end: int) -> None:
+        start = raw_start
+        end = raw_end
+        while start < end and text[start].isspace():
+            start += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        if start < end:
+            output.append((text[start:end], start, end))
+
     start = 0
     for index, character in enumerate(text):
         if character not in ".!?" or index + 1 < len(text) and not text[index + 1].isspace():
             continue
-        sentence = text[start : index + 1].strip()
-        if sentence:
-            output.append((sentence, start))
+        append_sentence(start, index + 1)
         start = index + 1
-    tail = text[start:].strip()
-    if tail:
-        output.append((tail, start))
+    append_sentence(start, len(text))
     return output
 
 
@@ -179,16 +195,42 @@ async def probe_metric_absence(
             )
         )
 
+    exact_metric_scan_completed = False
+    exact_metric_scan_chunk_ids: list[ChunkId] = []
+    exact_metric_scan_error: str | None = None
+    metric_phrase = canonical_metric_key(metric)
+    if metric_phrase:
+        try:
+            exact_metric_chunks = corpus.find_exact_metric_chunks(metric)
+        except Exception as error:  # noqa: BLE001 - absence fails closed on scan failure
+            exact_metric_chunks = []
+            exact_metric_scan_error = type(error).__name__
+        else:
+            exact_metric_scan_completed = True
+            exact_metric_scan_chunk_ids = [
+                chunk.chunk_id
+                for chunk in exact_metric_chunks
+                if word_phrase_spans(metric_phrase, chunk.normalized_text)
+            ]
+            candidate_ids.extend(exact_metric_scan_chunk_ids)
+
     unique_ids = list(dict.fromkeys(candidate_ids))
     chunks = corpus.get_chunks(unique_ids)
     occurrences: list[MetricOccurrence] = []
     unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
     for chunk in chunks:
-        for sentence, sentence_start in _sentences(chunk.normalized_text):
-            metric_spans = word_phrase_spans(metric, sentence)
+        sentences = _sentences(chunk.normalized_text)
+        for sentence_index, (sentence, sentence_start, sentence_end) in enumerate(sentences):
+            metric_spans = word_phrase_spans(metric_phrase, sentence)
             if not metric_spans:
                 continue
+            assertion_end = (
+                sentences[sentence_index + 1][2]
+                if sentence_index + 1 < len(sentences)
+                else sentence_end
+            )
+            assertion = chunk.normalized_text[sentence_start:assertion_end]
             sentence_occurrences = [
                 MetricOccurrence(
                     chunk_id=chunk.chunk_id,
@@ -198,9 +240,9 @@ async def probe_metric_absence(
                 for start, end in metric_spans
             ]
             occurrences.extend(sentence_occurrences)
-            if has_unresolved_metric_predicate(metric, sentence):
+            if has_unresolved_metric_predicate(metric_phrase, assertion):
                 unresolved_predicates.extend(sentence_occurrences)
-            for value_text, _span in numeric_value_candidates(sentence):
+            for value_text, _span in numeric_value_candidates(assertion):
                 found_binding = False
                 for kind in (
                     ObservationKind.REPORTED_LEVEL,
@@ -212,7 +254,7 @@ async def probe_metric_absence(
                         value_text=value_text,
                         kind=kind,
                         temporal_anchor=None,
-                        assertion=sentence,
+                        assertion=assertion,
                     ).match
                     if binding:
                         value_candidates.append(
@@ -240,7 +282,12 @@ async def probe_metric_absence(
         search.mode == "lexical" and search.normalized_query == _normalized_query(metric)
         for search in completed
     )
-    if len(completed) < 4 or not has_exact_lexical or len(chunks) != len(unique_ids):
+    if (
+        len(completed) < 4
+        or not has_exact_lexical
+        or not exact_metric_scan_completed
+        or len(chunks) != len(unique_ids)
+    ):
         conclusion = AbsenceConclusion.INCOMPLETE_PROBE
     elif unresolved_predicates or value_candidates:
         conclusion = AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
@@ -250,6 +297,9 @@ async def probe_metric_absence(
         protocol_version=ABSENCE_PROTOCOL_VERSION,
         metric=metric,
         searches=searches,
+        exact_metric_scan_completed=exact_metric_scan_completed,
+        exact_metric_scan_chunk_ids=exact_metric_scan_chunk_ids,
+        exact_metric_scan_error=exact_metric_scan_error,
         unique_candidate_chunk_ids=unique_ids,
         opened_chunk_ids=[chunk.chunk_id for chunk in chunks],
         exact_metric_occurrences=occurrences,

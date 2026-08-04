@@ -111,6 +111,9 @@ export interface AbsenceProbeResult {
   protocol_version: string;
   metric: string;
   searches: CompletedSearchRecord[];
+  exact_metric_scan_completed: boolean;
+  exact_metric_scan_chunk_ids: string[];
+  exact_metric_scan_error: string | null;
   unique_candidate_chunk_ids: string[];
   opened_chunk_ids: string[];
   exact_metric_occurrences: MetricOccurrence[];

@@ -89,7 +89,7 @@ Verification checks include:
 - metric-anchor identity plus an authorized direct/anaphoric binding profile, explicit value role, currency, magnitude, percentages, basis points, units, and span-bound temporal anchors
 - supporting evidence for every accepted value; contextual or contradicting evidence cannot authorize a claim by itself
 - explicit contradiction language versus legitimate differences in reporting dates
-- a server-owned four-probe absence protocol that opens every unique candidate and refuses `not_found` when a metric-adjacent value needs review
+- a server-owned four-probe absence protocol plus an exhaustive complete-metric phrase scan; it opens every unique candidate and refuses `not_found` when ranked retrieval is incomplete or any metric-adjacent value needs review
 
 A rejected claim is removed from the authoritative answer. A timeout, cancellation, invalid structured response, tool failure, or rate limit seals a non-authoritative partial receipt instead.
 
@@ -102,6 +102,7 @@ Every sealed receipt includes:
 - exact selected quotations plus quote/value verification outcomes
 - all model and embedding calls, response/request IDs when available, token use, observable retry counts, and sanitized errors; hidden client retries are disabled
 - corpus manifest digest, agent-instruction/tool-schema/binding/absence hashes, verifier version, Git/image revision, dependency-lock digests, and all material runtime limits
+- schema-visible live/migration provenance and read-only integrity validation for retained schema-1.2 receipts
 
 Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed.
 
