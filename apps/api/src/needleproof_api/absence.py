@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
@@ -120,6 +121,7 @@ async def probe_metric_absence(
     """Run a server-owned bounded probe; never infer absence from model omissions."""
 
     top_k = max(8, min(top_k, 20))
+    metric_phrase = canonical_metric_key(metric)
     probes = tuple(
         (template.format(metric=metric), mode) for template, mode in ABSENCE_PROBE_TEMPLATES
     )
@@ -154,8 +156,13 @@ async def probe_metric_absence(
                 )
             )
             continue
-        chunks = corpus.get_chunks([hit.chunk_id for hit in result.results])
-        exact_hits = sum(bool(word_phrase_spans(metric, chunk.normalized_text)) for chunk in chunks)
+        chunks = await asyncio.to_thread(
+            corpus.get_chunks,
+            [hit.chunk_id for hit in result.results],
+        )
+        exact_hits = sum(
+            bool(word_phrase_spans(metric_phrase, chunk.normalized_text)) for chunk in chunks
+        )
         result_ids = [hit.chunk_id for hit in result.results]
         candidate_ids.extend(result_ids)
         searches.append(
@@ -176,10 +183,9 @@ async def probe_metric_absence(
     exact_metric_scan_completed = False
     exact_metric_scan_chunk_ids: list[ChunkId] = []
     exact_metric_scan_error: str | None = None
-    metric_phrase = canonical_metric_key(metric)
     if metric_phrase:
         try:
-            exact_metric_chunks = corpus.find_exact_metric_chunks(metric)
+            exact_metric_chunks = await asyncio.to_thread(corpus.find_exact_metric_chunks, metric)
         except Exception as error:  # noqa: BLE001 - absence fails closed on scan failure
             exact_metric_chunks = []
             exact_metric_scan_error = type(error).__name__
@@ -193,10 +199,11 @@ async def probe_metric_absence(
             candidate_ids.extend(exact_metric_scan_chunk_ids)
 
     unique_ids = list(dict.fromkeys(candidate_ids))
-    chunks = corpus.get_chunks(unique_ids)
+    chunks = await asyncio.to_thread(corpus.get_chunks, unique_ids)
     occurrences: list[MetricOccurrence] = []
     unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
+    value_candidate_keys: set[tuple[ChunkId, str]] = set()
     for chunk in chunks:
         for metric_start, metric_end in word_phrase_spans(metric_phrase, chunk.normalized_text):
             context_end = min(
@@ -213,6 +220,10 @@ async def probe_metric_absence(
             if has_unresolved_metric_predicate(metric_phrase, context):
                 unresolved_predicates.append(occurrence)
             for value_text, _span in numeric_value_candidates(context):
+                candidate_key = (chunk.chunk_id, value_text)
+                if candidate_key in value_candidate_keys:
+                    continue
+                value_candidate_keys.add(candidate_key)
                 value_candidates.append(
                     ValueCandidate(
                         chunk_id=chunk.chunk_id,

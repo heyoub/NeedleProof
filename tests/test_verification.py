@@ -308,6 +308,13 @@ def test_anaphoric_binding_requires_immediate_positive_antecedent(quote, value):
     assert reported_value_linked_to_metric(value, "Revenue", quote) is None
 
 
+@pytest.mark.parametrize("boundary", ["?", "!"])
+def test_interrogative_or_exclamatory_antecedent_cannot_authorize_anaphora(boundary):
+    quote = f"Revenue was $100{boundary} It ended the year at $5."
+
+    assert reported_value_linked_to_metric("$5", "Revenue", quote) is None
+
+
 @pytest.mark.parametrize(
     "quote,value",
     [
@@ -334,6 +341,46 @@ def test_next_sentence_temporal_lead_cannot_hide_competing_subject():
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "quote,temporal_anchor",
+    [
+        ("Forecast Revenue was $2 million.", "Forecast"),
+        ("Revenue was $2 million forecast.", "forecast"),
+        ("Revenue was $2 million target.", "target"),
+        ("Forecast 2025 Revenue was $2 million.", "Forecast 2025"),
+        ("Revenue was $2 million in a 2025 forecast.", "2025 forecast"),
+        ("February target Revenue was $2 million.", "February target"),
+    ],
+)
+def test_role_qualifiers_cannot_masquerade_as_temporal_anchors(quote, temporal_anchor):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            quote,
+            temporal_anchor=temporal_anchor,
+        )
+        is None
+    )
+    assert not _temporal_anchor_is_valid(temporal_anchor)
+
+
+@pytest.mark.parametrize(
+    "temporal_anchor",
+    [
+        "2025",
+        "FY 2025",
+        "Q1 2026",
+        "as of 31 December 2025",
+        "for the fiscal year ended March 31, 2026",
+        "ended the year",
+        "February call",
+    ],
+)
+def test_closed_temporal_anchor_profiles_remain_authorized(temporal_anchor):
+    assert _temporal_anchor_is_valid(temporal_anchor)
 
 
 @given(
@@ -454,6 +501,46 @@ def test_seeded_fee_aum_source_characterization_is_conflict(corpus):
         )
     )
     assert verified.status == ClaimStatus.CONFLICT
+
+
+@pytest.mark.parametrize("relation", list(EvidenceRelation))
+def test_explicit_conflict_evidence_blocks_single_value_authorization(corpus, relation):
+    value_quote = (
+        "Fee-earning AUM is the number that actually matters for revenue and it ended "
+        "the year at $82 billion, up $9 billion or 13 percent."
+    )
+    conflict_quote = (
+        "First, my note from the February call has fee-earning AUM at $8.2 billion, "
+        "which cannot be right alongside the $82 billion figure above, and I have not "
+        "been able to work out which of my two sources introduced the error."
+    )
+    value_evidence = reference(
+        MEMO_CHUNK,
+        value_quote,
+        "Fee-earning AUM",
+        assertion=(
+            "Fee-earning AUM is the number that actually matters for revenue and it ended "
+            "the year at $82 billion"
+        ),
+    )
+    conflict_evidence = reference(
+        MEMO_CONTINUATION_CHUNK,
+        conflict_quote,
+        "fee-earning AUM",
+        assertion="February call has fee-earning AUM at $8.2 billion",
+        relation=relation,
+    )
+    draft = claim(
+        "Fee-earning AUM",
+        observation("$82 billion", value_evidence, temporal_anchor="ended the year"),
+    )
+    draft.context_evidence.append(conflict_evidence)
+
+    verified = EvidenceVerifier(corpus).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+    assert compose_authoritative_answer([verified], 2, corpus.corpus_version) is None
+    assert any("conflict evidence" in note for note in verified.verification_notes)
 
 
 def test_unresolved_distinct_values_do_not_enter_authoritative_answer(corpus):

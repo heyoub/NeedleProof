@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from pydantic import ValidationError
 
+from .legacy import adapt_legacy_run_envelope
 from .models import RunEnvelope, RunStatus
 from .util import utc_now_iso
 
@@ -397,7 +399,14 @@ class AppDatabase:
         if not row:
             return None
         if row["result_json"]:
-            return RunEnvelope.model_validate_json(row["result_json"])
+            decoded = json.loads(row["result_json"])
+            try:
+                return RunEnvelope.model_validate(decoded)
+            except ValidationError as current_error:
+                try:
+                    return adapt_legacy_run_envelope(decoded)
+                except ValidationError:
+                    raise current_error
         return RunEnvelope(
             run_id=row["run_id"],
             status=RunStatus(row["status"]),

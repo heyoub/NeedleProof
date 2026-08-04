@@ -7,12 +7,14 @@ import sqlite3
 from pathlib import Path
 from types import MethodType
 
+import needleproof_api.retrieval as retrieval_module
 import numpy as np
 import pytest
 from needleproof_api.binding import word_phrase_spans
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
 from needleproof_api.retrieval import CorpusStore
+from needleproof_api.util import normalize_evidence_text
 
 
 def local_embeddings(texts: list[str], dimensions: int) -> np.ndarray:
@@ -101,12 +103,13 @@ def haystack_store(tmp_path_factory) -> CorpusStore:
 
 
 def matching_chunk_ids(store: CorpusStore, passage: str) -> set[str]:
+    normalized_passage = normalize_evidence_text(passage)[0]
     with sqlite3.connect(store.db_path) as connection:
         return {
             row[0]
             for row in connection.execute(
                 "SELECT chunk_external_id FROM chunks WHERE normalized_text LIKE ?",
-                (f"%{passage}%",),
+                (f"%{normalized_passage}%",),
             ).fetchall()
         }
 
@@ -114,12 +117,29 @@ def matching_chunk_ids(store: CorpusStore, passage: str) -> set[str]:
 def test_exact_metric_scan_is_exhaustive_and_phrase_bound(haystack_store):
     store = haystack_store
     expected = matching_chunk_ids(store, "Fee-related earnings were $345 million")
+    assert expected
 
     chunks = store.find_exact_metric_chunks("Fee-related earnings")
     returned = {chunk.chunk_id for chunk in chunks}
 
     assert expected <= returned
     assert all(word_phrase_spans("fee related earnings", chunk.normalized_text) for chunk in chunks)
+
+
+def test_chunk_lookup_batches_sqlite_parameters_and_preserves_order(haystack_store, monkeypatch):
+    store = haystack_store
+    with sqlite3.connect(store.db_path) as connection:
+        chunk_ids = [
+            row[0]
+            for row in connection.execute(
+                "SELECT chunk_external_id FROM chunks ORDER BY internal_id LIMIT 7"
+            ).fetchall()
+        ]
+    monkeypatch.setattr(retrieval_module, "_SQLITE_IN_BATCH_SIZE", 2)
+
+    chunks = store.get_chunks(chunk_ids)
+
+    assert [str(chunk.chunk_id) for chunk in chunks] == chunk_ids
 
 
 @pytest.mark.asyncio

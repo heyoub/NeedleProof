@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 from needleproof_api.absence import probe_metric_absence
 from needleproof_api.binding import word_phrase_spans
@@ -85,8 +87,10 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
         document_name="Absence fixture",
         physical_page_index=1,
         chunk_position=0,
-        text="Total headcount was approximately 500 employees.",
-        normalized_text="Total headcount was approximately 500 employees.",
+        text="Total headcount was approximately 500 employees. Total headcount was 500.",
+        normalized_text=(
+            "Total headcount was approximately 500 employees. Total headcount was 500."
+        ),
         sha256="a" * 64,
         token_estimate=8,
     )
@@ -126,6 +130,7 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
 
     probe = await probe_metric_absence(Corpus(), "total headcount")
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert len(probe.supporting_value_candidates) == 1
     assert probe.supporting_value_candidates[0].binding_profile is None
     assert probe.supporting_value_candidates[0].binding_failure_reason
 
@@ -264,6 +269,7 @@ async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
         for index in range(8)
     ]
     by_id = {chunk.chunk_id: chunk for chunk in [*decoys, answer]}
+    scanned_metrics: list[str] = []
 
     class Corpus:
         corpus_version = "v_0000000000000004"
@@ -296,12 +302,13 @@ async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
             return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
 
         def find_exact_metric_chunks(self, metric):
-            assert metric == "net revenue"
-            return [answer]
+            scanned_metrics.append(metric)
+            return [answer, decoys[0]]
 
     probe = await probe_metric_absence(Corpus(), "net revenue")
 
     assert probe.exact_metric_scan_completed is True
+    assert scanned_metrics == ["net revenue"]
     assert probe.exact_metric_scan_chunk_ids == [answer_id]
     assert answer_id in probe.opened_chunk_ids
     assert probe.supporting_value_candidates
@@ -338,6 +345,43 @@ async def test_failed_exact_metric_scan_makes_absence_probe_incomplete():
 
 
 @pytest.mark.asyncio
+async def test_exact_metric_scan_runs_off_the_event_loop_thread():
+    event_loop_thread = threading.get_ident()
+    scan_threads: list[int] = []
+    chunk_read_threads: list[int] = []
+
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="7" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del chunk_ids, neighbor_radius
+            chunk_read_threads.append(threading.get_ident())
+            return []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            scan_threads.append(threading.get_ident())
+            return []
+
+    probe = await probe_metric_absence(Corpus(), "total headcount")
+
+    assert probe.exact_metric_scan_completed is True
+    assert scan_threads and scan_threads[0] != event_loop_thread
+    assert chunk_read_threads and all(
+        thread_id != event_loop_thread for thread_id in chunk_read_threads
+    )
+
+
+@pytest.mark.asyncio
 async def test_probe_uses_normalized_metric_and_next_sentence_binding():
     chunk_id = chunk_id_from_uint64(2**63 + 700)
     chunk = ChunkRecord(
@@ -351,6 +395,7 @@ async def test_probe_uses_normalized_metric_and_next_sentence_binding():
         sha256="3" * 64,
         token_estimate=10,
     )
+    scanned_metrics: list[str] = []
 
     class Corpus:
         corpus_version = "v_0000000000000006"
@@ -382,12 +427,14 @@ async def test_probe_uses_normalized_metric_and_next_sentence_binding():
             return [chunk] if chunk_id in chunk_ids else []
 
         def find_exact_metric_chunks(self, metric):
-            assert metric == "Fee-earn-\ning AUM"
+            scanned_metrics.append(metric)
             return [chunk]
 
     probe = await probe_metric_absence(Corpus(), "Fee-earn-\ning AUM")
 
     assert probe.exact_metric_occurrences
+    assert scanned_metrics == ["Fee-earn-\ning AUM"]
+    assert all(search.exact_metric_hit_count == 1 for search in probe.searches)
     assert probe.supporting_value_candidates
     assert all(
         candidate.binding_failure_reason == "numeric_candidate_in_metric_context_requires_review"
@@ -410,6 +457,7 @@ async def test_abbreviated_metric_survives_absence_context_scanning():
         sha256="5" * 64,
         token_estimate=6,
     )
+    scanned_metrics: list[str] = []
 
     class Corpus:
         corpus_version = "v_0000000000000007"
@@ -428,11 +476,12 @@ async def test_abbreviated_metric_survives_absence_context_scanning():
             return [chunk] if chunk_id in chunk_ids else []
 
         def find_exact_metric_chunks(self, metric):
-            assert metric == "U.S. revenue"
+            scanned_metrics.append(metric)
             return [chunk]
 
     probe = await probe_metric_absence(Corpus(), "U.S. revenue")
 
     assert probe.exact_metric_occurrences
+    assert scanned_metrics == ["U.S. revenue"]
     assert probe.supporting_value_candidates
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW

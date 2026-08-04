@@ -14,24 +14,28 @@ An authoritative observation must prove all of these facts:
 - the quote and assertion exist under the documented normalization contract;
 - the complete metric anchor occurs in that assertion and matches the canonical metric;
 - the assertion begins at that complete metric subject, an optional article, or a bound leading
-  temporal anchor, so pre-metric negation, forecasts, targets, adjustments, and scope qualifiers
-  cannot disappear from the authoritative metric;
+  temporal anchor. “Complete metric subject” includes every preceding forecast, target,
+  adjustment, scope qualifier, or temporal qualifier required to preserve the source's meaning,
+  so those terms cannot disappear from the authoritative metric;
 - the exact value occurs in the assertion;
 - one closed positive binding profile connects that metric span to that value span;
 - the exact assertion ends at the value or its bound trailing temporal anchor, apart from terminal
   punctuation, so a later target, forecast, bound, component, delta, or negation cannot change the
   value role after the matched prefix;
-- any temporal anchor is valid and belongs to that same binding match;
+- any temporal anchor matches a closed date, named period, or named temporal-event profile and
+  belongs to that same binding match; role words such as `forecast` and `target` are never accepted
+  as dates merely because the model placed them in the temporal field;
 - the value role is currently authorized; and
 - at least one independently sufficient evidence item has the `supports` relation.
 
 The authorized profiles are deliberately narrow: direct copula levels, direct reported levels,
 colon-delimited values, dated direct values, and bounded same/next-sentence anaphora. Anaphora must
 follow one closed positive antecedent shape; next-sentence anaphora must occur in the immediately
-following sentence, and any leading temporal phrase must contain the observation's bound temporal
-anchor. Unknown syntax fails closed. Negation, modality, forecasts, targets, components, bounds,
-ranges, and deltas cannot become ordinary reported levels merely because the same number appears
-after the metric.
+following declarative sentence separated by a period, and any leading temporal phrase must contain
+the observation's bound temporal anchor. Questions, exclamations, and unknown syntax fail closed.
+Negation, modality, forecasts, targets, components, bounds, ranges, deltas, competing subjects,
+and compound values cannot become ordinary reported levels merely because the same number appears
+after a partial or ambiguous metric phrase.
 
 This inversion is the core safety property:
 
@@ -49,7 +53,9 @@ open-ended conjunction, noun, or financial-verb blacklist.
 The server derives `verified`, `conflict`, `date_variant`, `possible_conflict`, and `unverified`
 from the verified observation set. The model does not propose those statuses. Distinct supported
 values with distinct valid temporal signatures become date variants; values tied to one common
-period or explicitly characterized by the source as incompatible become conflicts. Unresolved
+period or explicitly characterized by the source as incompatible become conflicts. Recognized
+same-metric conflict evidence prevents a lone reported value from becoming authoritative, regardless
+of the model-supplied evidence relation. Unresolved
 relationships never enter authoritative prose.
 
 ## Bounded absence

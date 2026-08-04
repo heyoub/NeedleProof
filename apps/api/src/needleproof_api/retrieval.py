@@ -27,6 +27,7 @@ from .util import canonical_metric_key, sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
+_SQLITE_IN_BATCH_SIZE = 500
 
 
 def _fts_query(query: str) -> str:
@@ -383,13 +384,18 @@ class CorpusStore:
         wanted = self.resolve_chunk_ids(chunk_ids, neighbor_radius)
         if not wanted:
             return []
+        rows: list[sqlite3.Row] = []
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.row_factory = sqlite3.Row
-            placeholders = ",".join("?" for _ in wanted)
-            rows = connection.execute(
-                f"SELECT * FROM chunks WHERE chunk_external_id IN ({placeholders})",
-                wanted,
-            ).fetchall()
+            for start in range(0, len(wanted), _SQLITE_IN_BATCH_SIZE):
+                batch = wanted[start : start + _SQLITE_IN_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                rows.extend(
+                    connection.execute(
+                        f"SELECT * FROM chunks WHERE chunk_external_id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                )
         mapped = {
             row["chunk_external_id"]: ChunkRecord(
                 internal_id=row["internal_id"],

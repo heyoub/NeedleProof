@@ -8,6 +8,8 @@ from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ReasoningEffortSetting = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+OPENAI_CLIENT_MAX_RETRIES = 0
+TOOL_EXECUTION_CONCURRENCY = 1
 
 
 class Settings(BaseSettings):

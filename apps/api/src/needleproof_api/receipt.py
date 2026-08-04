@@ -15,11 +15,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from . import __version__
 from .absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
 from .binding import BINDING_CONTRACT_SHA256, NUMERIC_CONTRACT_SHA256
-from .chunk_ids import ChunkId
-from .config import Settings
+from .config import OPENAI_CLIENT_MAX_RETRIES, TOOL_EXECUTION_CONCURRENCY, Settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
-from .models import ClaimStatus, EvidenceRelation, LedgerEvent, RunEnvelope, VerifiedClaim
+from .legacy import (
+    LegacyReceiptEventV12,
+    LegacyReceiptOpenAICallV12,
+    LegacyReceiptRehearsalV12,
+    LegacyVerifiedClaimV12,
+)
+from .models import LedgerEvent, RunEnvelope, VerifiedClaim
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
 
 
@@ -155,56 +160,6 @@ class LegacyReceiptProvenanceV12(BaseModel):
     event_chain_head: Sha256Digest
 
 
-class LegacyEvidenceReferenceV12(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    chunk_id: ChunkId
-    metric_anchor: str = Field(min_length=1)
-    exact_quote: str
-    relation: EvidenceRelation
-
-
-class LegacyReportedValueV12(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    value: str
-    temporal_anchor: str | None
-    evidence: list[LegacyEvidenceReferenceV12] = Field(min_length=1)
-
-
-class LegacyVerifiedEvidenceV12(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    chunk_id: ChunkId
-    document_id: str
-    document_name: str
-    physical_page_index: int
-    printed_page_label: str | None
-    metric_anchor: str
-    metric_anchor_found: bool
-    temporal_anchors: list[str]
-    temporal_anchors_found: bool
-    quote: str
-    normalized_quote: str
-    normalization_operations: list[str]
-    relation: EvidenceRelation
-    quote_found: bool
-    value_found: bool
-    chunk_sha256: Sha256Digest
-    source_url: str
-
-
-class LegacyVerifiedClaimV12(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    statement: str
-    metric: str
-    status: ClaimStatus
-    values: list[LegacyReportedValueV12]
-    evidence: list[LegacyVerifiedEvidenceV12]
-    verification_notes: list[str]
-
-
 class ReceiptRehearsal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,12 +234,12 @@ class LegacyReceiptContractV12(BaseModel):
     corpus_version: str = Field(pattern=r"^v_[0-9a-f]{16}$")
     corpus_manifest_sha256: Sha256Digest
     claims: list[LegacyVerifiedClaimV12]
-    events: list[ReceiptEvent]
-    openai_calls: list[ReceiptOpenAICall]
+    events: list[LegacyReceiptEventV12]
+    openai_calls: list[LegacyReceiptOpenAICallV12]
     configuration: LegacyReceiptConfigurationV12
     provenance: LegacyReceiptProvenanceV12
     error: dict[str, Any] | None
-    rehearsal: ReceiptRehearsal | None
+    rehearsal: LegacyReceiptRehearsalV12 | None
     receipt_sha256: Sha256Digest
 
 
@@ -427,8 +382,8 @@ class RunLedger:
                 "max_model_output_tokens_per_call": self.settings.max_model_output_tokens_per_call,
                 "model_token_reservation_per_run": self.settings.model_token_reservation_per_run,
                 "trace_include_sensitive_data": self.settings.trace_include_sensitive_data,
-                "openai_client_max_retries": 0,
-                "tool_execution_concurrency": 1,
+                "openai_client_max_retries": OPENAI_CLIENT_MAX_RETRIES,
+                "tool_execution_concurrency": TOOL_EXECUTION_CONCURRENCY,
             },
             "provenance": {
                 "application_version": __version__,

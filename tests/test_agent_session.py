@@ -5,13 +5,45 @@ from types import SimpleNamespace
 import pytest
 from needleproof_api import agent as agent_module
 from needleproof_api.agent import (
+    AGENT_INSTRUCTIONS,
     InvestigationContext,
     ReceiptHooks,
+    _draft_verification_feedback,
     investigate,
     record_tool_failures,
 )
 from needleproof_api.config import Settings
-from needleproof_api.models import AgentDraft
+from needleproof_api.models import (
+    AgentDraft,
+    ClaimStatus,
+    DraftClaim,
+    EvidenceVerificationResult,
+    VerifiedClaim,
+)
+
+
+def test_draft_verifier_defers_server_owned_absence_instead_of_rejecting_it():
+    draft = DraftClaim(metric="total headcount", request_absence_probe=True)
+    rejected_without_probe = VerifiedClaim(
+        statement="Unverified claim about total headcount",
+        metric="total headcount",
+        status=ClaimStatus.UNVERIFIED,
+    )
+
+    feedback = _draft_verification_feedback(
+        [draft],
+        EvidenceVerificationResult(
+            claims=[rejected_without_probe],
+            all_claims_authoritative=False,
+        ),
+    )
+
+    assert feedback["claims"][0]["status"] == "pending_absence_probe"
+    assert feedback["claims"][0]["requires_server_absence_probe"] is True
+    assert feedback["pending_absence_metrics"] == ["total headcount"]
+    assert feedback["server_absence_probe_required"] is True
+    assert feedback["all_claims_authoritative"] is False
+    assert "pending_absence_probe" in AGENT_INSTRUCTIONS
 
 
 @pytest.mark.asyncio

@@ -32,8 +32,14 @@ from pydantic import Field, StringConstraints
 from .absence import search_signature
 from .binding import word_phrase_spans
 from .chunk_ids import ChunkId
-from .config import Settings
-from .models import AgentDraft, CompletedSearchRecord, DraftClaim, SearchResult
+from .config import OPENAI_CLIENT_MAX_RETRIES, TOOL_EXECUTION_CONCURRENCY, Settings
+from .models import (
+    AgentDraft,
+    CompletedSearchRecord,
+    DraftClaim,
+    EvidenceVerificationResult,
+    SearchResult,
+)
 from .receipt import RunLedger
 from .retrieval import CorpusStore
 from .util import canonical_json, normalize_evidence_text, sha256_text, utc_now_iso
@@ -89,7 +95,9 @@ incompatible, erroneous, or unresolved, preserve them as a conflict even when on
 an earlier call; a source-described error is not a legitimate date variant.
 
 Before completing, call verify_evidence with every factual claim. Treat its result as feedback and
-correct rejected claims. Your structured output is still a draft; application code verifies it again.
+correct rejected claims. A pending_absence_probe result is expected server work: preserve that
+absence request in the final draft rather than removing it. Your structured output is still a draft;
+application code verifies it again.
 Keep the prose concise and analytical.
 """.strip()
 
@@ -425,25 +433,66 @@ async def verify_evidence(
     )
     clock = time.perf_counter()
     result = state.verifier.verify_claims(claims)
-    for claim in result.claims:
+    feedback = _draft_verification_feedback(claims, result)
+    for claim in feedback["claims"]:
+        status = str(claim["status"])
         await state.ledger.append(
-            "claim.verified"
-            if claim.status.value in {"verified", "conflict", "date_variant", "not_found"}
-            else "claim.rejected",
+            (
+                "claim.pending"
+                if status == "pending_absence_probe"
+                else "claim.verified"
+                if status in {"verified", "conflict", "date_variant", "not_found"}
+                else "claim.rejected"
+            ),
             {
-                "metric": claim.metric,
-                "status": claim.status.value,
-                "statement": claim.statement,
+                "metric": claim["metric"],
+                "status": status,
+                "statement": claim.get("statement", ""),
             },
         )
     await state.ledger.append(
         "verification.completed",
         {
-            "all_claims_authoritative": result.all_claims_authoritative,
+            "all_claims_authoritative": feedback["all_claims_authoritative"],
+            "pending_absence_metrics": feedback["pending_absence_metrics"],
             "duration_ms": round((time.perf_counter() - clock) * 1000, 3),
         },
     )
-    return result.model_dump(mode="json")
+    return feedback
+
+
+def _draft_verification_feedback(
+    claims: list[DraftClaim],
+    result: EvidenceVerificationResult,
+) -> dict[str, Any]:
+    """Keep server-owned absence work pending during the model's self-correction pass."""
+
+    payloads: list[dict[str, Any]] = []
+    pending_absence_metrics: list[str] = []
+    for draft, verified in zip(claims, result.claims, strict=True):
+        if draft.request_absence_probe:
+            pending_absence_metrics.append(draft.metric)
+            payloads.append(
+                {
+                    "metric": draft.metric,
+                    "status": "pending_absence_probe",
+                    "statement": "",
+                    "requires_server_absence_probe": True,
+                    "verification_notes": [
+                        "The server-owned bounded absence probe runs after the agent completes."
+                    ],
+                }
+            )
+            continue
+        payloads.append(verified.model_dump(mode="json"))
+    return {
+        "claims": payloads,
+        "all_claims_authoritative": (
+            result.all_claims_authoritative and not pending_absence_metrics
+        ),
+        "pending_absence_metrics": pending_absence_metrics,
+        "server_absence_probe_required": bool(pending_absence_metrics),
+    }
 
 
 FUNCTION_TOOLS: tuple[FunctionTool, ...] = (
@@ -592,7 +641,7 @@ async def investigate(
     trace_id = gen_trace_id()
     session = AsyncSQLiteSession(session_id, db_path=context.settings.app_db_path)
     openai_client = AsyncOpenAI(
-        max_retries=0,
+        max_retries=OPENAI_CLIENT_MAX_RETRIES,
         timeout=min(30.0, context.settings.soft_timeout_seconds),
     )
     hooks = ReceiptHooks()
@@ -615,7 +664,9 @@ async def investigate(
                         "run_id": context.run_id,
                         "corpus_manifest_sha256": context.corpus.manifest_sha256,
                     },
-                    tool_execution=ToolExecutionConfig(max_function_tool_concurrency=1),
+                    tool_execution=ToolExecutionConfig(
+                        max_function_tool_concurrency=TOOL_EXECUTION_CONCURRENCY
+                    ),
                 ),
             )
             async for _event in result.stream_events():

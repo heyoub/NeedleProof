@@ -77,6 +77,35 @@ _TEMPORAL_METRIC_PREFIX = re.compile(
     r"\s*(?:(?:as\s+of|at|by|during|for|in|on|through)\s+)?(?:the\s+)?",
     re.IGNORECASE,
 )
+_MONTH_NAME = (
+    r"(?:january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)"
+)
+_CALENDAR_DATE = (
+    rf"(?:\d{{4}}-\d{{2}}-\d{{2}}|"
+    rf"\d{{1,2}}\s+{_MONTH_NAME}\s+\d{{4}}|"
+    rf"{_MONTH_NAME}\s+\d{{1,2}},?\s+\d{{4}})"
+)
+_DATED_PERIOD = (
+    rf"(?:the\s+)?(?:(?:fiscal|calendar)\s+)?(?:year|quarter|month|period)\s+"
+    rf"(?:end|ended|ending)(?:\s+on)?\s+{_CALENDAR_DATE}"
+)
+_NAMED_PERIOD = (
+    rf"(?:"
+    rf"{_DATED_PERIOD}|"
+    rf"(?:fy|fiscal\s+year|calendar\s+year|year|q[1-4]|"
+    rf"first\s+quarter|second\s+quarter|third\s+quarter|fourth\s+quarter)"
+    rf"(?:\s+\d{{4}})?(?:\s+(?:end|ended|ending|start|started|beginning))?|"
+    rf"(?:end|ended|ending|start|started|beginning)\s+(?:of\s+)?(?:the\s+)?"
+    rf"(?:(?:fiscal|calendar)\s+)?(?:year|quarter|month|period)|"
+    rf"{_MONTH_NAME}(?:\s+\d{{4}})?(?:\s+(?:call|quarter|month|period|year(?:\s+end)?))?"
+    rf")"
+)
+_AUTHORIZED_TEMPORAL_ANCHOR = re.compile(
+    rf"\s*(?:(?:as\s+of|at|by|during|for|in|on|through)\s+)?"
+    rf"(?:{_CALENDAR_DATE}|(?:19|20)\d{{2}}|{_NAMED_PERIOD})\s*",
+    re.IGNORECASE,
+)
 
 AUTHORIZED_OBSERVATION_KINDS = frozenset(
     {
@@ -94,7 +123,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v4-bounded-positive-anaphora",
+    "version": "positive-bindings-v5-positive-temporal-anchors",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -105,6 +134,7 @@ BINDING_CONTRACT_SPEC = {
     "positive_anaphoric_antecedent_pattern": _POSITIVE_ANAPHORIC_ANTECEDENT,
     "same_sentence_binding_pattern": _SAME_SENTENCE_BINDING_PATTERN,
     "next_sentence_binding_pattern": _NEXT_SENTENCE_BINDING_PATTERN,
+    "next_sentence_boundary": "period_only",
     "immediate_following_anaphoric_pattern": _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
     "anaphoric_numeric_temporal_tail_pattern": _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.pattern,
     "anaphoric_temporal_lead_prefix_pattern": _ANAPHORIC_TEMPORAL_LEAD_PREFIX.pattern,
@@ -115,6 +145,7 @@ BINDING_CONTRACT_SPEC = {
     ),
     "direct_metric_prefix_pattern": _DIRECT_METRIC_PREFIX.pattern,
     "temporal_metric_prefix_pattern": _TEMPORAL_METRIC_PREFIX.pattern,
+    "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
     "unresolved_predicate_detection": "known positive connector with nonempty predicate",
     "unknown_syntax": "reject",
@@ -240,6 +271,15 @@ def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
     return False
 
 
+def is_authorized_temporal_anchor(value: str | None) -> bool:
+    """Accept only closed date, period, and named-event temporal expressions."""
+
+    if value is None:
+        return True
+    normalized = normalize_evidence_text(value)[0].casefold()
+    return bool(_AUTHORIZED_TEMPORAL_ANCHOR.fullmatch(normalized))
+
+
 def _profile_for_between(between: str) -> BindingProfile | None:
     if _COLON.fullmatch(between):
         return BindingProfile.COLON
@@ -299,7 +339,7 @@ def _immediate_next_sentence_anaphoric_profile(
 ) -> bool:
     """Prove one positive antecedent and one immediately following pronoun sentence."""
 
-    boundary = re.search(r"[.!?]\s+", assertion[metric_span[1] :])
+    boundary = re.search(r"\.\s+", assertion[metric_span[1] :])
     if boundary is None:
         return False
     boundary_start = metric_span[1] + boundary.start()
@@ -415,6 +455,8 @@ def bind_observation(
         return BindingResult(None, value_text_found, "metric_anchor_not_in_assertion")
     if not value_text_found:
         return BindingResult(None, False, "value_text_not_in_assertion")
+    if normalized_temporal and not is_authorized_temporal_anchor(normalized_temporal):
+        return BindingResult(None, True, "temporal_anchor_not_authorized")
     if kind not in AUTHORIZED_OBSERVATION_KINDS or not _kind_accepts_signature(
         kind, normalized_value
     ):

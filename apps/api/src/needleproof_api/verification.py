@@ -12,6 +12,7 @@ from .binding import (
     BindingMatch,
     bind_observation,
     canonical_numeric_signature,
+    is_authorized_temporal_anchor,
     numeric_signature_sequence,
     numeric_signatures,
 )
@@ -175,10 +176,14 @@ def _temporal_signature(value: str) -> str | None:
     if fiscal_period:
         fiscal_year, quarter, quarter_year = fiscal_period.groups()
         return f"fiscal-year:{fiscal_year}" if fiscal_year else f"quarter:{quarter_year}-q{quarter}"
+    if is_authorized_temporal_anchor(value):
+        return f"period:{normalized}"
     return None
 
 
 def _temporal_anchor_is_valid(value: str | None) -> bool:
+    if not is_authorized_temporal_anchor(value):
+        return False
     if value is None:
         return True
     normalized = normalize_evidence_text(value)[0].casefold()
@@ -204,8 +209,7 @@ def _distinct_temporal_anchors(observations: Iterable[DraftObservation]) -> set[
 
 def _has_explicit_conflict(evidence: Iterable[VerifiedEvidence], metric: str) -> bool:
     return any(
-        item.relation == EvidenceRelation.SUPPORTS
-        and item.quote_found
+        item.quote_found
         and item.assertion_found
         and item.metric_anchor_found
         and _canonical_metric(item.metric_anchor) == _canonical_metric(metric)
@@ -250,7 +254,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v8-bounded-positive-anaphora"
+    version = "deterministic-verifier-v9-positive-temporal-conflicts"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -484,6 +488,11 @@ class EvidenceVerifier:
                 notes.append(
                     "Every observation requires a supporting quotation with one authorized positive binding profile."
                 )
+        elif explicit_conflict and len(distinct_values) < 2:
+            status = ClaimStatus.POSSIBLE_CONFLICT
+            notes.append(
+                "Recognized same-metric conflict evidence prevents single-value authorization."
+            )
         elif len(distinct_values) >= 2:
             if explicit_conflict:
                 status = ClaimStatus.CONFLICT
