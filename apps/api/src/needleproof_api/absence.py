@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v14-complete-context"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v15-linked-anaphoric-context"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -85,7 +85,9 @@ ABSENCE_PROTOCOL_SPEC = {
     ),
     "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
     "neighbor_radius": 1,
-    "cross_chunk_context": "source_linked_neighbor_only_when_local_clause_edge_is_open",
+    "cross_chunk_context": (
+        "source_linked_neighbor_when_local_clause_or_anaphoric_assertion_edge_is_open"
+    ),
     "conclusion": "bounded_not_global",
 }
 ABSENCE_PROTOCOL_SHA256 = sha256_text(canonical_json(ABSENCE_PROTOCOL_SPEC))
@@ -300,6 +302,23 @@ def _join_source_fragments(left: str, right: str) -> str:
     return f"{left}{separator}{right}"
 
 
+def _linked_following_fragment(
+    chunk: ChunkRecord,
+    chunks_by_id: Mapping[ChunkId, ChunkRecord],
+) -> tuple[str, bool]:
+    """Return one linked source sentence fragment and whether it is complete."""
+
+    if chunk.next_chunk_id is None:
+        return "", True
+    following = chunks_by_id.get(chunk.next_chunk_id)
+    if following is None:
+        return "", False
+    boundaries = punctuation_boundaries(following.normalized_text)
+    if boundaries:
+        return following.normalized_text[: boundaries[0][1]], True
+    return following.normalized_text, following.next_chunk_id is None
+
+
 @dataclass(frozen=True, slots=True)
 class _AnalyzedMetricContext:
     display_occurrence: MetricOccurrence
@@ -354,21 +373,20 @@ def _metric_occurrence_with_open_neighbors(
                 after,
                 remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
             )
+            if not anaphoric_boundaries and chunk.next_chunk_id is not None:
+                following_fragment, following_complete = _linked_following_fragment(
+                    chunk,
+                    chunks_by_id,
+                )
+                after = _join_source_fragments(after, following_fragment)
+                complete = complete and following_complete
     elif chunk.next_chunk_id is not None:
-        following = chunks_by_id.get(chunk.next_chunk_id)
-        if following is None:
-            complete = False
-        else:
-            next_boundaries = punctuation_boundaries(following.normalized_text)
-            next_boundary = next_boundaries[0] if next_boundaries else None
-            following_fragment = (
-                following.normalized_text[: next_boundary[1]]
-                if next_boundary
-                else following.normalized_text
-            )
-            after = _join_source_fragments(after, following_fragment)
-            if next_boundary is None and following.next_chunk_id is not None:
-                complete = False
+        following_fragment, following_complete = _linked_following_fragment(
+            chunk,
+            chunks_by_id,
+        )
+        after = _join_source_fragments(after, following_fragment)
+        complete = complete and following_complete
 
     metric_text = chunk.normalized_text[metric_start:metric_end]
     proof_context = _join_source_fragments(before, metric_text)

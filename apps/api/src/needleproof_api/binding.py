@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v14-kind-preserving-initialisms",
+    "version": "positive-bindings-v15-separated-metric-and-value-identity",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -174,9 +174,11 @@ BINDING_CONTRACT_SPEC = {
     "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
     "metric_phrase_separator_policy": (
-        "shared_span_preserving_kind_aware_tokens_with_compact_dotted_initialism_equivalence"
+        "shared_span_preserving_kind_aware_tokens_with_2_to_3_letter_compact_dotted_"
+        "initialism_equivalence_and_longer_uppercase_word_typography"
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
+    "qualitative_value_token_kind": "ignored_while_metric_token_kind_remains_authoritative",
     "explicit_qualitative_negation_pattern": _EXPLICIT_QUALITATIVE_NEGATION.pattern,
     "explicit_qualitative_negation": "reject_before_positive_profile_matching",
     "intra_phrase_formatting_pattern": _INTRA_PHRASE_FORMATTING.pattern,
@@ -311,7 +313,12 @@ def _value_spans(value: str, assertion: str) -> tuple[list[Span], bool]:
             if _numeric_signature(match) == expected[0]
         ]
         return spans, bool(spans)
-    spans = word_phrase_spans(value, assertion)
+    # Qualitative values are documented as normalized case-folded word
+    # sequences. Token kind is an authority boundary for metric identity, not
+    # for values such as the credit rating ``AA``. Keeping those laws separate
+    # prevents a case-styled qualitative value from becoming an accidental
+    # false negative without reopening ``IT`` == ``It`` metric matching.
+    spans = word_phrase_spans(value, assertion, preserve_token_kind=False)
     return spans, bool(spans)
 
 

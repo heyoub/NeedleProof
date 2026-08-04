@@ -558,6 +558,78 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
 
 
 @pytest.mark.asyncio
+async def test_open_anaphoric_continuation_extends_into_linked_chunk():
+    metric_id = chunk_id_from_uint64(2**63 + 41)
+    value_id = chunk_id_from_uint64(2**63 + 42)
+    metric_chunk = ChunkRecord(
+        chunk_id=metric_id,
+        document_id="doc_split_anaphor",
+        document_name="Split anaphor fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text="Fee-earning AUM. It remained at",
+        normalized_text="Fee-earning AUM. It remained at",
+        next_chunk_id=value_id,
+        sha256="4" * 64,
+        token_estimate=6,
+    )
+    value_chunk = ChunkRecord(
+        chunk_id=value_id,
+        document_id="doc_split_anaphor",
+        document_name="Split anaphor fixture",
+        physical_page_index=1,
+        chunk_position=1,
+        text="$82 billion.",
+        normalized_text="$82 billion.",
+        previous_chunk_id=metric_id,
+        sha256="5" * 64,
+        token_estimate=3,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000041"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del query, recorder, top_k
+            return SearchResult(
+                query="Fee-earning AUM",
+                mode=mode,
+                corpus_manifest_sha256="6" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            if metric_id not in chunk_ids:
+                return []
+            return [metric_chunk, value_chunk]
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Fee-earning AUM"
+            return exact_scan(metric_chunk)
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Fee-earning AUM")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert any(
+        candidate.value_text == "$82 billion" for candidate in probe.supporting_value_candidates
+    )
+    forged = probe.model_copy(
+        update={
+            "supporting_value_candidates": [],
+            "unresolved_predicate_occurrences": [],
+            "conclusion": AbsenceConclusion.NOT_FOUND_IN_PROBE,
+        }
+    )
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="Fee-earning AUM", request_absence_probe=True),
+        absence_probe=forged,
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
 async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
     answer_id = chunk_id_from_uint64(2**63 + 500)
     answer = ChunkRecord(

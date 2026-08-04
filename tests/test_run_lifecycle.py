@@ -11,12 +11,22 @@ import pytest
 from fastapi import HTTPException
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
-from needleproof_api.main import get_run, receipt_json, receipt_page, run_events
+from needleproof_api.main import (
+    _close_corpus_after_shutdown,
+    get_run,
+    receipt_json,
+    receipt_page,
+    run_events,
+)
 from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger, validate_receipt
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter
-from needleproof_api.service import InvestigationService, ReceiptRecoveryOutcome
+from needleproof_api.service import (
+    InvestigationService,
+    ReceiptRecoveryOutcome,
+    ShutdownOutcome,
+)
 from needleproof_api.util import canonical_json, new_run_id, sha256_text, utc_now_iso
 
 
@@ -32,6 +42,90 @@ def lifecycle_service(tmp_path: Path) -> tuple[InvestigationService, AppDatabase
         database,
         settings,
     )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_pending_before_shared_dependencies_may_close(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    entered = asyncio.Event()
+    cancellation_seen = asyncio.Event()
+    release = asyncio.Event()
+
+    async def cancellation_resistant_task():
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await release.wait()
+
+    task = asyncio.create_task(cancellation_resistant_task())
+    service._tasks["run_shutdown_fixture"] = task
+    service._corpus_release_events["run_shutdown_fixture"] = asyncio.Event()
+    await entered.wait()
+
+    assert await service.shutdown(grace_seconds=0.01) is ShutdownOutcome.PENDING_CORPUS_USERS
+    assert cancellation_seen.is_set()
+    assert not task.done()
+
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_drained_when_no_task_can_retain_shared_dependencies(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+
+    assert await service.shutdown(grace_seconds=0.01) is ShutdownOutcome.SAFE_TO_CLOSE_CORPUS
+
+
+@pytest.mark.asyncio
+async def test_shutdown_may_release_corpus_before_receipt_finalizer_drains(tmp_path, monkeypatch):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    finalizer_entered = asyncio.Event()
+    release_finalizer = asyncio.Event()
+
+    async def blocked_finalizer(_ledger, _state):
+        finalizer_entered.set()
+        await release_finalizer.wait()
+
+    monkeypatch.setattr(service, "_finalize_run", blocked_finalizer)
+    created = await service.create_run(
+        RunCreateRequest(question="Release corpus before sealing", rehearsal=True),
+        session_id="alice",
+    )
+    await finalizer_entered.wait()
+
+    assert await service.shutdown(grace_seconds=0.01) is ShutdownOutcome.SAFE_TO_CLOSE_CORPUS
+    assert not service._tasks[created.run_id].done()
+
+    release_finalizer.set()
+    await service._tasks[created.run_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected_closed"),
+    [
+        (ShutdownOutcome.SAFE_TO_CLOSE_CORPUS, True),
+        (ShutdownOutcome.PENDING_CORPUS_USERS, False),
+    ],
+)
+async def test_lifespan_never_closes_corpus_retained_by_a_run(outcome, expected_closed):
+    close_calls = 0
+
+    class Corpus:
+        async def close(self):
+            nonlocal close_calls
+            close_calls += 1
+
+    closed = await _close_corpus_after_shutdown(Corpus(), outcome)
+
+    assert closed is expected_closed
+    assert close_calls == int(expected_closed)
 
 
 @pytest.mark.asyncio

@@ -736,7 +736,7 @@ def test_metric_phrase_normalizes_compact_and_dotted_initialisms():
 
 @given(
     initialism=st.text(
-        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=3
     )
 )
 def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism):
@@ -751,7 +751,7 @@ def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism)
 
 @given(
     initialism=st.text(
-        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=3
     )
 )
 def test_changing_initialism_kind_cannot_preserve_binding_authority(initialism):
@@ -766,6 +766,16 @@ def test_changing_initialism_kind_cannot_preserve_binding_authority(initialism):
         )
         is None
     )
+
+
+@given(
+    word=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=4, max_size=8)
+)
+def test_longer_uppercase_token_is_case_insensitive_word_typography(word):
+    ordinary_word = word.title()
+
+    assert metric_identity(word) == metric_identity(ordinary_word)
+    assert word_phrase_spans(ordinary_word, f"{word} was $2 million.")
 
 
 def test_initialism_normalization_does_not_cross_spaces_or_sentence_boundaries():
@@ -796,13 +806,19 @@ def test_compact_initialism_never_binds_to_ordinary_word(metric, ordinary_word):
     assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
 
 
-def test_all_caps_word_styling_is_visible_as_ambiguity_not_metric_identity():
-    assert word_phrase_spans("Revenue", "REVENUE was $2 million.") == []
-    assert word_phrase_spans(
-        "Revenue",
-        "REVENUE was $2 million.",
-        preserve_token_kind=False,
-    )
+@pytest.mark.parametrize(
+    ("metric", "source"),
+    [
+        ("Revenue", "REVENUE"),
+        ("RATE", "Rate"),
+        ("TOTAL HEADCOUNT", "Total Headcount"),
+    ],
+)
+def test_longer_all_caps_word_styling_preserves_ordinary_metric_identity(metric, source):
+    assertion = f"{source} was $2 million."
+
+    assert word_phrase_spans(metric, assertion)
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is not None
 
 
 @pytest.mark.parametrize("source_metric", ["IT", "I.T."])
@@ -996,6 +1012,12 @@ def test_explicit_qualitative_negation_never_authorizes_a_positive_observation(q
 def test_positive_qualitative_copula_profiles_remain_authorized(value):
     quote = f"Credit rating was {value}."
     assert reported_value_linked_to_metric(value, "Credit rating", quote) is not None
+
+
+@pytest.mark.parametrize("value", ["AA", "aa"])
+def test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity(value):
+    assert reported_value_linked_to_metric(value, "Credit rating", "Credit rating was AA.")
+    assert reported_value_linked_to_metric("$2 million", "IT", "It was $2 million.") is None
 
 
 def test_negated_qualitative_observation_is_unverified_by_public_verifier():

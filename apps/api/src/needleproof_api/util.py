@@ -125,7 +125,12 @@ def metric_tokens(value: str) -> tuple[MetricToken, ...]:
         dotted_initialism = match.lastgroup == "initialism"
         compact_initialism = (
             not dotted_initialism
-            and 2 <= len(raw) <= 8
+            # Compact 2-3 letter forms cover the identity-sensitive corpus
+            # metrics (IT, US, AUM) and their dotted equivalents. Longer
+            # uppercase tokens are treated as ordinary typography so REVENUE,
+            # TOTAL, and RATE remain case-insensitive words. Ambiguous short
+            # forms still fail closed in exhaustive absence scans.
+            and 2 <= len(raw) <= 3
             and raw.isalpha()
             and raw.upper() == raw
             and raw.lower() != raw

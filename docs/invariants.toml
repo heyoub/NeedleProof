@@ -20,12 +20,13 @@ tests = [
 id = "INV-METRIC-005"
 family = "metric-identity"
 severity = "P1"
-invariant = "An all-caps token-kind mismatch may reduce recall but can never authorize not-found."
-finding = "REVENUE typography could be post-filtered from a Revenue absence scan."
+invariant = "Longer all-caps ordinary-word typography remains case-insensitive; ambiguous short forms cannot authorize not-found."
+finding = "REVENUE typography could be post-filtered from a Revenue absence scan while short initialisms still required kind preservation."
 disposition = "fixed"
 owner = "retrieval"
 tests = [
-  "test_exact_scan_reports_all_caps_word_as_kind_ambiguous",
+  "test_longer_all_caps_word_styling_preserves_ordinary_metric_identity",
+  "test_exact_scan_matches_longer_all_caps_word_typography",
   "test_kind_ambiguous_exact_scan_cannot_authorize_absence",
 ]
 
@@ -41,6 +42,7 @@ tests = [
   "test_complete_same_chunk_context_blocks_absence_beyond_display_window",
   "test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value",
   "test_absence_probe_handles_metric_values_split_across_chunk_edges",
+  "test_open_anaphoric_continuation_extends_into_linked_chunk",
 ]
 
 [[invariant]]
@@ -70,8 +72,35 @@ tests = ["test_collective_conflict_profile_rejects_competing_subjects_and_tails"
 id = "INV-RESOURCE-002"
 family = "resource-lifecycle"
 severity = "P2"
-invariant = "The shared embedding client is closed exactly once during application shutdown."
-finding = "CorpusStore retained its lazy AsyncOpenAI client without a shutdown hook."
+invariant = "The shared embedding client closes exactly once only after service-owned tasks drain."
+finding = "CorpusStore retained its lazy client, and a bounded shutdown could close it while a run task remained alive."
 disposition = "fixed"
 owner = "retrieval"
-tests = ["test_corpus_store_closes_shared_embedding_client_exactly_once"]
+tests = [
+  "test_corpus_store_closes_shared_embedding_client_exactly_once",
+  "test_shutdown_reports_pending_before_shared_dependencies_may_close",
+  "test_shutdown_reports_drained_when_no_task_can_retain_shared_dependencies",
+  "test_shutdown_may_release_corpus_before_receipt_finalizer_drains",
+  "test_lifespan_never_closes_corpus_retained_by_a_run",
+  "test_golden_cli_closes_temporary_embedding_store",
+]
+
+[[invariant]]
+id = "INV-VALUE-001"
+family = "value-identity"
+severity = "P2"
+invariant = "Qualitative values use case-folded word identity without weakening kind-preserving metric identity."
+finding = "The qualitative value AA was misclassified as an initialism and failed to bind to aa."
+disposition = "fixed"
+owner = "binding"
+tests = ["test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity"]
+
+[[invariant]]
+id = "INV-PROCESS-001"
+family = "review-process"
+severity = "P1"
+invariant = "Unknown severities and malformed invariant IDs cannot bypass the merge-readiness gate."
+finding = "A severity typo such as P01 was accepted and escaped the open P0/P1 check."
+disposition = "fixed"
+owner = "quality"
+tests = ["test_review_invariant_registry_rejects_schema_typos_that_bypass_policy"]

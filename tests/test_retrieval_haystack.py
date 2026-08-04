@@ -190,7 +190,7 @@ def test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word(
     assert all(word_phrase_spans("IT", chunk.normalized_text) for chunk in scan.chunks)
 
 
-def test_exact_scan_reports_all_caps_word_as_kind_ambiguous(tmp_path):
+def test_exact_scan_matches_longer_all_caps_word_typography(tmp_path):
     db_path = tmp_path / "uppercase.sqlite3"
     chunk_id = chunk_id_from_uint64(2**63 + 1900)
     text = "REVENUE was $2 million."
@@ -232,8 +232,8 @@ def test_exact_scan_reports_all_caps_word_as_kind_ambiguous(tmp_path):
     scan = store.find_exact_metric_chunks("Revenue")
 
     assert isinstance(scan, ExactMetricScanComplete)
-    assert scan.chunks == ()
-    assert scan.ambiguous_candidate_count == 1
+    assert scan.chunks == (chunk,)
+    assert scan.ambiguous_candidate_count == 0
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,11 @@ async def _model_smoke(settings: Settings) -> int:
 
 
 async def _golden(settings: Settings) -> int:
-    report = await run_golden_retrieval(CorpusStore(settings))
+    store = CorpusStore(settings)
+    try:
+        report = await run_golden_retrieval(store)
+    finally:
+        await store.close()
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["passed"] else 1
 
