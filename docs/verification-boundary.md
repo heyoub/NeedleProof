@@ -94,8 +94,9 @@ quotation proves nothing. Recognized same-metric conflict evidence
 prevents a lone reported value from becoming authoritative, regardless of the model-supplied
 evidence relation. Unresolved relationships never enter authoritative prose.
 
-For a single qualitative observation, an immediate qualitative operand on the right side of a
-locally owned direct conflict bridge is recorded only as an unmodeled conflict signal. It cannot
+For a single qualitative observation, an immediate bounded qualitative operand on the right side
+of a locally owned direct conflict bridge is recorded only as an unmodeled conflict signal. A
+right-hand phrase containing its own reporting predicate is a competing clause, not an operand. The signal cannot
 become a verified or published observation, but a distinct operand prevents the known value from
 being published alone. Repeating the same canonical qualitative operand does not manufacture a
 conflict, and a bridge owned by a competing metric proves nothing about the claim metric.

@@ -63,9 +63,21 @@ _QUARTER_NUMBERS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
 _CONFLICT_BRIDGE_LEFT_GAP = re.compile(r"\s*,?\s*(?:which\s+)?", re.IGNORECASE)
 _CONFLICT_BRIDGE_RIGHT_GAP = re.compile(r"\s*(?:the\s*)?", re.IGNORECASE)
 _QUALITATIVE_BRIDGE_OPERAND = re.compile(
-    r"\s*(?:the\s+)?(?P<value>(?!the\b)[^\W\d_]+)\b"
+    r"\s*(?:the\s+)?(?P<value>(?!the\b)[^\W\d_]+(?:\s+[^\W\d_]+){0,3})\b"
     r"(?=\s*(?:[,;.!?]|$|(?:figure|value|state|rating)\b))",
     re.IGNORECASE,
+)
+_QUALITATIVE_PREDICATE_CONNECTORS = frozenset(
+    {
+        "are",
+        "is",
+        "reached",
+        "remained",
+        "reported",
+        "stood",
+        "was",
+        "were",
+    }
 )
 _CONFLICT_COLLECTIVE_LEAD_GAP = re.compile(
     r"\s*[,;:]?\s*(?:(?:and|but)\s+)?(?:the\s+)?",
@@ -549,6 +561,8 @@ def _unmodeled_qualitative_bridge_candidate(
     if match is None:
         return None
     value = match.group("value")
+    if _QUALITATIVE_PREDICATE_CONNECTORS & set(_WORD.findall(value.casefold())):
+        return None
     return canonical_word_phrase(value), match.span("value")
 
 
@@ -715,7 +729,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v24-unmodeled-conflict-operands"
+    version = "deterministic-verifier-v25-bounded-qualitative-conflict-operands"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

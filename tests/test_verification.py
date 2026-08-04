@@ -1106,7 +1106,9 @@ def test_qualitative_conflict_does_not_borrow_a_competing_metrics_value():
     ("conflicting_value", "expected"),
     [
         ("negative", ClaimStatus.POSSIBLE_CONFLICT),
+        ("very negative", ClaimStatus.POSSIBLE_CONFLICT),
         ("stable", ClaimStatus.VERIFIED),
+        ("Market outlook was negative", ClaimStatus.VERIFIED),
     ],
 )
 def test_unmodeled_qualitative_bridge_operand_blocks_only_a_distinct_single_value(
