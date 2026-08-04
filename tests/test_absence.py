@@ -134,7 +134,7 @@ def test_bounded_qualifier_shape_cannot_hide_positive_qualitative_predicate(qual
         ["The company maintained a", "The filing described an", "Management reported a"]
     ),
     modifiers=st.lists(
-        st.sampled_from(["current", "long", "term"]),
+        st.sampled_from(["current", "long", "term", "U.S."]),
         min_size=0,
         max_size=3,
     ),
@@ -350,6 +350,7 @@ def test_bounded_value_first_separator_family_is_always_reviewable(
         "Credit rating during the fiscal year was reported stable.",
         "The company maintained a stable Credit rating.",
         "An unchanged Credit rating was disclosed.",
+        "Total revenue was reported by the U.S. Credit rating.",
     ],
 )
 async def test_exact_metric_with_qualitative_predicate_requires_review(sentence):

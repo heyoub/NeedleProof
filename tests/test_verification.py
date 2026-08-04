@@ -10,6 +10,7 @@ from needleproof_api.binding import (
     canonical_decimal_digits,
     canonical_numeric_signature,
     numeric_signature_sequence,
+    word_phrase_spans,
 )
 from needleproof_api.chunk_ids import ChunkId, chunk_id_from_uint64
 from needleproof_api.models import (
@@ -199,6 +200,7 @@ def test_nonnumeric_anaphoric_followup_cannot_be_cropped(
 
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
 
 
 @given(year=st.integers(min_value=1900, max_value=2100))
@@ -227,6 +229,8 @@ def test_temporal_digits_cannot_disguise_cropped_anaphoric_role_context(year):
     )
 
     assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
 
 
 def test_following_numeric_observation_does_not_reclassify_prior_assertion():
@@ -446,6 +450,28 @@ def test_compound_metric_anchor_is_not_split_at_and():
     quote = f"{metric} were $2 million."
     assert reported_value_linked_to_metric("$2 million", metric, quote) is not None
     assert reported_value_linked_to_metric("$2 million", "Research", quote) is None
+
+
+@pytest.mark.parametrize("terminator", [".", "?", "!", ";", ":", ","])
+def test_metric_phrase_cannot_cross_clause_or_sentence_terminator(terminator):
+    assertion = f"Revenue{terminator} Growth was 10%."
+
+    assert word_phrase_spans("Revenue Growth", assertion) == []
+    assert reported_value_linked_to_metric("10%", "Revenue Growth", assertion) is None
+
+
+@pytest.mark.parametrize("separator", [" ", "\n", "-", "–", "/", " & ", " ( "])
+def test_metric_phrase_accepts_only_named_intra_phrase_formatting(separator):
+    assertion = f"Fee{separator}related earnings were $2 million."
+
+    assert word_phrase_spans("Fee related earnings", assertion)
+
+
+def test_metric_phrase_preserves_multi_initial_abbreviation():
+    assertion = "U.S. revenue was $2 million."
+
+    assert word_phrase_spans("U S revenue", assertion)
+    assert reported_value_linked_to_metric("$2 million", "U.S. revenue", assertion) is not None
 
 
 @pytest.mark.parametrize(

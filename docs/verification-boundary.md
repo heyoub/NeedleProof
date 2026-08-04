@@ -12,7 +12,9 @@ An authoritative observation must prove all of these facts:
 
 - the cited chunk belongs to the run's immutable corpus version;
 - the quote and assertion exist under the documented normalization contract;
-- the complete metric anchor occurs in that assertion and matches the canonical metric;
+- the complete metric anchor occurs in that assertion and matches the canonical metric; its words
+  use only named intra-phrase formatting and cannot cross comma, clause, or sentence punctuation,
+  while complete multi-initial abbreviations such as `U.S.` remain valid;
 - the assertion begins at that complete metric subject, an optional article, or a bound leading
   temporal anchor. “Complete metric subject” includes every preceding forecast, target,
   adjustment, scope qualifier, or temporal qualifier required to preserve the source's meaning,
@@ -91,9 +93,10 @@ complete normalized metric. The exhaustive scan has no top-k cutoff and is filte
 same complete-word matcher used by verification. The protocol records both result sets, opens every
 unique candidate, and inspects a fixed 384-character window on both sides of every complete metric
 occurrence. Values before the metric require a closed `VALUE in/of METRIC` bridge; forward values
-or immediate `VALUE METRIC` adjacency, including bounded comma/colon/dash separators and opening
-parentheses, brackets, braces, or quotes. Closed qualitative states are inspected on both sides of
-the complete metric phrase; forward values remain conservatively reviewable. This does
+and immediate `VALUE METRIC` adjacency make the occurrence reviewable, including bounded
+comma/colon/dash separators and opening parentheses, brackets, braces, or quotes. Closed
+qualitative states are inspected on both sides of the complete metric phrase, with bounded plain or
+initialism qualifier tokens. This does
 not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize

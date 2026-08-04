@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import pairwise
 
 from .models import BindingProfile, ObservationKind
 from .util import canonical_json, normalize_evidence_text, sha256_text
@@ -17,6 +18,7 @@ _NUMERIC = re.compile(
     re.IGNORECASE,
 )
 _WORD = re.compile(r"[^\W_]+")
+_INTRA_PHRASE_FORMATTING = re.compile(r"[\s/&+'\"()\[\]{}\-‐‑‒–—]+")
 _COPULA = re.compile(r"\s*(?:is|are|was|were)\b\s*", re.IGNORECASE)
 _REPORTED = re.compile(
     r"\s*(?:"
@@ -43,9 +45,10 @@ _ANAPHORIC_CONNECTOR = (
 _POSITIVE_ANAPHORIC_STATE = (
     r"(?:is|are|was|were)\s+(?:available|disclosed|reported|stable|stated|unchanged)"
 )
+_PRE_METRIC_QUALIFIER_TOKEN = r"(?:[^\W\d_]+|(?:[^\W\d_]\.){2,})"
 _PRE_METRIC_QUALITATIVE_STATE = re.compile(
     r"\b(?:available|disclosed|flat|reported|stable|stated|unchanged)"
-    r"(?:\s+[^\W\d_]+){0,3}\s+$",
+    rf"(?:\s+{_PRE_METRIC_QUALIFIER_TOKEN}){{0,3}}\s+$",
     re.IGNORECASE,
 )
 _POSITIVE_ANAPHORIC_DESCRIPTOR = (
@@ -136,7 +139,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v9-bidirectional-qualitative-review",
+    "version": "positive-bindings-v10-contiguous-metric-phrases",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -166,12 +169,17 @@ BINDING_CONTRACT_SPEC = {
     "temporal_metric_prefix_pattern": _TEMPORAL_METRIC_PREFIX.pattern,
     "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
+    "metric_phrase_separator_policy": (
+        "bounded_formatting_or_multi_initial_abbreviation_never_clause_punctuation"
+    ),
+    "intra_phrase_formatting_pattern": _INTRA_PHRASE_FORMATTING.pattern,
     "unresolved_predicate_detection": (
         "known positive connector after at most eight punctuation-free qualifier words "
         "with a nonempty predicate"
     ),
     "unresolved_qualitative_state_pattern": _QUALITATIVE_STATE.pattern,
     "pre_metric_qualitative_state_pattern": _PRE_METRIC_QUALITATIVE_STATE.pattern,
+    "pre_metric_qualifier_token_pattern": _PRE_METRIC_QUALIFIER_TOKEN,
     "pre_metric_qualifier_limit": 3,
     "predicate_qualifier_gap_pattern": _PREDICATE_QUALIFIER_GAP.pattern,
     "unknown_syntax": "reject",
@@ -248,11 +256,30 @@ def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
     if not expected:
         return []
     width = len(expected)
-    return [
-        (observed[index].start(), observed[index + width - 1].end())
-        for index in range(len(observed) - width + 1)
-        if [match.group() for match in observed[index : index + width]] == expected
-    ]
+    spans = []
+    for index in range(len(observed) - width + 1):
+        window = observed[index : index + width]
+        if [match.group() for match in window] != expected:
+            continue
+        gaps_are_contiguous = True
+        for offset, (left, right) in enumerate(pairwise(window)):
+            gap = haystack[left.end() : right.start()]
+            if _INTRA_PHRASE_FORMATTING.fullmatch(gap):
+                continue
+            continues_initialism = gap == "." and len(left.group()) == len(right.group()) == 1
+            ends_initialism = (
+                bool(re.fullmatch(r"\.\s*", gap))
+                and len(left.group()) == 1
+                and offset > 0
+                and len(window[offset - 1].group()) == 1
+                and haystack[window[offset - 1].end() : left.start()] == "."
+            )
+            if not (continues_initialism or ends_initialism):
+                gaps_are_contiguous = False
+                break
+        if gaps_are_contiguous:
+            spans.append((window[0].start(), window[-1].end()))
+    return spans
 
 
 def _value_spans(value: str, assertion: str) -> tuple[list[Span], bool]:
@@ -306,8 +333,7 @@ def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
     normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
     normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
     for metric_start, end in word_phrase_spans(normalized_metric, normalized_assertion):
-        sentence_prefix = re.split(r"[.!?;]", normalized_assertion[:metric_start])[-1]
-        if _PRE_METRIC_QUALITATIVE_STATE.search(sentence_prefix):
+        if _PRE_METRIC_QUALITATIVE_STATE.search(normalized_assertion[:metric_start]):
             return True
         suffix = normalized_assertion[end:]
         for connector in (_COPULA, _REPORTED, _COLON, _QUALITATIVE_STATE):

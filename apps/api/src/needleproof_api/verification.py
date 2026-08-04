@@ -41,9 +41,10 @@ from .util import canonical_metric_key, evidence_text_contains, normalize_eviden
 
 _WORD = re.compile(r"[^\W_]+")
 _MONTHS = {month.casefold(): index for index, month in enumerate(calendar.month_name) if month}
+_CONFLICT_BRIDGE_TEXT = r"cannot\s+be\s+right\s+(?:when\s+)?alongside"
 _BOUND_CONFLICT_RELATION = re.compile(
     r"\b(?:"
-    r"(?P<bridge>cannot\s+be\s+right\s+(?:when\s+)?alongside)|"
+    rf"(?P<bridge>{_CONFLICT_BRIDGE_TEXT})|"
     r"(?P<typed>(?:values|figures|amounts|numbers|reports|sources)\s+"
     r"(?:are|remain|seem|appear)?\s*(?:incompatible|conflicting)|"
     r"(?:incompatible|conflicting)\s+"
@@ -74,7 +75,7 @@ _COMMA_ASSERTION_COMMENTARY = re.compile(
     r"\s*,\s*(?:"
     r"(?:up|down|compared|versus)\b|"
     r"(?:and|but|while|whereas|because|although|though|since)\b|"
-    r"which\s+(?:cannot\s+be\s+right\s+alongside|is\s+(?:up|down)\b)"
+    rf"which\s+(?:{_CONFLICT_BRIDGE_TEXT}|is\s+(?:up|down)\b)"
     r")",
     re.IGNORECASE,
 )
@@ -496,7 +497,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v19-metric-owned-conflicts"
+    version = "deterministic-verifier-v20-contiguous-metric-phrases"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

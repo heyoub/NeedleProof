@@ -142,6 +142,15 @@ def _legacy_observation_kind(value: str) -> ObservationKind:
     return ObservationKind.REPORTED_LEVEL
 
 
+def _legacy_optional_temporal_anchor(value: str | None) -> str | None:
+    """Map legacy empty optional text to the current explicit-null contract."""
+
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def _adapt_reference(reference: LegacyEvidenceReferenceV12) -> EvidenceReference:
     return EvidenceReference(
         chunk_id=reference.chunk_id,
@@ -153,7 +162,11 @@ def _adapt_reference(reference: LegacyEvidenceReferenceV12) -> EvidenceReference
 
 
 def _adapt_verified_evidence(evidence: LegacyVerifiedEvidenceV12) -> VerifiedEvidence:
-    temporal_anchor = evidence.temporal_anchors[0] if len(evidence.temporal_anchors) == 1 else None
+    temporal_anchor = (
+        _legacy_optional_temporal_anchor(evidence.temporal_anchors[0])
+        if len(evidence.temporal_anchors) == 1
+        else None
+    )
     legacy_binding_supported = (
         evidence.quote_found and evidence.metric_anchor_found and evidence.value_found
     )
@@ -198,7 +211,7 @@ def adapt_legacy_run_envelope(value: Any) -> RunEnvelope:
             DraftObservation(
                 kind=_legacy_observation_kind(reported.value),
                 value_text=reported.value,
-                temporal_anchor=reported.temporal_anchor,
+                temporal_anchor=_legacy_optional_temporal_anchor(reported.temporal_anchor),
                 evidence=[_adapt_reference(reference) for reference in reported.evidence],
             )
             for reported in claim.values
