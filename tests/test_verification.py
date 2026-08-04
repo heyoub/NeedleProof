@@ -119,6 +119,10 @@ def test_direct_value_is_verified_with_diagnostic_binding(corpus):
         ("Forecast revenue was $2 million.", "revenue was $2 million."),
         ("Revenue was $2 million forecast.", "Revenue was $2 million"),
         ("Revenue was $2 million target.", "Revenue was $2 million"),
+        ("Revenue was $2 million, a forecast for next year.", "Revenue was $2 million"),
+        ("Revenue was $2 million. This was a forecast.", "Revenue was $2 million."),
+        ("Revenue was $2 million. That amount was a target.", "Revenue was $2 million."),
+        ("Revenue was $2 million. This was a forecast for 2026.", "Revenue was $2 million."),
     ],
 )
 def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, assertion):
@@ -147,6 +151,100 @@ def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, ass
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].assertion_found
     assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
+@given(
+    subject=st.sampled_from(
+        ["This", "That", "This value", "That amount", "It", "The figure", "The number"]
+    ),
+    copula=st.sampled_from(["is", "was", "remains"]),
+    qualifier=st.from_regex(r"[A-Za-z]{2,18}(?: [A-Za-z]{2,18}){0,3}", fullmatch=True),
+)
+def test_nonnumeric_anaphoric_followup_cannot_be_cropped(
+    subject,
+    copula,
+    qualifier,
+):
+    quote = f"Revenue was $2 million. {subject} {copula} {qualifier}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 909),
+        document_id="doc_anaphoric_context_property",
+        document_name="Anaphoric context property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="4" * 64,
+        token_estimate=12,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+
+
+@given(year=st.integers(min_value=1900, max_value=2100))
+def test_temporal_digits_cannot_disguise_cropped_anaphoric_role_context(year):
+    quote = f"Revenue was $2 million. This was a forecast for {year}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 911),
+        document_id="doc_anaphoric_year_property",
+        document_name="Anaphoric year property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="6" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
+def test_following_numeric_observation_does_not_reclassify_prior_assertion():
+    quote = "Revenue was $2 million. It was $3 million in 2025."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 908),
+        document_id="doc_numeric_followup",
+        document_name="Numeric followup fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="2" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
 
 
 def test_modified_quote_is_rejected(corpus):
@@ -531,14 +629,63 @@ def test_seeded_aum_values_are_date_variants(corpus):
             "By the fiscal year end on 31 March 2026 the figure was $142 billion"
         ),
     )
+    repeated = observation("$146.1 billion", first, temporal_anchor="31 December 2025")
     verified = EvidenceVerifier(corpus).verify_claim(
         claim(
             "Assets under management",
-            observation("$146.1 billion", first, temporal_anchor="31 December 2025"),
+            repeated,
+            repeated.model_copy(deep=True),
             observation("$142 billion", second, temporal_anchor="31 March 2026"),
         )
     )
     assert verified.status == ClaimStatus.DATE_VARIANT
+    assert verified.statement.count("$146.1 billion") == 1
+
+
+@given(repetitions=st.integers(min_value=1, max_value=8))
+def test_duplicate_observations_cannot_change_temporal_classification(repetitions):
+    quote = (
+        "Assets under management were $146.1 billion as of 31 December 2025. "
+        "By the fiscal year end on 31 March 2026 the figure was $142 billion."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 910),
+        document_id="doc_duplicate_observation_property",
+        document_name="Duplicate observation property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=18,
+    )
+    first_assertion = "Assets under management were $146.1 billion as of 31 December 2025."
+    second_assertion = (
+        "Assets under management were $146.1 billion as of 31 December 2025. "
+        "By the fiscal year end on 31 March 2026 the figure was $142 billion."
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Assets under management",
+        assertion=first_assertion,
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Assets under management",
+        assertion=second_assertion,
+    )
+    repeated = observation("$146.1 billion", first, temporal_anchor="31 December 2025")
+    observations = [repeated.model_copy(deep=True) for _ in range(repetitions)]
+    observations.append(observation("$142 billion", second, temporal_anchor="31 March 2026"))
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Assets under management", *observations)
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+    assert verified.statement.count("$146.1 billion") == 1
 
 
 def test_seeded_fee_aum_source_characterization_is_conflict(corpus):
@@ -829,6 +976,52 @@ def test_conflict_bridge_cannot_borrow_competing_metric_value():
     assert verified.status == ClaimStatus.VERIFIED
 
 
+def test_conflict_bridge_requires_both_disputed_authorized_values():
+    quote = (
+        "Revenue was $1 million. Revenue was $2 million. "
+        "Revenue was $1 million, which cannot be right alongside $3 million."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 907),
+        document_id="doc_bridge_decoy_value",
+        document_name="Conflict bridge decoy fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="3" * 64,
+        token_estimate=18,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
 def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
     quote = "Revenue was $2 million in Q1 2025. Revenue was $3 million in first quarter 2025."
     chunk = ChunkRecord(
@@ -855,15 +1048,18 @@ def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
         assertion="Revenue was $3 million in first quarter 2025.",
     )
 
+    repeated = observation("$2 million", first, temporal_anchor="Q1 2025")
     verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
         claim(
             "Revenue",
-            observation("$2 million", first, temporal_anchor="Q1 2025"),
+            repeated,
+            repeated.model_copy(deep=True),
             observation("$3 million", second, temporal_anchor="first quarter 2025"),
         )
     )
 
     assert verified.status == ClaimStatus.CONFLICT
+    assert verified.statement.count("$2 million") == 1
 
 
 def test_unresolved_distinct_values_do_not_enter_authoritative_answer(corpus):

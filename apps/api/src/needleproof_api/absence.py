@@ -22,11 +22,11 @@ from .models import (
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v8-bidirectional-context"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v10-value-first-separators"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
-    r"\s*(?:in|of)\s+(?:[^\W\d_]+\s+){0,3}",
+    r"(?:\s*|\s*[,;:—–-]\s*|\s*(?:in|of)\s+(?:[^\W\d_]+\s+){0,3})",
     re.IGNORECASE,
 )
 AbsenceMode = Literal["lexical"]
@@ -52,7 +52,7 @@ ABSENCE_PROTOCOL_SPEC = {
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
     "numeric_candidate_policy": (
-        "forward_metric_context_or_closed_value_first_bridge_requires_review"
+        "forward_metric_context_or_immediate_bounded_separator_or_closed_value_first_bridge_requires_review"
     ),
     "qualitative_predicate_policy": (
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"

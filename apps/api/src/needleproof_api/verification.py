@@ -13,6 +13,7 @@ from .binding import (
     BindingMatch,
     bind_observation,
     canonical_numeric_signature,
+    has_positive_anaphoric_numeric_followup,
     is_authorized_temporal_anchor,
     numeric_signature_sequence,
     numeric_signatures,
@@ -64,6 +65,19 @@ _CONFLICT_COLLECTIVE_TAIL = re.compile(
 )
 _DIRECT_ASSERTION_QUOTE_BOUNDARY = re.compile(
     r"(?:[.!?;]|[,;:]\s*(?:and|but|while|whereas))\s*$",
+    re.IGNORECASE,
+)
+_COMMA_ASSERTION_COMMENTARY = re.compile(
+    r"\s*,\s*(?:"
+    r"(?:up|down|compared|versus)\b|"
+    r"(?:and|but|while|whereas|because|although|though|since)\b|"
+    r"which\s+(?:cannot\s+be\s+right\s+alongside|is\s+(?:up|down)\b)"
+    r")",
+    re.IGNORECASE,
+)
+_ANAPHORIC_FOLLOWUP = re.compile(
+    r"\s*(?:(?:this|that)(?:\s+(?:figure|value|amount|number))?|"
+    r"it|the\s+(?:figure|value|amount|number))\b",
     re.IGNORECASE,
 )
 
@@ -138,9 +152,18 @@ def _binding_respects_quote_boundaries(
         if (
             suffix
             and normalized_assertion.rstrip()[-1:] not in ".!?"
-            and re.match(r"\s*[,.;:!?]", suffix) is None
+            and re.match(r"\s*[.!?;]", suffix) is None
+            and _COMMA_ASSERTION_COMMENTARY.match(suffix) is None
         ):
             continue
+        immediate_followup = _ANAPHORIC_FOLLOWUP.match(suffix)
+        if immediate_followup:
+            followup_end = re.search(r"[.!?]", suffix[immediate_followup.end() :])
+            sentence_end = (
+                immediate_followup.end() + followup_end.start() if followup_end else len(suffix)
+            )
+            if not has_positive_anaphoric_numeric_followup(suffix[:sentence_end]):
+                continue
         return True
     return False
 
@@ -277,15 +300,6 @@ def _temporal_anchor_is_valid(value: str | None) -> bool:
     return not looks_like_calendar_date or _temporal_signature(value) is not None
 
 
-def _distinct_temporal_anchors(observations: Iterable[DraftObservation]) -> set[str]:
-    return {
-        signature
-        for observation in observations
-        if observation.temporal_anchor
-        and (signature := _temporal_signature(observation.temporal_anchor)) is not None
-    }
-
-
 def _compatible_measurements(
     sentence: str,
     authorized_values: set[tuple[str, str, str, str]],
@@ -320,8 +334,12 @@ def _relation_binds_distinct_measurements(
             return False
         if not _CONFLICT_BRIDGE_RIGHT_GAP.fullmatch(sentence[relation.end() : right[1][0]]):
             return False
-        candidates = (left[0], right[0])
-        return len(set(candidates)) >= 2 and any(value in candidates for value in authorized_values)
+        candidates = {left[0], right[0]}
+        if len(candidates) < 2:
+            return False
+        if len(authorized_values) == 1:
+            return bool(candidates & authorized_values)
+        return candidates.issubset(authorized_values)
     observed_authorized = [item for item in measurements if item[0] in authorized_values]
     if len({signature for signature, _span in observed_authorized}) < 2:
         return False
@@ -376,6 +394,24 @@ def _render_observation(observation: DraftObservation) -> str:
     return observation.value_text
 
 
+def _deduplicate_observations(
+    observations: Iterable[DraftObservation],
+) -> list[DraftObservation]:
+    unique: list[DraftObservation] = []
+    seen: set[tuple[ObservationKind, str, str | None]] = set()
+    for observation in observations:
+        temporal = (
+            _temporal_signature(observation.temporal_anchor)
+            if observation.temporal_anchor
+            else None
+        )
+        identity = (observation.kind, _canonical_value(observation.value_text), temporal)
+        if identity not in seen:
+            seen.add(identity)
+            unique.append(observation)
+    return unique
+
+
 def _authoritative_statement(
     metric: str,
     status: ClaimStatus,
@@ -406,7 +442,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v16-value-consistent-anaphora"
+    version = "deterministic-verifier-v18-bound-followup-context"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -587,13 +623,31 @@ class EvidenceVerifier:
         ]
 
         authorized = [item.observation for item in verified_observations if item.authorized]
+        classified_observations = _deduplicate_observations(authorized)
         all_observations_authorized = bool(claim.observations) and len(authorized) == len(
             claim.observations
         )
-        distinct_values = _distinct_values(authorized)
-        distinct_temporal = _distinct_temporal_anchors(authorized)
-        temporal_count = sum(bool(observation.temporal_anchor) for observation in authorized)
-        explicit_conflict = _has_explicit_conflict(evidence, claim.metric, authorized)
+        distinct_values = _distinct_values(classified_observations)
+        value_periods: dict[str, set[str | None]] = {}
+        for observation in classified_observations:
+            value_periods.setdefault(_canonical_value(observation.value_text), set()).add(
+                _temporal_signature(observation.temporal_anchor)
+                if observation.temporal_anchor
+                else None
+            )
+        temporal_relationship_complete = bool(value_periods) and all(
+            None not in periods and len(periods) == 1 for periods in value_periods.values()
+        )
+        distinct_temporal = {
+            next(iter(periods))
+            for periods in value_periods.values()
+            if None not in periods and len(periods) == 1
+        }
+        explicit_conflict = _has_explicit_conflict(
+            evidence,
+            claim.metric,
+            classified_observations,
+        )
         unresolved_references = len(evidence) != len(references)
         missing_quotes = any(not item.quote_found for item in evidence)
         unmatched_assertions = any(not item.assertion_found for item in evidence)
@@ -661,9 +715,9 @@ class EvidenceVerifier:
         elif len(distinct_values) >= 2:
             if explicit_conflict:
                 status = ClaimStatus.CONFLICT
-            elif temporal_count == len(authorized) and len(distinct_temporal) == len(authorized):
+            elif temporal_relationship_complete and len(distinct_temporal) == len(distinct_values):
                 status = ClaimStatus.DATE_VARIANT
-            elif temporal_count == len(authorized) and len(distinct_temporal) == 1:
+            elif temporal_relationship_complete and len(distinct_temporal) == 1:
                 status = ClaimStatus.CONFLICT
             else:
                 status = ClaimStatus.POSSIBLE_CONFLICT
@@ -676,7 +730,7 @@ class EvidenceVerifier:
             status = ClaimStatus.UNVERIFIED
 
         return VerifiedClaim(
-            statement=_authoritative_statement(claim.metric, status, authorized),
+            statement=_authoritative_statement(claim.metric, status, classified_observations),
             metric=claim.metric,
             status=status,
             observations=claim.observations,

@@ -5,7 +5,11 @@ import threading
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from needleproof_api.absence import derive_absence_conclusion, probe_metric_absence
+from needleproof_api.absence import (
+    _metric_context_numeric_candidates,
+    derive_absence_conclusion,
+    probe_metric_absence,
+)
 from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.models import (
@@ -13,6 +17,7 @@ from needleproof_api.models import (
     ChunkRecord,
     ClaimStatus,
     DraftClaim,
+    MetricOccurrence,
     SearchHit,
     SearchResult,
 )
@@ -219,6 +224,10 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
     "sentence",
     [
         "$2 million in revenue.",
+        "The company reported $2 million revenue.",
+        "The company reported $2 million — revenue.",
+        "The company reported $2 million: revenue.",
+        "The company reported $2 million, revenue.",
         "The company reported $2 million of revenue.",
         "At year end, $2 million in revenue was recorded.",
     ],
@@ -280,6 +289,30 @@ async def test_value_before_metric_prevents_authoritative_absence(sentence):
     assert probe.supporting_value_candidates
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@given(
+    separator=st.sampled_from([" ", "  ", " , ", " ; ", " : ", " - ", " – ", " — "]),
+    leading_words=st.lists(
+        st.sampled_from(["the", "company", "reported", "approximately"]),
+        min_size=0,
+        max_size=4,
+    ),
+)
+def test_bounded_value_first_separator_family_is_always_reviewable(
+    separator,
+    leading_words,
+):
+    prefix = f"{' '.join(leading_words)} " if leading_words else ""
+    sentence = f"{prefix}$2 million{separator}Revenue."
+    metric_start = sentence.index("Revenue")
+    occurrence = MetricOccurrence(
+        chunk_id=chunk_id_from_uint64(2**63 + 22),
+        sentence=sentence,
+        span=(metric_start, metric_start + len("Revenue")),
+    )
+
+    assert _metric_context_numeric_candidates(occurrence)
 
 
 @pytest.mark.asyncio

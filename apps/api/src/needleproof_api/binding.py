@@ -131,7 +131,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v7-value-consistent-anaphora",
+    "version": "positive-bindings-v8-closed-numeric-followup",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -147,6 +147,9 @@ BINDING_CONTRACT_SPEC = {
         "must_equal_selected_canonical_numeric_signature_unless_a_new_temporal_lead_is_bound"
     ),
     "immediate_following_anaphoric_pattern": _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
+    "separate_numeric_followup": (
+        "anaphoric_connector_then_immediate_measurement_then_optional_temporal_tail"
+    ),
     "anaphoric_numeric_temporal_tail_pattern": _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.pattern,
     "anaphoric_temporal_lead_prefix_pattern": _ANAPHORIC_TEMPORAL_LEAD_PREFIX.pattern,
     "before_metric_temporal_gap_pattern": _BEFORE_METRIC_TEMPORAL_GAP.pattern,
@@ -266,6 +269,23 @@ def numeric_value_candidates(text: str) -> tuple[tuple[str, Span], ...]:
     return tuple(
         (match.group().strip(), (match.start(), match.end())) for match in _NUMERIC.finditer(text)
     )
+
+
+def has_positive_anaphoric_numeric_followup(text: str) -> bool:
+    """Prove a closed numeric follow-up instead of accepting any later digits."""
+
+    normalized = normalize_evidence_text(text)[0].casefold()
+    relationship = re.match(_IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN, normalized, re.IGNORECASE)
+    if relationship is None:
+        return False
+    candidates = numeric_value_candidates(normalized)
+    if not candidates:
+        return False
+    _value, span = candidates[0]
+    if normalized[relationship.end() : span[0]].strip():
+        return False
+    tail = normalized[span[1] :].rstrip(".!? ")
+    return bool(_ANAPHORIC_NUMERIC_TEMPORAL_TAIL.fullmatch(tail))
 
 
 def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:

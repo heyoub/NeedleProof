@@ -42,9 +42,14 @@ after a partial or ambiguous metric phrase.
 
 The selected assertion must preserve its structural boundary inside the exact quotation. A direct
 metric subject cannot be cropped out of a preceding word-level prefix, and a cropped tail must begin
-at punctuation. Therefore a draft cannot turn `Forecast revenue was $2 million` into a clean
-reported level merely by submitting `revenue was $2 million` as its assertion. Comma-separated
-commentary remains outside the atomic assertion but inside the exact quote and receipt.
+at a terminal boundary or one named comma-commentary/coordination shape. Therefore a draft cannot
+turn `Forecast revenue was $2 million` or `Revenue was $2 million, a forecast for next year` into a
+clean reported level by cropping the role qualifier. Authorized comparative commentary remains
+outside the atomic assertion but inside the exact quote and receipt. An immediately following
+nonnumeric anaphoric sentence is also role context and cannot be cropped; a closed numeric followup
+remains a separate observation candidate only when a recognized anaphoric reporting connector is
+followed immediately by a measurement and an optional temporal tail. Unrelated digits such as a
+forecast year do not make cropped role context safe.
 
 This inversion is the core safety property:
 
@@ -62,11 +67,14 @@ open-ended conjunction, noun, or financial-verb blacklist.
 The server derives `verified`, `conflict`, `date_variant`, `possible_conflict`, and `unverified`
 from the verified observation set. The model does not propose those statuses. Distinct supported
 values with distinct valid temporal signatures become date variants; equivalent quarter, year, and
-month spellings are canonicalized before comparison. Values tied to one common period or explicitly
+month spellings are canonicalized before comparison. Repeated canonical kind/value/period
+observations are deduplicated for classification and authoritative prose while remaining visible in
+the receipt. Values tied to one common period or explicitly
 characterized by the source as incompatible become conflicts. Explicit conflict is itself a closed
 positive profile: the canonical metric, conflict relationship, and two distinct compatible
 measurements must occur in the same local sentence. A direct bridge must sit immediately between
-the two values; a collective characterization must immediately follow two authorized values and
+the two values, and both bridged values must belong to the authorized disputed observation set; a
+collective characterization must immediately follow two authorized values and
 end the sentence. Merely finding a word such as `incompatible` elsewhere in the enclosing
 quotation proves nothing. Recognized same-metric conflict evidence
 prevents a lone reported value from becoming authoritative, regardless of the model-supplied
@@ -80,7 +88,8 @@ complete normalized metric. The exhaustive scan has no top-k cutoff and is filte
 same complete-word matcher used by verification. The protocol records both result sets, opens every
 unique candidate, and inspects a fixed 384-character window on both sides of every complete metric
 occurrence. Values before the metric require a closed `VALUE in/of METRIC` bridge; forward values
-remain conservatively reviewable. This does not attempt sentence parsing, so punctuation inside abbreviations such as
+or immediate `VALUE METRIC` adjacency, including bounded comma/colon/dash separators; forward values remain conservatively reviewable. This does
+not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
