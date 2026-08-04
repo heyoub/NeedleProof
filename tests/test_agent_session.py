@@ -35,7 +35,16 @@ async def test_investigation_purges_and_closes_its_private_agent_session(tmp_pat
             if False:
                 yield None
 
+    class FakeOpenAI:
+        def __init__(self, *, max_retries, timeout):
+            assert max_retries == 0
+            assert timeout == 30.0
+
+        async def close(self):
+            calls.append("openai-close")
+
     monkeypatch.setattr(agent_module, "AsyncSQLiteSession", FakeSession)
+    monkeypatch.setattr(agent_module, "AsyncOpenAI", FakeOpenAI)
     monkeypatch.setattr(
         agent_module.Runner,
         "run_streamed",
@@ -51,7 +60,7 @@ async def test_investigation_purges_and_closes_its_private_agent_session(tmp_pat
 
     await investigate("What is the metric?", context=context, session_id="private-session")
 
-    assert calls == ["clear", "close"]
+    assert calls == ["clear", "close", "openai-close"]
 
 
 @pytest.mark.asyncio
