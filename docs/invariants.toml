@@ -45,6 +45,7 @@ tests = [
   "test_open_anaphoric_continuation_extends_into_linked_chunk",
   "test_metric_at_chunk_end_follows_linked_anaphoric_value",
   "test_second_same_chunk_anaphor_makes_absence_incomplete",
+  "test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing",
 ]
 
 [[invariant]]

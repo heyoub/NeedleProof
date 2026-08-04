@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v17-complete-anaphoric-chain-identity"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v18-total-anaphoric-boundary-states"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -382,18 +382,19 @@ def _metric_occurrence_with_open_neighbors(
                 after,
                 remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
             )
-            if not anaphoric_boundaries and chunk.next_chunk_id is not None:
+            if anaphoric_boundaries:
+                if _ANAPHORIC_SENTENCE_LEAD.match(remainder[anaphoric_boundaries[0][1] :]):
+                    # One anaphoric continuation is the maximum supported proof
+                    # profile. A second coreferential sentence may still own a
+                    # value for the metric, so excluding it cannot prove absence.
+                    complete = False
+            elif chunk.next_chunk_id is not None:
                 following_fragment, following_complete = _linked_following_fragment(
                     chunk,
                     chunks_by_id,
                 )
                 after = _join_source_fragments(after, following_fragment)
                 complete = complete and following_complete
-            elif _ANAPHORIC_SENTENCE_LEAD.match(remainder[anaphoric_boundaries[0][1] :]):
-                # One anaphoric continuation is the maximum supported proof
-                # profile. A second coreferential sentence may still own a
-                # value for the metric, so excluding it cannot prove absence.
-                complete = False
         elif not remainder.strip() and chunk.next_chunk_id is not None:
             following = chunks_by_id.get(chunk.next_chunk_id)
             if following is None:

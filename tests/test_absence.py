@@ -810,6 +810,60 @@ async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Fee-earning AUM. It was $82 billion",
+        "Fee-earning AUM. They were $82 billion",
+        "Fee-earning AUM. These figures were $82 billion",
+        "Fee-earning AUM. Those values were $82 billion",
+    ],
+)
+async def test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing(text):
+    chunk_id = chunk_id_from_uint64(2**63 + 46)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_terminal_anaphor",
+        document_name="Terminal anaphor fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="b" * 64,
+        token_estimate=8,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000046"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del query, recorder, top_k
+            return SearchResult(
+                query="Fee-earning AUM",
+                mode=mode,
+                corpus_manifest_sha256="c" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Fee-earning AUM"
+            return exact_scan(chunk)
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Fee-earning AUM")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    )
+
+
+@pytest.mark.asyncio
 async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
     answer_id = chunk_id_from_uint64(2**63 + 500)
     answer = ChunkRecord(
