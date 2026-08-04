@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v13-canonical-initialisms",
+    "version": "positive-bindings-v14-kind-preserving-initialisms",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -174,7 +174,7 @@ BINDING_CONTRACT_SPEC = {
     "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
     "metric_phrase_separator_policy": (
-        "shared_span_preserving_tokens_with_dotted_initialisms_and_bounded_formatting"
+        "shared_span_preserving_kind_aware_tokens_with_compact_dotted_initialism_equivalence"
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
     "explicit_qualitative_negation_pattern": _EXPLICIT_QUALITATIVE_NEGATION.pattern,
@@ -265,7 +265,9 @@ def canonical_word_phrase(value: str) -> str:
 
 
 def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
-    expected = metric_tokens(needle)
+    # Callers may supply a raw PDF metric anchor; the corpus-side haystack is
+    # already normalized and its offsets must remain in that source space.
+    expected = metric_tokens(normalize_evidence_text(needle)[0])
     observed = metric_tokens(haystack)
     if not expected:
         return []
@@ -273,7 +275,7 @@ def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
     spans = []
     for index in range(len(observed) - width + 1):
         window = observed[index : index + width]
-        if [token.value for token in window] != [token.value for token in expected]:
+        if [token.identity for token in window] != [token.identity for token in expected]:
             continue
         if all(
             _INTRA_PHRASE_FORMATTING.fullmatch(haystack[left.end : right.start])
@@ -331,8 +333,11 @@ def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
     must prevent an authoritative absence conclusion even though no numeric candidate exists.
     """
 
-    normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
-    normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
+    # Preserve source orthography until metric-token classification. Case-folding
+    # here would collapse ``IT`` into the ordinary pronoun ``It`` before the
+    # kind-preserving identity law can run.
+    normalized_assertion = normalize_evidence_text(assertion)[0]
+    normalized_metric = normalize_evidence_text(metric_anchor)[0]
     for metric_start, end in word_phrase_spans(normalized_metric, normalized_assertion):
         if _PRE_METRIC_QUALITATIVE_STATE.search(normalized_assertion[:metric_start]):
             return True
@@ -539,8 +544,10 @@ def bind_observation(
     temporal_anchor: str | None,
     assertion: str,
 ) -> BindingResult:
-    normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
-    normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
+    # Metric identity is case-insensitive *within* a token kind. Preserve the
+    # source spelling long enough to distinguish compact initialisms from words.
+    normalized_assertion = normalize_evidence_text(assertion)[0]
+    normalized_metric = normalize_evidence_text(metric_anchor)[0]
     normalized_value = normalize_evidence_text(value_text)[0].casefold()
     normalized_temporal = (
         normalize_evidence_text(temporal_anchor)[0].casefold() if temporal_anchor else None

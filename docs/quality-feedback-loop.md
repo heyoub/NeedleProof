@@ -53,3 +53,8 @@ Current regression families include:
 
 The goal is cumulative: every real failure should permanently narrow the space in which the same
 class of bug can return.
+
+Review-derived invariants and explicit limitations are adjudicated in
+[`invariants.toml`](./invariants.toml). A P0/P1 entry may not remain `open` when a pull request is
+marked ready; `invalid`, `superseded`, and `accepted_limitation` are legitimate outcomes when they
+are explicit and tested. The registry is a stopping rule, not a scoreboard for bot comment volume.

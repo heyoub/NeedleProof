@@ -101,12 +101,19 @@ async def lifespan(app: FastAPI):
     await app.state.service.reconcile_abandoned_runs()
     app.state.model_availability = ModelAvailability(settings)
     model_probe = asyncio.create_task(app.state.model_availability.refresh())
-    yield
-    await app.state.service.shutdown()
-    if not model_probe.done():
-        model_probe.cancel()
-    with suppress(asyncio.CancelledError):
-        await model_probe
+    try:
+        yield
+    finally:
+        try:
+            await app.state.service.shutdown()
+        finally:
+            if not model_probe.done():
+                model_probe.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await model_probe
+            finally:
+                await corpus.close()
 
 
 _public_demo = application_settings.public_demo

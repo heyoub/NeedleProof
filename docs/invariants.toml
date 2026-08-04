@@ -1,0 +1,63 @@
+# Machine-readable adjudication registry for review-derived authority invariants.
+# P0/P1 findings must not remain open when a pull request is marked ready.
+
+[[invariant]]
+id = "INV-METRIC-004"
+family = "metric-identity"
+severity = "P1"
+invariant = "Compact initialisms never equal ordinary words; compact and dotted initialisms remain equivalent."
+finding = "The metric IT matched the pronoun It after case folding."
+disposition = "fixed"
+owner = "binding"
+tests = [
+  "test_compact_initialism_never_binds_to_ordinary_word",
+  "test_compact_and_dotted_initialism_authorize_the_same_exact_metric",
+  "test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism",
+  "test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word",
+]
+
+[[invariant]]
+id = "INV-ABSENCE-007"
+family = "proof-completeness"
+severity = "P1"
+invariant = "Not-found authority requires complete analysis context around every exact metric occurrence."
+finding = "A bounded display excerpt could hide a later value in the same source chunk."
+disposition = "fixed"
+owner = "absence"
+tests = [
+  "test_complete_same_chunk_context_blocks_absence_beyond_display_window",
+  "test_absence_probe_handles_metric_values_split_across_chunk_edges",
+]
+
+[[invariant]]
+id = "INV-ABSENCE-008"
+family = "bounded-work"
+severity = "P2"
+invariant = "An exhaustive exact scan exceeding its breadth budget fails closed without materializing the corpus."
+finding = "A common metric could force an unbounded exact scan."
+disposition = "fixed"
+owner = "retrieval"
+tests = [
+  "test_exact_metric_scan_counts_before_materializing_too_broad_result",
+  "test_too_broad_exact_scan_is_typed_incomplete_not_absence",
+]
+
+[[invariant]]
+id = "INV-CONFLICT-009"
+family = "supported-syntax"
+severity = "P3"
+invariant = "Value-first collective conflict syntax remains unverified unless each operand has a local positive metric binding."
+finding = "A value-first collective conflict phrase is unsupported."
+disposition = "accepted_limitation"
+owner = "verification"
+tests = ["test_collective_conflict_profile_rejects_competing_subjects_and_tails"]
+
+[[invariant]]
+id = "INV-RESOURCE-002"
+family = "resource-lifecycle"
+severity = "P2"
+invariant = "The shared embedding client is closed exactly once during application shutdown."
+finding = "CorpusStore retained its lazy AsyncOpenAI client without a shutdown hook."
+disposition = "fixed"
+owner = "retrieval"
+tests = ["test_corpus_store_closes_shared_embedding_client_exactly_once"]

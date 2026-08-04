@@ -112,33 +112,37 @@ four corpus-wide ranked probes, then separately performs an exhaustive FTS phras
 complete normalized metric. Compact and dotted initialisms such as `US` and `U.S.` share one
 span-preserving token identity; the FTS narrowing query emits both SQLite token representations,
 then the exhaustive scan is filtered again by the same complete-word matcher used by verification.
-Variant generation is capped; a pathologically acronym-heavy metric falls back to a bounded-memory
-full chunk-table scan instead of allocating an exponential query. The exhaustive scan has no top-k
-cutoff. The protocol records both result sets, opens every
-unique candidate plus its source-linked immediate neighbors, and inspects a fixed 384-character
-window on both sides of every complete metric occurrence. When the local text reaches a chunk edge
-without terminal punctuation, the window continues into the loaded neighbor; a missing required
-neighbor makes the probe incomplete. A terminal sentence boundary prevents unrelated neighboring
-text from being stitched into the occurrence. Values before the metric require a closed
+Variant generation is capped; a pathologically acronym-heavy metric falls back to a full
+chunk-table scan instead of allocating an exponential query. Exact scans first count candidate
+rows and characters; a configured contract limit produces a typed incomplete result before source
+rows are materialized. The protocol records both result sets and opens every unique candidate plus
+its source-linked immediate neighbors. Proof analysis uses the complete local clause; a separate
+fixed 384-character window on both sides of every complete metric occurrence is only the receipt
+and UI excerpt. When the local clause reaches a chunk edge without terminal punctuation, analysis
+continues into the loaded neighbor; a missing required neighbor makes the probe incomplete. A
+terminal sentence boundary prevents unrelated neighboring text from being stitched into the
+occurrence. Values before the metric require a closed
 `VALUE in/of METRIC` bridge; forward values
 and immediate `VALUE METRIC` adjacency make the occurrence reviewable, including bounded
 comma/colon/dash separators and opening parentheses, brackets, braces, or quotes. Closed
 qualitative states are inspected on both sides of the complete metric phrase, with bounded plain or
 initialism qualifier tokens. This does
 not attempt sentence parsing, so punctuation inside abbreviations such as
-“U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
+“U.S.” cannot hide a metric/value candidate. Compact initialisms retain their token kind, so `IT`
+matches `I.T.` but never the pronoun `It`. Failed probes, a failed or over-broad exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
 predicate requires review. Qualitative predicate detection permits at most eight punctuation-free
 qualifier words between the exact metric and a closed positive connector, so `Credit rating for the
 period was stable` cannot authorize absence. A bare rubric or instruction mention does not by
 itself claim a value and therefore does not block the bounded conclusion. The conclusion remains
-bounded to the recorded probe and exact corpus version. Metric occurrences are inspected in a
-bounded window on both sides so value-first and metric-first source shapes both fail closed; the
-result never claims that the corpus proves
+bounded to the recorded probe and exact corpus version. Complete metric context is inspected in
+both directions so value-first and metric-first source shapes both fail closed; the result never
+claims that the corpus proves
 nonexistence. The verifier independently re-derives that conclusion from the typed search records,
-signatures, exact-scan state, candidate/opened ID coverage, and metric occurrences; it never trusts
-the producer's stored conclusion field by itself.
+signatures, exact-scan state, candidate/opened ID coverage, and metric occurrences, then rebuilds
+every complete analysis context from the run-bound corpus snapshot; it never trusts the producer's
+stored conclusion field by itself.
 
 ## Numeric integrity
 

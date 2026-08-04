@@ -12,6 +12,7 @@ from needleproof_api.absence import (
 )
 from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
+from needleproof_api.exact_scan import ExactMetricScanComplete, ExactMetricScanTooBroad
 from needleproof_api.models import (
     AbsenceConclusion,
     ChunkRecord,
@@ -26,6 +27,14 @@ from needleproof_api.service import compose_authoritative_answer
 from needleproof_api.util import canonical_metric_key, metric_fts_phrase_variants
 from needleproof_api.verification import EvidenceVerifier
 from needleproof_api.verification import _canonical_metric as verifier_metric_key
+
+
+def exact_scan(*chunks: ChunkRecord) -> ExactMetricScanComplete:
+    return ExactMetricScanComplete(
+        chunks=chunks,
+        candidate_count=len(chunks),
+        character_count=sum(len(chunk.normalized_text) for chunk in chunks),
+    )
 
 
 @pytest.mark.asyncio
@@ -100,10 +109,11 @@ async def test_bounded_absence_probe_rejects_metric_with_returned_value(corpus):
 
 
 def test_exact_metric_scan_normalizes_pdf_linebreak_dehyphenation(corpus):
-    chunks = corpus.find_exact_metric_chunks("Fee-earn-\ning AUM")
+    scan = corpus.find_exact_metric_chunks("Fee-earn-\ning AUM")
 
-    assert chunks
-    assert all(word_phrase_spans("fee earning aum", chunk.normalized_text) for chunk in chunks)
+    assert isinstance(scan, ExactMetricScanComplete)
+    assert scan.chunks
+    assert all(word_phrase_spans("Fee earning AUM", chunk.normalized_text) for chunk in scan.chunks)
 
 
 def test_metric_phrase_matching_does_not_match_inside_trauma():
@@ -169,7 +179,7 @@ def test_bare_metric_mentions_do_not_become_qualitative_predicates(assertion):
 def test_claim_and_absence_probe_share_one_metric_identity_normalizer():
     metric = "Fee-earn-\ning AUM_2026"
     expected = canonical_metric_key(metric)
-    assert expected == "fee earning aum 2026"
+    assert expected == "fee earning AUM 2026"
     assert service_metric_key(metric) == expected
     assert verifier_metric_key(metric) == expected
 
@@ -177,13 +187,20 @@ def test_claim_and_absence_probe_share_one_metric_identity_normalizer():
 def test_initialism_metric_identity_and_fts_variants_share_one_contract():
     expected = canonical_metric_key("US revenue")
 
-    assert expected == "us revenue"
+    assert expected == "US revenue"
     assert canonical_metric_key("U.S. revenue") == expected
     assert service_metric_key("U.S. revenue") == expected
     assert verifier_metric_key("U.S. revenue") == expected
     assert metric_fts_phrase_variants("US revenue") == ("us revenue", "u s revenue")
     assert metric_fts_phrase_variants("U.S. revenue") == ("us revenue", "u s revenue")
     assert metric_fts_phrase_variants("us revenue") == ("us revenue",)
+
+
+def test_initialism_and_ordinary_word_have_distinct_absence_identities_and_fts_shapes():
+    assert service_metric_key("IT") != service_metric_key("It")
+    assert verifier_metric_key("IT") != verifier_metric_key("It")
+    assert metric_fts_phrase_variants("IT") == ("it", "i t")
+    assert metric_fts_phrase_variants("It") == ("it",)
 
 
 def test_many_initialisms_fail_over_to_bounded_exhaustive_scan():
@@ -249,7 +266,7 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return [chunk]
+            return exact_scan(chunk)
 
     probe = await probe_metric_absence(Corpus(), "total headcount")
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
@@ -316,7 +333,7 @@ async def test_value_before_metric_prevents_authoritative_absence(sentence):
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return [chunk]
+            return exact_scan(chunk)
 
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "revenue")
@@ -416,7 +433,7 @@ async def test_exact_metric_with_qualitative_predicate_requires_review(sentence)
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return [chunk]
+            return exact_scan(chunk)
 
     probe = await probe_metric_absence(Corpus(), "Credit rating")
     verified = EvidenceVerifier(Corpus()).verify_claim(
@@ -453,7 +470,7 @@ async def test_failed_search_makes_absence_probe_incomplete():
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return []
+            return exact_scan()
 
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Total headcount")
@@ -529,7 +546,7 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return [metric_chunk]
+            return exact_scan(metric_chunk)
 
     probe = await probe_metric_absence(Corpus(), "Revenue")
 
@@ -603,7 +620,7 @@ async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
 
         def find_exact_metric_chunks(self, metric):
             scanned_metrics.append(metric)
-            return [answer, decoys[0]]
+            return exact_scan(answer, decoys[0])
 
     probe = await probe_metric_absence(Corpus(), "net revenue")
 
@@ -670,7 +687,7 @@ async def test_exact_metric_scan_runs_off_the_event_loop_thread():
         def find_exact_metric_chunks(self, metric):
             del metric
             scan_threads.append(threading.get_ident())
-            return []
+            return exact_scan()
 
     probe = await probe_metric_absence(Corpus(), "total headcount")
 
@@ -728,7 +745,7 @@ async def test_probe_uses_normalized_metric_and_next_sentence_binding():
 
         def find_exact_metric_chunks(self, metric):
             scanned_metrics.append(metric)
-            return [chunk]
+            return exact_scan(chunk)
 
     probe = await probe_metric_absence(Corpus(), "Fee-earn-\ning AUM")
 
@@ -778,7 +795,7 @@ async def test_abbreviated_metric_survives_absence_context_scanning(probe_metric
 
         def find_exact_metric_chunks(self, metric):
             scanned_metrics.append(metric)
-            return [chunk]
+            return exact_scan(chunk)
 
     probe = await probe_metric_absence(Corpus(), probe_metric)
 
@@ -786,3 +803,92 @@ async def test_abbreviated_metric_survives_absence_context_scanning(probe_metric
     assert scanned_metrics == [probe_metric]
     assert probe.supporting_value_candidates
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("distance", [383, 384, 385, 610])
+async def test_complete_same_chunk_context_blocks_absence_beyond_display_window(distance):
+    chunk_id = chunk_id_from_uint64(2**63 + 900 + distance)
+    metric = "Total headcount"
+    gap = " " + ("x" * (distance - 6)) + " was "
+    assert len(gap) == distance
+    text = f"{metric}{gap}500 employees."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_long_context",
+        document_name="Long context",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="7" * 64,
+        token_estimate=20,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="8" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, scanned_metric):
+            assert scanned_metric == metric
+            return exact_scan(chunk)
+
+    probe = await probe_metric_absence(Corpus(), metric)
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert probe.supporting_value_candidates
+    forged = probe.model_copy(
+        update={
+            "supporting_value_candidates": [],
+            "unresolved_predicate_occurrences": [],
+            "conclusion": AbsenceConclusion.NOT_FOUND_IN_PROBE,
+        }
+    )
+    verified = EvidenceVerifier(Corpus()).verify_claim(
+        DraftClaim(metric=metric, request_absence_probe=True),
+        absence_probe=forged,
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
+    if distance > 384:
+        assert "500" not in probe.exact_metric_occurrences[0].sentence
+
+
+@pytest.mark.asyncio
+async def test_too_broad_exact_scan_is_typed_incomplete_not_absence():
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="9" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del chunk_ids, neighbor_radius
+            return []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return ExactMetricScanTooBroad(candidate_count=1001, character_count=50_000)
+
+    probe = await probe_metric_absence(Corpus(), "rate")
+
+    assert probe.exact_metric_scan_completed is False
+    assert probe.exact_metric_scan_error == "ExactScanTooBroad"
+    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE

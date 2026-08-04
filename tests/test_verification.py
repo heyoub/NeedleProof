@@ -24,7 +24,12 @@ from needleproof_api.models import (
     VerifiedClaim,
 )
 from needleproof_api.service import compose_authoritative_answer
-from needleproof_api.util import canonical_metric_key, normalize_evidence_text
+from needleproof_api.util import (
+    canonical_metric_key,
+    metric_identity,
+    normalize_evidence_text,
+    sentence_fragments,
+)
 from needleproof_api.verification import (
     EvidenceVerifier,
     _compatible_measurements,
@@ -744,10 +749,80 @@ def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism)
     assert word_phrase_spans(dotted_metric, f"{compact_metric} was $2 million.")
 
 
+@given(
+    initialism=st.text(
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+    )
+)
+def test_changing_initialism_kind_cannot_preserve_binding_authority(initialism):
+    ordinary_word = initialism.title()
+
+    assert metric_identity(initialism) != metric_identity(ordinary_word)
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            initialism,
+            f"{ordinary_word} was $2 million.",
+        )
+        is None
+    )
+
+
 def test_initialism_normalization_does_not_cross_spaces_or_sentence_boundaries():
     assert canonical_metric_key("U. S. revenue") != canonical_metric_key("US revenue")
     assert word_phrase_spans("US revenue", "U. S. revenue was $2 million.") == []
     assert word_phrase_spans("US revenue", "US. Revenue was $2 million.") == []
+
+
+def test_sentence_boundaries_do_not_split_dotted_initialism_conflict_context():
+    text = "U.S. revenue was $2 million. The reported figures are conflicting."
+
+    assert sentence_fragments(text) == (
+        "U.S. revenue was $2 million.",
+        " The reported figures are conflicting.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("metric", "ordinary_word"),
+    [("IT", "It"), ("US", "Us"), ("IN", "In"), ("OR", "Or")],
+)
+def test_compact_initialism_never_binds_to_ordinary_word(metric, ordinary_word):
+    assertion = f"{ordinary_word} was $2 million."
+
+    assert metric_identity(metric) != metric_identity(ordinary_word)
+    assert canonical_metric_key(metric) != canonical_metric_key(ordinary_word)
+    assert not word_phrase_spans(metric, assertion)
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
+
+
+@pytest.mark.parametrize("source_metric", ["IT", "I.T."])
+def test_compact_and_dotted_initialism_authorize_the_same_exact_metric(source_metric):
+    assertion = f"{source_metric} was $2 million."
+
+    assert metric_identity("IT") == metric_identity(source_metric)
+    assert reported_value_linked_to_metric("$2 million", "IT", assertion) is not None
+
+
+def test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism():
+    sentence = "It was $2 million."
+    measurements = [
+        (signature, span)
+        for signature, span in _compatible_measurements(
+            sentence,
+            set(numeric_signature_sequence("$2 million")),
+        )
+    ]
+
+    assert (
+        _measurements_bound_to_metric(
+            sentence,
+            "IT",
+            measurements,
+            {numeric_signature_sequence("$2 million")[0]: {ObservationKind.REPORTED_LEVEL}},
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(

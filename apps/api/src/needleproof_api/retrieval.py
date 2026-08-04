@@ -23,8 +23,16 @@ from .corpus import (
     load_corpus_manifest,
     load_current_manifest,
 )
+from .exact_scan import (
+    EXACT_METRIC_SCAN_MAX_CANDIDATES,
+    EXACT_METRIC_SCAN_MAX_CHARACTERS,
+    ExactMetricScanComplete,
+    ExactMetricScanFailed,
+    ExactMetricScanOutcome,
+    ExactMetricScanTooBroad,
+)
 from .models import ChunkRecord, SearchHit, SearchResult
-from .util import canonical_metric_key, metric_fts_phrase_variants, sha256_file, utc_now_iso
+from .util import metric_fts_phrase_variants, sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
@@ -117,6 +125,13 @@ class CorpusStore:
     @property
     def manifest_sha256(self) -> str:
         return str(self.manifest["manifest_sha256"])
+
+    async def close(self) -> None:
+        """Release the lazily shared embedding client exactly once."""
+
+        client, self._openai = self._openai, None
+        if client is not None:
+            await client.close()
 
     async def embed_query(self, query: str, recorder: CallRecorder | None = None) -> np.ndarray:
         started_at = utc_now_iso()
@@ -237,7 +252,7 @@ class CorpusStore:
                 break
         return output
 
-    def find_exact_metric_chunks(self, metric: str) -> list[ChunkRecord]:
+    def find_exact_metric_chunks(self, metric: str) -> ExactMetricScanOutcome:
         """Return every chunk containing the complete normalized metric phrase.
 
         This is an exhaustive corpus primitive for bounded absence, not a ranked
@@ -246,33 +261,58 @@ class CorpusStore:
         conclusion.
         """
 
-        metric_key = canonical_metric_key(metric)
         phrases = metric_fts_phrase_variants(metric)
         if phrases == ():
-            return []
-        with closing(sqlite3.connect(self.db_path)) as connection:
-            if phrases is None:
-                rows = connection.execute(
-                    "SELECT chunk_external_id FROM chunks ORDER BY internal_id"
-                ).fetchall()
-            else:
-                fts_query = " OR ".join(
-                    f'"{phrase.replace(chr(34), chr(34) * 2)}"' for phrase in phrases
-                )
-                rows = connection.execute(
-                    """
-                    SELECT chunk_external_id
-                    FROM chunks_fts
-                    WHERE chunks_fts MATCH ?
-                    ORDER BY rowid
-                    """,
-                    (fts_query,),
-                ).fetchall()
-        return [
+            return ExactMetricScanComplete((), 0, 0)
+        try:
+            with closing(sqlite3.connect(self.db_path)) as connection:
+                if phrases is None:
+                    candidate_count, character_count = connection.execute(
+                        "SELECT COUNT(*), COALESCE(SUM(length(normalized_text)), 0) FROM chunks"
+                    ).fetchone()
+                    query: tuple[str, tuple[str, ...]] | None = None
+                else:
+                    fts_query = " OR ".join(
+                        f'"{phrase.replace(chr(34), chr(34) * 2)}"' for phrase in phrases
+                    )
+                    candidate_count, character_count = connection.execute(
+                        """
+                        SELECT COUNT(*), COALESCE(SUM(length(text)), 0)
+                        FROM chunks_fts
+                        WHERE chunks_fts MATCH ?
+                        """,
+                        (fts_query,),
+                    ).fetchone()
+                    query = (fts_query, phrases)
+                candidate_count = int(candidate_count)
+                character_count = int(character_count)
+                if (
+                    candidate_count > EXACT_METRIC_SCAN_MAX_CANDIDATES
+                    or character_count > EXACT_METRIC_SCAN_MAX_CHARACTERS
+                ):
+                    return ExactMetricScanTooBroad(candidate_count, character_count)
+                if query is None:
+                    rows = connection.execute(
+                        "SELECT chunk_external_id FROM chunks ORDER BY internal_id"
+                    ).fetchall()
+                else:
+                    rows = connection.execute(
+                        """
+                        SELECT chunk_external_id
+                        FROM chunks_fts
+                        WHERE chunks_fts MATCH ?
+                        ORDER BY rowid
+                        """,
+                        (query[0],),
+                    ).fetchall()
+        except sqlite3.Error as error:
+            return ExactMetricScanFailed(type(error).__name__)
+        chunks = tuple(
             chunk
             for chunk in self.get_chunks([row[0] for row in rows])
-            if word_phrase_spans(metric_key, chunk.normalized_text)
-        ]
+            if word_phrase_spans(metric, chunk.normalized_text)
+        )
+        return ExactMetricScanComplete(chunks, candidate_count, character_count)
 
     async def search(
         self,

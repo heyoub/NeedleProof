@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol, TypeAlias
 
-from .absence import derive_absence_conclusion
+from .absence import derive_absence_conclusion_against_corpus
 from .binding import (
     BINDING_CONTRACT_SHA256,
     BindingMatch,
@@ -38,7 +38,12 @@ from .models import (
     VerifiedClaim,
     VerifiedEvidence,
 )
-from .util import canonical_metric_key, evidence_text_contains, normalize_evidence_text
+from .util import (
+    canonical_metric_key,
+    evidence_text_contains,
+    normalize_evidence_text,
+    sentence_fragments,
+)
 
 _WORD = re.compile(r"[^\W_]+")
 ConflictValue: TypeAlias = NumericSignature | str
@@ -655,9 +660,9 @@ def _has_explicit_conflict(
             and _canonical_metric(item.metric_anchor) == _canonical_metric(metric)
         ):
             continue
-        for sentence in re.split(r"(?<=[.!?])\s+", item.normalized_quote.casefold()):
+        for sentence in sentence_fragments(item.normalized_quote):
             relation = _BOUND_CONFLICT_RELATION.search(sentence)
-            if not relation or not _word_phrase_found(metric, sentence):
+            if not relation or not word_phrase_spans(metric, sentence):
                 continue
             numeric_measurements = _compatible_measurements(
                 sentence,
@@ -753,7 +758,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v28-canonical-metric-initialisms"
+    version = "deterministic-verifier-v29-kind-preserving-metric-identity"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -832,9 +837,8 @@ class EvidenceVerifier:
                 reference.exact_assertion,
                 reference.exact_quote,
             )
-            metric_anchor_found = _word_phrase_found(
-                reference.metric_anchor,
-                reference.exact_assertion,
+            metric_anchor_found = bool(
+                word_phrase_spans(reference.metric_anchor, reference.exact_assertion)
             )
             binding = None
             value_text_found = False
@@ -869,9 +873,7 @@ class EvidenceVerifier:
                     assertion_found = False
                     failure_reason = "quote_not_bound_to_chunk_context"
             elif observation is None and metric_anchor_found:
-                normalized_assertion = normalize_evidence_text(reference.exact_assertion)[
-                    0
-                ].casefold()
+                normalized_assertion = normalize_evidence_text(reference.exact_assertion)[0]
                 metric_spans = word_phrase_spans(reference.metric_anchor, normalized_assertion)
                 boundary_valid = any(
                     _fragment_respects_context_boundaries(
@@ -1024,7 +1026,8 @@ class EvidenceVerifier:
                 absence_probe
                 and _canonical_metric(absence_probe.metric) == _canonical_metric(claim.metric)
                 and absence_probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
-                and derive_absence_conclusion(absence_probe) == AbsenceConclusion.NOT_FOUND_IN_PROBE
+                and derive_absence_conclusion_against_corpus(absence_probe, self.corpus)
+                == AbsenceConclusion.NOT_FOUND_IN_PROBE
             ):
                 status = ClaimStatus.NOT_FOUND
                 notes.append(

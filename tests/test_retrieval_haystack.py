@@ -14,6 +14,7 @@ from needleproof_api.absence import probe_metric_absence
 from needleproof_api.binding import word_phrase_spans
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
+from needleproof_api.exact_scan import ExactMetricScanComplete, ExactMetricScanTooBroad
 from needleproof_api.models import AbsenceConclusion
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.util import normalize_evidence_text
@@ -117,16 +118,38 @@ def matching_chunk_ids(store: CorpusStore, passage: str) -> set[str]:
         }
 
 
+@pytest.mark.asyncio
+async def test_corpus_store_closes_shared_embedding_client_exactly_once():
+    close_calls = 0
+
+    class Client:
+        async def close(self):
+            nonlocal close_calls
+            close_calls += 1
+
+    store = object.__new__(CorpusStore)
+    store._openai = Client()  # type: ignore[assignment]
+
+    await store.close()
+    await store.close()
+
+    assert close_calls == 1
+    assert store._openai is None
+
+
 def test_exact_metric_scan_is_exhaustive_and_phrase_bound(haystack_store):
     store = haystack_store
     expected = matching_chunk_ids(store, "Fee-related earnings were $345 million")
     assert expected
 
-    chunks = store.find_exact_metric_chunks("Fee-related earnings")
-    returned = {chunk.chunk_id for chunk in chunks}
+    scan = store.find_exact_metric_chunks("Fee-related earnings")
+    assert isinstance(scan, ExactMetricScanComplete)
+    returned = {chunk.chunk_id for chunk in scan.chunks}
 
     assert expected <= returned
-    assert all(word_phrase_spans("fee related earnings", chunk.normalized_text) for chunk in chunks)
+    assert all(
+        word_phrase_spans("Fee related earnings", chunk.normalized_text) for chunk in scan.chunks
+    )
 
 
 def test_exact_metric_scan_fallback_remains_exhaustive_and_phrase_bound(
@@ -137,11 +160,33 @@ def test_exact_metric_scan_fallback_remains_exhaustive_and_phrase_bound(
     assert expected
     monkeypatch.setattr(retrieval_module, "metric_fts_phrase_variants", lambda _metric: None)
 
-    chunks = haystack_store.find_exact_metric_chunks("US revenue")
-    returned = {chunk.chunk_id for chunk in chunks}
+    scan = haystack_store.find_exact_metric_chunks("US revenue")
+    assert isinstance(scan, ExactMetricScanComplete)
+    returned = {chunk.chunk_id for chunk in scan.chunks}
 
     assert expected <= returned
-    assert all(word_phrase_spans("US revenue", chunk.normalized_text) for chunk in chunks)
+    assert all(word_phrase_spans("US revenue", chunk.normalized_text) for chunk in scan.chunks)
+
+
+def test_exact_metric_scan_counts_before_materializing_too_broad_result(
+    haystack_store,
+    monkeypatch,
+):
+    monkeypatch.setattr(retrieval_module, "EXACT_METRIC_SCAN_MAX_CANDIDATES", 1)
+
+    scan = haystack_store.find_exact_metric_chunks("revenue")
+
+    assert isinstance(scan, ExactMetricScanTooBroad)
+    assert scan.candidate_count > 1
+
+
+def test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word(
+    haystack_store,
+):
+    scan = haystack_store.find_exact_metric_chunks("IT")
+
+    assert isinstance(scan, ExactMetricScanComplete)
+    assert all(word_phrase_spans("IT", chunk.normalized_text) for chunk in scan.chunks)
 
 
 @pytest.mark.asyncio

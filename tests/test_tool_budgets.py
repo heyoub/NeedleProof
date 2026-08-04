@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from needleproof_api.agent import InvestigationContext, build_agent
 from needleproof_api.config import Settings
+from needleproof_api.exact_scan import ExactMetricScanComplete
 from needleproof_api.models import ClaimStatus, DraftClaim, SearchHit, SearchResult
 from needleproof_api.verification import EvidenceVerifier
 from pydantic import ValidationError
@@ -152,7 +153,9 @@ def test_scoped_searches_do_not_authorize_corpus_wide_not_found(corpus):
 
 def test_search_diagnostics_normalize_line_broken_metric(corpus):
     state = context(Settings(max_searches=4), corpus)
-    chunk = corpus.find_exact_metric_chunks("Fee-related earnings")[0]
+    scan = corpus.find_exact_metric_chunks("Fee-related earnings")
+    assert isinstance(scan, ExactMetricScanComplete)
+    chunk = scan.chunks[0]
     arguments = search_arguments("fee related earnings")
     arguments["metric"] = "Fee-related   earn-\nings"
     state.complete_search(

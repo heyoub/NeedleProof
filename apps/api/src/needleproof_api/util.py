@@ -9,6 +9,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,11 @@ _METRIC_TOKEN = re.compile(
 MAX_METRIC_FTS_VARIANTS = 64
 
 
+class MetricTokenKind(StrEnum):
+    WORD = "word"
+    INITIALISM = "initialism"
+
+
 @dataclass(frozen=True, slots=True)
 class MetricToken:
     """One canonical metric token with its exact source span."""
@@ -83,26 +89,108 @@ class MetricToken:
     value: str
     start: int
     end: int
-    is_initialism: bool
+    kind: MetricTokenKind
+
+    @property
+    def is_initialism(self) -> bool:
+        return self.kind is MetricTokenKind.INITIALISM
+
+    @property
+    def identity(self) -> tuple[MetricTokenKind, str]:
+        return self.kind, self.value
+
+
+@dataclass(frozen=True, slots=True)
+class MetricIdentity:
+    """Kind-preserving metric identity; source spans never participate in equality."""
+
+    lexemes: tuple[tuple[MetricTokenKind, str], ...]
+
+    @property
+    def canonical_key(self) -> str:
+        # Uppercase is a stable wire representation of INITIALISM, not the
+        # authority-bearing comparison law. Internal equality uses ``lexemes``.
+        return " ".join(
+            value.upper() if kind is MetricTokenKind.INITIALISM else value
+            for kind, value in self.lexemes
+        )
 
 
 def metric_tokens(value: str) -> tuple[MetricToken, ...]:
-    """Tokenize metric text while treating dotted initialisms as one word."""
+    """Tokenize metric text without collapsing initialisms into ordinary words."""
 
     tokens = []
     for match in _METRIC_TOKEN.finditer(value):
         raw = match.group()
-        is_initialism = match.lastgroup == "initialism"
-        canonical = raw.replace(".", "") if is_initialism else raw
+        dotted_initialism = match.lastgroup == "initialism"
+        compact_initialism = (
+            not dotted_initialism
+            and 2 <= len(raw) <= 8
+            and raw.isalpha()
+            and raw.upper() == raw
+            and raw.lower() != raw
+        )
+        kind = (
+            MetricTokenKind.INITIALISM
+            if dotted_initialism or compact_initialism
+            else MetricTokenKind.WORD
+        )
+        canonical = raw.replace(".", "") if dotted_initialism else raw
         tokens.append(
             MetricToken(
                 value=canonical.casefold(),
                 start=match.start(),
                 end=match.end(),
-                is_initialism=is_initialism,
+                kind=kind,
             )
         )
     return tuple(tokens)
+
+
+def metric_identity(value: str) -> MetricIdentity:
+    """Return the kind-preserving identity shared by every authority boundary."""
+
+    normalized, _ = normalize_evidence_text(value)
+    return MetricIdentity(tuple(token.identity for token in metric_tokens(normalized)))
+
+
+def punctuation_boundaries(
+    text: str,
+    *,
+    punctuation: frozenset[str] = frozenset(".!?;"),
+) -> tuple[tuple[int, int], ...]:
+    """Return punctuation spans without splitting inside dotted initialisms."""
+
+    initialism_periods = {
+        offset
+        for token in metric_tokens(text)
+        if token.is_initialism
+        for offset in range(token.start, token.end)
+        if text[offset] == "."
+    }
+    return tuple(
+        (offset, offset + 1)
+        for offset, character in enumerate(text)
+        if character in punctuation
+        and offset not in initialism_periods
+        and (character != "." or offset + 1 == len(text) or text[offset + 1].isspace())
+    )
+
+
+def sentence_fragments(text: str) -> tuple[str, ...]:
+    """Split terminal sentences under the same dotted-initialism boundary law."""
+
+    boundaries = punctuation_boundaries(text, punctuation=frozenset(".!?"))
+    if not boundaries:
+        return (text,)
+    fragments = []
+    start = 0
+    for _boundary_start, boundary_end in boundaries:
+        fragments.append(text[start:boundary_end])
+        start = boundary_end
+    if start < len(text):
+        fragments.append(text[start:])
+    return tuple(fragment for fragment in fragments if fragment.strip())
 
 
 def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
@@ -120,10 +208,9 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
 
 
 def canonical_metric_key(value: str) -> str:
-    """Return one normalized complete-word key for claim/probe identity."""
+    """Serialize the shared typed identity for receipts, signatures, and map keys."""
 
-    normalized, _ = normalize_evidence_text(value)
-    return " ".join(token.value for token in metric_tokens(normalized))
+    return metric_identity(value).canonical_key
 
 
 def metric_fts_phrase_variants(
@@ -142,11 +229,7 @@ def metric_fts_phrase_variants(
     alternatives: list[tuple[str, ...]] = []
     variant_count = 1
     for token in metric_tokens(normalized):
-        raw = normalized[token.start : token.end]
-        looks_compact_initialism = (
-            2 <= len(token.value) <= 8 and raw.isalpha() and raw.upper() == raw
-        )
-        if token.is_initialism or looks_compact_initialism:
+        if token.is_initialism:
             alternatives.append((token.value, " ".join(token.value)))
             variant_count *= 2
         else:

@@ -44,7 +44,6 @@ from .receipt import RunLedger
 from .retrieval import CorpusStore
 from .util import (
     canonical_json,
-    canonical_metric_key,
     normalize_evidence_text,
     sha256_text,
     utc_now_iso,
@@ -207,7 +206,7 @@ class InvestigationContext:
             exact_metric_hit_count=sum(
                 bool(
                     word_phrase_spans(
-                        canonical_metric_key(arguments["metric"]),
+                        arguments["metric"],
                         chunk.normalized_text,
                     )
                 )

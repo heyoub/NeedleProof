@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from .binding import (
@@ -11,6 +12,14 @@ from .binding import (
     word_phrase_spans,
 )
 from .chunk_ids import ChunkId
+from .exact_scan import (
+    EXACT_METRIC_SCAN_MAX_CANDIDATES,
+    EXACT_METRIC_SCAN_MAX_CHARACTERS,
+    ExactMetricScanComplete,
+    ExactMetricScanFailed,
+    ExactMetricScanOutcome,
+    ExactMetricScanTooBroad,
+)
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
@@ -20,9 +29,15 @@ from .models import (
     SearchResult,
     ValueCandidate,
 )
-from .util import MAX_METRIC_FTS_VARIANTS, canonical_json, canonical_metric_key, sha256_text
+from .util import (
+    MAX_METRIC_FTS_VARIANTS,
+    canonical_json,
+    canonical_metric_key,
+    punctuation_boundaries,
+    sha256_text,
+)
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v13-canonical-initialisms"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v14-complete-context"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -49,6 +64,9 @@ ABSENCE_PROTOCOL_SPEC = {
         "post_filter": "shared_complete_word_phrase_with_canonical_initialisms",
         "initialism_variant_cap": MAX_METRIC_FTS_VARIANTS,
         "variant_overflow": "full_sqlite_chunk_scan",
+        "maximum_candidates": EXACT_METRIC_SCAN_MAX_CANDIDATES,
+        "maximum_characters": EXACT_METRIC_SCAN_MAX_CHARACTERS,
+        "breadth_limit": "typed_incomplete_probe",
         "failure": "incomplete_probe",
     },
     "requires_all_unique_candidates_opened": True,
@@ -61,9 +79,8 @@ ABSENCE_PROTOCOL_SPEC = {
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
-    "metric_context_policy": (
-        "bidirectional_window_around_complete_metric_with_open_edge_neighbors"
-    ),
+    "metric_context_policy": "complete_clause_analysis_with_bounded_display_excerpt",
+    "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
     "neighbor_radius": 1,
     "cross_chunk_context": "source_linked_neighbor_only_when_local_clause_edge_is_open",
     "conclusion": "bounded_not_global",
@@ -89,7 +106,15 @@ class AbsenceCorpus(Protocol):
         neighbor_radius: int = 0,
     ) -> list[ChunkRecord]: ...
 
-    def find_exact_metric_chunks(self, metric: str) -> list[ChunkRecord]: ...
+    def find_exact_metric_chunks(self, metric: str) -> ExactMetricScanOutcome: ...
+
+
+class AbsenceContextCorpus(Protocol):
+    def get_chunks(
+        self,
+        chunk_ids: list[ChunkId],
+        neighbor_radius: int = 0,
+    ) -> list[ChunkRecord]: ...
 
 
 def _normalized_query(value: str) -> str:
@@ -213,6 +238,56 @@ def _metric_context_numeric_candidates(
     return candidates
 
 
+def derive_absence_conclusion_against_corpus(
+    probe: AbsenceProbeResult,
+    corpus: AbsenceContextCorpus,
+) -> AbsenceConclusion:
+    """Rebuild proof contexts from the bound corpus before authorizing absence."""
+
+    structural = derive_absence_conclusion(probe)
+    if structural is not AbsenceConclusion.NOT_FOUND_IN_PROBE:
+        return structural
+    # ``opened_chunk_ids`` already includes the neighbors selected by the probe.
+    # Expanding radius again would silently change the sealed proof set.
+    chunks = corpus.get_chunks(probe.opened_chunk_ids, 0)
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    if set(chunks_by_id) != set(probe.opened_chunk_ids):
+        return AbsenceConclusion.INCOMPLETE_PROBE
+
+    expected_occurrences: set[tuple[ChunkId, str, tuple[int, int]]] = set()
+    review_required = False
+    for chunk in chunks:
+        for metric_start, metric_end in word_phrase_spans(probe.metric, chunk.normalized_text):
+            analyzed = _metric_occurrence_with_open_neighbors(
+                chunk,
+                chunks_by_id,
+                metric_start,
+                metric_end,
+            )
+            if not analyzed.complete:
+                return AbsenceConclusion.INCOMPLETE_PROBE
+            occurrence = analyzed.display_occurrence
+            expected_occurrences.add((occurrence.chunk_id, occurrence.sentence, occurrence.span))
+            review_required = (
+                review_required
+                or has_unresolved_metric_predicate(
+                    probe.metric,
+                    analyzed.proof_occurrence.sentence,
+                )
+                or bool(_metric_context_numeric_candidates(analyzed.proof_occurrence))
+            )
+
+    recorded_occurrences = {
+        (occurrence.chunk_id, occurrence.sentence, occurrence.span)
+        for occurrence in probe.exact_metric_occurrences
+    }
+    if recorded_occurrences != expected_occurrences:
+        return AbsenceConclusion.INCOMPLETE_PROBE
+    if review_required:
+        return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    return AbsenceConclusion.NOT_FOUND_IN_PROBE
+
+
 def _join_source_fragments(left: str, right: str) -> str:
     if not left:
         return right
@@ -222,68 +297,99 @@ def _join_source_fragments(left: str, right: str) -> str:
     return f"{left}{separator}{right}"
 
 
+@dataclass(frozen=True, slots=True)
+class _AnalyzedMetricContext:
+    display_occurrence: MetricOccurrence
+    proof_occurrence: MetricOccurrence
+    complete: bool
+
+
+_ANAPHORIC_SENTENCE_LEAD = re.compile(
+    r"\s*(?:it|this|that|the\s+(?:figure|value|amount|number))\b",
+    re.IGNORECASE,
+)
+
+
 def _metric_occurrence_with_open_neighbors(
     chunk: ChunkRecord,
     chunks_by_id: Mapping[ChunkId, ChunkRecord],
     metric_start: int,
     metric_end: int,
-) -> tuple[MetricOccurrence, bool]:
-    """Build one bounded context, extending only grammatically open chunk edges."""
+) -> _AnalyzedMetricContext:
+    """Analyze a complete local clause while storing only a bounded display excerpt."""
 
-    local_before = chunk.normalized_text[
-        max(0, metric_start - ABSENCE_METRIC_CONTEXT_CHARACTERS) : metric_start
-    ]
-    local_after = chunk.normalized_text[
-        metric_end : min(
-            len(chunk.normalized_text),
-            metric_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
-        )
-    ]
-    missing_neighbor = False
+    before = chunk.normalized_text[:metric_start]
+    after = chunk.normalized_text[metric_end:]
+    complete = True
 
-    if (
-        metric_start < ABSENCE_METRIC_CONTEXT_CHARACTERS
-        and chunk.previous_chunk_id is not None
-        and not re.search(r"[.!?;]", local_before)
-    ):
+    prior_boundaries = punctuation_boundaries(before)
+    if prior_boundaries:
+        before = before[prior_boundaries[-1][1] :]
+    elif chunk.previous_chunk_id is not None:
         previous = chunks_by_id.get(chunk.previous_chunk_id)
         if previous is None:
-            missing_neighbor = True
+            complete = False
         else:
-            remaining = ABSENCE_METRIC_CONTEXT_CHARACTERS - len(local_before)
-            local_before = _join_source_fragments(
-                previous.normalized_text[-remaining:],
-                local_before,
+            previous_boundaries = punctuation_boundaries(previous.normalized_text)
+            previous_fragment = (
+                previous.normalized_text[previous_boundaries[-1][1] :]
+                if previous_boundaries
+                else previous.normalized_text
             )
+            before = _join_source_fragments(previous_fragment, before)
+            if not previous_boundaries and previous.previous_chunk_id is not None:
+                complete = False
 
-    if (
-        len(chunk.normalized_text) - metric_end < ABSENCE_METRIC_CONTEXT_CHARACTERS
-        and chunk.next_chunk_id is not None
-        and not re.search(r"[.!?;]", local_after)
-    ):
+    following_boundaries = punctuation_boundaries(after)
+    following_boundary = following_boundaries[0] if following_boundaries else None
+    if following_boundary:
+        after = after[: following_boundary[1]]
+        remainder = chunk.normalized_text[metric_end + following_boundary[1] :]
+        if _ANAPHORIC_SENTENCE_LEAD.match(remainder):
+            anaphoric_boundaries = punctuation_boundaries(remainder)
+            after = _join_source_fragments(
+                after,
+                remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
+            )
+    elif chunk.next_chunk_id is not None:
         following = chunks_by_id.get(chunk.next_chunk_id)
         if following is None:
-            missing_neighbor = True
+            complete = False
         else:
-            remaining = ABSENCE_METRIC_CONTEXT_CHARACTERS - len(local_after)
-            local_after = _join_source_fragments(
-                local_after,
-                following.normalized_text[:remaining],
+            next_boundaries = punctuation_boundaries(following.normalized_text)
+            next_boundary = next_boundaries[0] if next_boundaries else None
+            following_fragment = (
+                following.normalized_text[: next_boundary[1]]
+                if next_boundary
+                else following.normalized_text
             )
+            after = _join_source_fragments(after, following_fragment)
+            if next_boundary is None and following.next_chunk_id is not None:
+                complete = False
 
     metric_text = chunk.normalized_text[metric_start:metric_end]
-    context = _join_source_fragments(local_before, metric_text)
-    span_end = len(context)
-    span_start = span_end - len(metric_text)
-    context = _join_source_fragments(context, local_after)
-    return (
-        MetricOccurrence(
-            chunk_id=chunk.chunk_id,
-            sentence=context,
-            span=(span_start, span_end),
-        ),
-        missing_neighbor,
+    proof_context = _join_source_fragments(before, metric_text)
+    proof_span_end = len(proof_context)
+    proof_span_start = proof_span_end - len(metric_text)
+    proof_context = _join_source_fragments(proof_context, after)
+    proof_occurrence = MetricOccurrence(
+        chunk_id=chunk.chunk_id,
+        sentence=proof_context,
+        span=(proof_span_start, proof_span_end),
     )
+
+    display_start = max(0, proof_span_start - ABSENCE_METRIC_CONTEXT_CHARACTERS)
+    display_end = min(
+        len(proof_context),
+        proof_span_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
+    )
+    display_text = proof_context[display_start:display_end]
+    display_occurrence = MetricOccurrence(
+        chunk_id=chunk.chunk_id,
+        sentence=display_text,
+        span=(proof_span_start - display_start, proof_span_end - display_start),
+    )
+    return _AnalyzedMetricContext(display_occurrence, proof_occurrence, complete)
 
 
 async def probe_metric_absence(
@@ -335,9 +441,7 @@ async def probe_metric_absence(
             corpus.get_chunks,
             [hit.chunk_id for hit in result.results],
         )
-        exact_hits = sum(
-            bool(word_phrase_spans(metric_phrase, chunk.normalized_text)) for chunk in chunks
-        )
+        exact_hits = sum(bool(word_phrase_spans(metric, chunk.normalized_text)) for chunk in chunks)
         result_ids = [hit.chunk_id for hit in result.results]
         candidate_ids.extend(result_ids)
         searches.append(
@@ -360,18 +464,21 @@ async def probe_metric_absence(
     exact_metric_scan_error: str | None = None
     if metric_phrase:
         try:
-            exact_metric_chunks = await asyncio.to_thread(corpus.find_exact_metric_chunks, metric)
+            exact_scan = await asyncio.to_thread(corpus.find_exact_metric_chunks, metric)
         except Exception as error:  # noqa: BLE001 - absence fails closed on scan failure
-            exact_metric_chunks = []
-            exact_metric_scan_error = type(error).__name__
-        else:
+            exact_scan = ExactMetricScanFailed(type(error).__name__)
+        if isinstance(exact_scan, ExactMetricScanComplete):
             exact_metric_scan_completed = True
             exact_metric_scan_chunk_ids = [
                 chunk.chunk_id
-                for chunk in exact_metric_chunks
-                if word_phrase_spans(metric_phrase, chunk.normalized_text)
+                for chunk in exact_scan.chunks
+                if word_phrase_spans(metric, chunk.normalized_text)
             ]
             candidate_ids.extend(exact_metric_scan_chunk_ids)
+        elif isinstance(exact_scan, ExactMetricScanTooBroad):
+            exact_metric_scan_error = "ExactScanTooBroad"
+        else:
+            exact_metric_scan_error = exact_scan.error_type
 
     unique_ids = list(dict.fromkeys(candidate_ids))
     chunks = await asyncio.to_thread(corpus.get_chunks, unique_ids, 1)
@@ -383,18 +490,18 @@ async def probe_metric_absence(
     value_candidate_keys: set[tuple[ChunkId, str]] = set()
     missing_open_edge_neighbor = False
     for chunk in chunks:
-        for metric_start, metric_end in word_phrase_spans(metric_phrase, chunk.normalized_text):
-            occurrence, missing_neighbor = _metric_occurrence_with_open_neighbors(
+        for metric_start, metric_end in word_phrase_spans(metric, chunk.normalized_text):
+            analyzed = _metric_occurrence_with_open_neighbors(
                 chunk,
                 chunks_by_id,
                 metric_start,
                 metric_end,
             )
-            missing_open_edge_neighbor = missing_open_edge_neighbor or missing_neighbor
-            occurrences.append(occurrence)
-            if has_unresolved_metric_predicate(metric_phrase, occurrence.sentence):
-                unresolved_predicates.append(occurrence)
-            for value_text, _span in _metric_context_numeric_candidates(occurrence):
+            missing_open_edge_neighbor = missing_open_edge_neighbor or not analyzed.complete
+            occurrences.append(analyzed.display_occurrence)
+            if has_unresolved_metric_predicate(metric, analyzed.proof_occurrence.sentence):
+                unresolved_predicates.append(analyzed.display_occurrence)
+            for value_text, _span in _metric_context_numeric_candidates(analyzed.proof_occurrence):
                 candidate_key = (chunk.chunk_id, value_text)
                 if candidate_key in value_candidate_keys:
                     continue

@@ -89,7 +89,7 @@ Verification checks include:
 - metric-anchor identity plus an authorized direct/anaphoric binding profile, explicit value role, currency, magnitude, percentages, basis points, units, and span-bound temporal anchors
 - supporting evidence for every accepted value; contextual or contradicting evidence cannot authorize a claim by itself
 - locally value-bound contradiction language versus canonically equivalent or genuinely different reporting periods
-- a server-owned four-probe absence protocol plus an exhaustive complete-metric phrase scan; it opens every unique candidate, inspects a bounded window on both sides of each exact metric occurrence, independently re-derives the proof at authorization time, and refuses `not_found` when ranked retrieval is incomplete or any metric-adjacent value or bounded qualified predicate needs review
+- a server-owned four-probe absence protocol plus a breadth-limited exhaustive complete-metric phrase scan; it opens every unique candidate, analyzes the complete local clause while storing a bounded display excerpt, independently re-derives the proof at authorization time, and refuses `not_found` when retrieval is incomplete, over-broad, or any metric-adjacent value or qualified predicate needs review
 
 A rejected claim is removed from the authoritative answer. A timeout, cancellation, invalid structured response, tool failure, or rate limit seals a non-authoritative partial receipt instead.
 
