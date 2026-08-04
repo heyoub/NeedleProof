@@ -6,7 +6,11 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from needleproof_api.agent import AGENT_INSTRUCTIONS
-from needleproof_api.binding import canonical_decimal_digits
+from needleproof_api.binding import (
+    canonical_decimal_digits,
+    canonical_numeric_signature,
+    numeric_signature_sequence,
+)
 from needleproof_api.chunk_ids import ChunkId, chunk_id_from_uint64
 from needleproof_api.models import (
     ChunkRecord,
@@ -22,7 +26,9 @@ from needleproof_api.service import compose_authoritative_answer
 from needleproof_api.util import normalize_evidence_text
 from needleproof_api.verification import (
     EvidenceVerifier,
+    _compatible_measurements,
     _distinct_values,
+    _measurements_bound_to_metric,
     _temporal_anchor_is_valid,
     _temporal_signature,
     reported_value_found,
@@ -123,6 +129,7 @@ def test_direct_value_is_verified_with_diagnostic_binding(corpus):
         ("Revenue was $2 million. This was a forecast.", "Revenue was $2 million."),
         ("Revenue was $2 million. That amount was a target.", "Revenue was $2 million."),
         ("Revenue was $2 million. This was a forecast for 2026.", "Revenue was $2 million."),
+        ("Revenue was $2 million. This was a forecast for 2026.", "Revenue was $2 million"),
     ],
 )
 def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, assertion):
@@ -159,11 +166,13 @@ def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, ass
     ),
     copula=st.sampled_from(["is", "was", "remains"]),
     qualifier=st.from_regex(r"[A-Za-z]{2,18}(?: [A-Za-z]{2,18}){0,3}", fullmatch=True),
+    assertion_terminal=st.sampled_from(["", "."]),
 )
 def test_nonnumeric_anaphoric_followup_cannot_be_cropped(
     subject,
     copula,
     qualifier,
+    assertion_terminal,
 ):
     quote = f"Revenue was $2 million. {subject} {copula} {qualifier}."
     chunk = ChunkRecord(
@@ -181,7 +190,7 @@ def test_nonnumeric_anaphoric_followup_cannot_be_cropped(
         chunk.chunk_id,
         quote,
         "Revenue",
-        assertion="Revenue was $2 million.",
+        assertion=f"Revenue was $2 million{assertion_terminal}",
     )
 
     verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
@@ -1020,6 +1029,128 @@ def test_conflict_bridge_requires_both_disputed_authorized_values():
     verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
 
     assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+@pytest.mark.parametrize(
+    "context_quote",
+    [
+        "Revenue was $1 million, operating expenses were $2 million; the figures are conflicting.",
+        "Revenue was $1 million, headcount costs were $2 million; the values are incompatible.",
+    ],
+)
+def test_collective_conflict_requires_each_measurement_to_belong_to_metric(context_quote):
+    quote = f"Revenue was $1 million. Revenue was $2 million. {context_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 912),
+        document_id="doc_collective_metric_ownership",
+        document_name="Collective metric ownership fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="7" * 64,
+        token_estimate=24,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        context_quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+def test_collective_conflict_accepts_two_locally_bound_same_metric_measurements():
+    support_quote = "Revenue was $1 million. Revenue was $2 million."
+    context_quote = "Revenue was $1 million, Revenue was $2 million; the figures are conflicting."
+    quote = f"{support_quote} {context_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 913),
+        document_id="doc_collective_same_metric",
+        document_name="Collective same-metric fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="8" * 64,
+        token_estimate=21,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        context_quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+@given(
+    competing_metric=st.from_regex(
+        r"[A-Za-z]{3,14}(?: [A-Za-z]{3,14}){0,2}",
+        fullmatch=True,
+    ).filter(lambda value: "revenue" not in value.casefold())
+)
+def test_competing_metric_mutations_never_own_collective_revenue_value(competing_metric):
+    sentence = (
+        f"Revenue was $1 million, {competing_metric} was $2 million; the figures are conflicting."
+    )
+    one = canonical_numeric_signature(numeric_signature_sequence("$1 million")[0])
+    two = canonical_numeric_signature(numeric_signature_sequence("$2 million")[0])
+    measurements = _compatible_measurements(sentence, {one, two})
+
+    owned = _measurements_bound_to_metric(
+        sentence,
+        "Revenue",
+        measurements,
+        {
+            one: {ObservationKind.REPORTED_LEVEL},
+            two: {ObservationKind.REPORTED_LEVEL},
+        },
+    )
+
+    assert {signature for signature, _span in owned} == {one}
 
 
 def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():

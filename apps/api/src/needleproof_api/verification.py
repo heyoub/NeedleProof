@@ -11,6 +11,8 @@ from .absence import derive_absence_conclusion
 from .binding import (
     BINDING_CONTRACT_SHA256,
     BindingMatch,
+    NumericSignature,
+    Span,
     bind_observation,
     canonical_numeric_signature,
     has_positive_anaphoric_numeric_followup,
@@ -18,6 +20,7 @@ from .binding import (
     numeric_signature_sequence,
     numeric_signatures,
     numeric_value_candidates,
+    word_phrase_spans,
 )
 from .chunk_ids import ChunkId
 from .models import (
@@ -156,13 +159,23 @@ def _binding_respects_quote_boundaries(
             and _COMMA_ASSERTION_COMMENTARY.match(suffix) is None
         ):
             continue
-        immediate_followup = _ANAPHORIC_FOLLOWUP.match(suffix)
+        followup_suffix = suffix
+        if normalized_assertion.rstrip()[-1:] not in ".!?":
+            omitted_boundary = re.match(r"\s*[.!?]\s*", followup_suffix)
+            if omitted_boundary:
+                followup_suffix = followup_suffix[omitted_boundary.end() :]
+        immediate_followup = _ANAPHORIC_FOLLOWUP.match(followup_suffix)
         if immediate_followup:
-            followup_end = re.search(r"[.!?]", suffix[immediate_followup.end() :])
-            sentence_end = (
-                immediate_followup.end() + followup_end.start() if followup_end else len(suffix)
+            followup_end = re.search(
+                r"[.!?]",
+                followup_suffix[immediate_followup.end() :],
             )
-            if not has_positive_anaphoric_numeric_followup(suffix[:sentence_end]):
+            sentence_end = (
+                immediate_followup.end() + followup_end.start()
+                if followup_end
+                else len(followup_suffix)
+            )
+            if not has_positive_anaphoric_numeric_followup(followup_suffix[:sentence_end]):
                 continue
         return True
     return False
@@ -302,8 +315,8 @@ def _temporal_anchor_is_valid(value: str | None) -> bool:
 
 def _compatible_measurements(
     sentence: str,
-    authorized_values: set[tuple[str, str, str, str]],
-) -> list[tuple[tuple[str, str, str, str], tuple[int, int]]]:
+    authorized_values: set[NumericSignature],
+) -> list[tuple[NumericSignature, Span]]:
     measurements = []
     for value_text, span in numeric_value_candidates(sentence):
         signatures = numeric_signature_sequence(value_text)
@@ -321,8 +334,8 @@ def _compatible_measurements(
 def _relation_binds_distinct_measurements(
     sentence: str,
     relation: re.Match[str],
-    measurements: list[tuple[tuple[str, str, str, str], tuple[int, int]]],
-    authorized_values: set[tuple[str, str, str, str]],
+    measurements: list[tuple[NumericSignature, Span]],
+    authorized_values: set[NumericSignature],
 ) -> bool:
     if relation.group("bridge"):
         before = [item for item in measurements if item[1][1] <= relation.start()]
@@ -351,6 +364,38 @@ def _relation_binds_distinct_measurements(
     )
 
 
+def _measurements_bound_to_metric(
+    sentence: str,
+    metric: str,
+    measurements: list[tuple[NumericSignature, Span]],
+    observation_kinds: dict[NumericSignature, set[ObservationKind]],
+) -> list[tuple[NumericSignature, Span]]:
+    """Retain only measurements with their own local positive metric binding."""
+
+    metric_spans = word_phrase_spans(metric, sentence)
+    owned = []
+    for signature, value_span in measurements:
+        preceding_metrics = [span for span in metric_spans if span[1] <= value_span[0]]
+        if not preceding_metrics:
+            continue
+        metric_span = preceding_metrics[-1]
+        local_assertion = sentence[metric_span[0] : value_span[1]]
+        value_text = sentence[value_span[0] : value_span[1]]
+        if any(
+            bind_observation(
+                metric_anchor=metric,
+                value_text=value_text,
+                kind=kind,
+                temporal_anchor=None,
+                assertion=local_assertion,
+            ).match
+            is not None
+            for kind in observation_kinds.get(signature, set())
+        ):
+            owned.append((signature, value_span))
+    return owned
+
+
 def _has_explicit_conflict(
     evidence: Iterable[VerifiedEvidence],
     metric: str,
@@ -358,11 +403,13 @@ def _has_explicit_conflict(
 ) -> bool:
     """Recognize only source conflict language bound locally to disputed values."""
 
-    authorized_values = {
-        canonical_numeric_signature(signature)
-        for observation in observations
-        for signature in numeric_signature_sequence(observation.value_text)
-    }
+    observation_kinds: dict[NumericSignature, set[ObservationKind]] = {}
+    for observation in observations:
+        for signature in numeric_signature_sequence(observation.value_text):
+            observation_kinds.setdefault(canonical_numeric_signature(signature), set()).add(
+                observation.kind
+            )
+    authorized_values = set(observation_kinds)
     if not authorized_values:
         return False
     for item in evidence:
@@ -378,6 +425,13 @@ def _has_explicit_conflict(
             if not relation or not _word_phrase_found(metric, sentence):
                 continue
             measurements = _compatible_measurements(sentence, authorized_values)
+            if not relation.group("bridge"):
+                measurements = _measurements_bound_to_metric(
+                    sentence,
+                    metric,
+                    measurements,
+                    observation_kinds,
+                )
             if _relation_binds_distinct_measurements(
                 sentence,
                 relation,
@@ -442,7 +496,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v18-bound-followup-context"
+    version = "deterministic-verifier-v19-metric-owned-conflicts"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

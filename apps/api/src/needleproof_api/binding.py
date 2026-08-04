@@ -43,6 +43,11 @@ _ANAPHORIC_CONNECTOR = (
 _POSITIVE_ANAPHORIC_STATE = (
     r"(?:is|are|was|were)\s+(?:available|disclosed|reported|stable|stated|unchanged)"
 )
+_PRE_METRIC_QUALITATIVE_STATE = re.compile(
+    r"\b(?:available|disclosed|flat|reported|stable|stated|unchanged)"
+    r"(?:\s+[^\W\d_]+){0,3}\s+$",
+    re.IGNORECASE,
+)
 _POSITIVE_ANAPHORIC_DESCRIPTOR = (
     r"(?:is|are|was|were)\s+the\s+(?:figure|metric|number)\s+that\s+"
     r"(?:actually\s+)?matters(?:\s+for\s+[^\W\d_]+){0,4}"
@@ -131,7 +136,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v8-closed-numeric-followup",
+    "version": "positive-bindings-v9-bidirectional-qualitative-review",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -166,6 +171,8 @@ BINDING_CONTRACT_SPEC = {
         "with a nonempty predicate"
     ),
     "unresolved_qualitative_state_pattern": _QUALITATIVE_STATE.pattern,
+    "pre_metric_qualitative_state_pattern": _PRE_METRIC_QUALITATIVE_STATE.pattern,
+    "pre_metric_qualifier_limit": 3,
     "predicate_qualifier_gap_pattern": _PREDICATE_QUALIFIER_GAP.pattern,
     "unknown_syntax": "reject",
     "compound_numeric_observation": "reject",
@@ -298,7 +305,10 @@ def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
 
     normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
     normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
-    for _start, end in word_phrase_spans(normalized_metric, normalized_assertion):
+    for metric_start, end in word_phrase_spans(normalized_metric, normalized_assertion):
+        sentence_prefix = re.split(r"[.!?;]", normalized_assertion[:metric_start])[-1]
+        if _PRE_METRIC_QUALITATIVE_STATE.search(sentence_prefix):
+            return True
         suffix = normalized_assertion[end:]
         for connector in (_COPULA, _REPORTED, _COLON, _QUALITATIVE_STATE):
             for match in connector.finditer(suffix):

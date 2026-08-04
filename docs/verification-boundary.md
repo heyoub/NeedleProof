@@ -49,7 +49,8 @@ outside the atomic assertion but inside the exact quote and receipt. An immediat
 nonnumeric anaphoric sentence is also role context and cannot be cropped; a closed numeric followup
 remains a separate observation candidate only when a recognized anaphoric reporting connector is
 followed immediately by a measurement and an optional temporal tail. Unrelated digits such as a
-forecast year do not make cropped role context safe.
+forecast year do not make cropped role context safe. The same rule applies when the draft omits the
+terminal punctuation from its assertion while that punctuation remains in the exact quote.
 
 This inversion is the core safety property:
 
@@ -75,7 +76,9 @@ positive profile: the canonical metric, conflict relationship, and two distinct 
 measurements must occur in the same local sentence. A direct bridge must sit immediately between
 the two values, and both bridged values must belong to the authorized disputed observation set; a
 collective characterization must immediately follow two authorized values and
-end the sentence. Merely finding a word such as `incompatible` elsewhere in the enclosing
+end the sentence. Each collective operand must also have its own local positive binding to the
+claimed metric; a competing metric cannot lend its value to the conflict. Merely finding a word
+such as `incompatible` elsewhere in the enclosing
 quotation proves nothing. Recognized same-metric conflict evidence
 prevents a lone reported value from becoming authoritative, regardless of the model-supplied
 evidence relation. Unresolved relationships never enter authoritative prose.
@@ -88,7 +91,9 @@ complete normalized metric. The exhaustive scan has no top-k cutoff and is filte
 same complete-word matcher used by verification. The protocol records both result sets, opens every
 unique candidate, and inspects a fixed 384-character window on both sides of every complete metric
 occurrence. Values before the metric require a closed `VALUE in/of METRIC` bridge; forward values
-or immediate `VALUE METRIC` adjacency, including bounded comma/colon/dash separators; forward values remain conservatively reviewable. This does
+or immediate `VALUE METRIC` adjacency, including bounded comma/colon/dash separators and opening
+parentheses, brackets, braces, or quotes. Closed qualitative states are inspected on both sides of
+the complete metric phrase; forward values remain conservatively reviewable. This does
 not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize

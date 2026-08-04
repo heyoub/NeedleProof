@@ -126,6 +126,27 @@ def test_bounded_qualifier_shape_cannot_hide_positive_qualitative_predicate(qual
     assert has_unresolved_metric_predicate("Credit rating", assertion)
 
 
+@given(
+    state=st.sampled_from(
+        ["available", "disclosed", "flat", "reported", "stable", "stated", "unchanged"]
+    ),
+    lead=st.sampled_from(
+        ["The company maintained a", "The filing described an", "Management reported a"]
+    ),
+    modifiers=st.lists(
+        st.sampled_from(["current", "long", "term"]),
+        min_size=0,
+        max_size=3,
+    ),
+)
+def test_closed_pre_metric_qualitative_family_blocks_absence(state, lead, modifiers):
+    qualifier = f" {' '.join(modifiers)}" if modifiers else ""
+    assert has_unresolved_metric_predicate(
+        "Credit rating",
+        f"{lead} {state}{qualifier} Credit rating.",
+    )
+
+
 @pytest.mark.parametrize("boundary", [".", "?", "!", ";", ","])
 def test_qualitative_predicate_detection_does_not_cross_punctuation(boundary):
     assertion = f"Credit rating appeared in the rubric{boundary} Revenue was stable."
@@ -292,7 +313,9 @@ async def test_value_before_metric_prevents_authoritative_absence(sentence):
 
 
 @given(
-    separator=st.sampled_from([" ", "  ", " , ", " ; ", " : ", " - ", " – ", " — "]),
+    separator=st.sampled_from(
+        [" ", "  ", " , ", " ; ", " : ", " - ", " – ", " — ", " (", " [", " {", ' "']
+    ),
     leading_words=st.lists(
         st.sampled_from(["the", "company", "reported", "approximately"]),
         min_size=0,
@@ -325,6 +348,8 @@ def test_bounded_value_first_separator_family_is_always_reviewable(
         "Credit rating for the period was stable.",
         "Credit rating as of year end remained unchanged.",
         "Credit rating during the fiscal year was reported stable.",
+        "The company maintained a stable Credit rating.",
+        "An unchanged Credit rating was disclosed.",
     ],
 )
 async def test_exact_metric_with_qualitative_predicate_requires_review(sentence):
