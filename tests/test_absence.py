@@ -598,6 +598,12 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
             None,
             AbsenceConclusion.INCOMPLETE_PROBE,
         ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. As of FY 2025, it was $82 billion.",
+            None,
+            AbsenceConclusion.INCOMPLETE_PROBE,
+        ),
     ],
 )
 async def test_open_anaphoric_continuation_extends_into_linked_chunk(
@@ -692,6 +698,7 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk(
         "They were $82 billion.",
         "These figures were $82 billion.",
         "Those values were $82 billion.",
+        "As of FY 2025, it was $82 billion.",
     ],
 )
 async def test_metric_at_chunk_end_follows_linked_anaphoric_value(linked_text):
@@ -762,7 +769,13 @@ async def test_metric_at_chunk_end_follows_linked_anaphoric_value(linked_text):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "second_lead",
-    ["It was", "They were", "These figures were", "Those values were"],
+    [
+        "It was",
+        "They were",
+        "These figures were",
+        "Those values were",
+        "As of FY 2025, it was",
+    ],
 )
 async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
     chunk_id = chunk_id_from_uint64(2**63 + 45)
@@ -817,6 +830,7 @@ async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
         "Fee-earning AUM. They were $82 billion",
         "Fee-earning AUM. These figures were $82 billion",
         "Fee-earning AUM. Those values were $82 billion",
+        "Fee-earning AUM. As of FY 2025, it was $82 billion",
     ],
 )
 async def test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing(text):
@@ -871,6 +885,7 @@ async def test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing(text):
         "They were $82 billion.",
         "These figures were $82 billion.",
         "Those values were $82 billion.",
+        "During the period, they were $82 billion.",
     ],
 )
 async def test_completed_local_anaphor_checks_linked_coreferential_continuation(

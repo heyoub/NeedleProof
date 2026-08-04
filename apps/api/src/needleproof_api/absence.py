@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v19-source-linked-anaphoric-state-machine"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v20-temporal-anaphoric-state-machine"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -304,7 +304,8 @@ def _join_source_fragments(left: str, right: str) -> str:
 
 
 _ANAPHORIC_SENTENCE_LEAD = re.compile(
-    r"\s*(?:(?:it|they|this|that|these|those)\b|"
+    r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
+    r"(?:(?:it|they|this|that|these|those)\b|"
     r"(?:the|these|those)\s+(?:figures?|values?|amounts?|numbers?)\b)",
     re.IGNORECASE,
 )
