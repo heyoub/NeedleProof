@@ -115,7 +115,8 @@ jobs:
             "http://127.0.0.1:18000/api/runs/$run_id/receipt.json" \
             | jq -e '
                 .status == "completed"
-                and .schema_version == "1.3"
+                and .schema_version == "1.4"
+                and .provenance.receipt_derivation == "live"
                 and .provenance.git_commit_sha == "${{ github.sha }}"
                 and .provenance.image_revision == "${{ github.sha }}"
                 and (.provenance.dependency_lock_digests["uv.lock"] | length == 64)
