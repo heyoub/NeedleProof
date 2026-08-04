@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
@@ -26,6 +27,40 @@ from .legacy import (
 )
 from .models import LedgerEvent, RunEnvelope, VerifiedClaim
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
+
+
+@dataclass(frozen=True, slots=True)
+class SealedReceiptSnapshot:
+    """One exact serialized receipt view and its validated canonical digest."""
+
+    path: Path
+    serialized_text: str
+    receipt_sha256: str
+
+    def decode(self) -> dict[str, Any]:
+        payload = json.loads(self.serialized_text)
+        if not isinstance(payload, dict):
+            raise TypeError("Sealed receipt root must be an object")
+        return payload
+
+
+def _snapshot_from_text(path: Path, serialized_text: str) -> SealedReceiptSnapshot:
+    payload = json.loads(serialized_text)
+    errors = validate_receipt(payload)
+    if errors:
+        raise ValueError("; ".join(errors))
+    if not isinstance(payload, dict):
+        raise TypeError("Sealed receipt root must be an object")
+    receipt_sha256 = payload.get("receipt_sha256")
+    if not isinstance(receipt_sha256, str) or not receipt_sha256:
+        raise ValueError("Sealed receipt is missing its canonical digest")
+    return SealedReceiptSnapshot(path, serialized_text, receipt_sha256)
+
+
+def load_sealed_receipt_snapshot(path: Path) -> SealedReceiptSnapshot:
+    """Read and validate one immutable-in-memory view of a sealed receipt."""
+
+    return _snapshot_from_text(path, path.read_text(encoding="utf-8"))
 
 
 def _git_sha() -> str | None:
@@ -332,7 +367,7 @@ class RunLedger:
         trace_id: str | None,
         error: dict[str, Any] | None = None,
         rehearsal: dict[str, Any] | None = None,
-    ) -> Path:
+    ) -> SealedReceiptSnapshot:
         events = await self.database.list_events(self.run_id)
         openai_calls = await self.database.list_openai_calls(self.run_id)
         corpus_manifest = self._corpus_manifest or load_current_manifest(self.settings)
@@ -412,8 +447,10 @@ class RunLedger:
         path = self.settings.receipts_dir / f"{self.run_id}.json"
         if path.exists():
             raise RuntimeError(f"Receipt {self.run_id} is already sealed")
-        atomic_write_text(path, json.dumps(receipt, indent=2, ensure_ascii=False) + "\n")
-        return path
+        serialized_text = json.dumps(receipt, indent=2, ensure_ascii=False) + "\n"
+        snapshot = _snapshot_from_text(path, serialized_text)
+        atomic_write_text(path, serialized_text)
+        return snapshot
 
 
 def receipt_html(receipt: dict[str, Any]) -> str:

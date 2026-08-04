@@ -6,7 +6,6 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
 from .absence import probe_metric_absence
@@ -30,7 +29,12 @@ from .models import (
     RunStatus,
     VerifiedClaim,
 )
-from .receipt import RunLedger, validate_receipt
+from .receipt import (
+    RunLedger,
+    SealedReceiptSnapshot,
+    load_sealed_receipt_snapshot,
+    validate_receipt,
+)
 from .retrieval import CorpusStore
 from .security import PublicUsageLimiter
 from .util import canonical_metric_key, new_run_id, utc_now_iso
@@ -247,15 +251,15 @@ class InvestigationService:
         if not receipt_path.exists():
             return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            receipt_text = receipt_path.read_text(encoding="utf-8")
+            snapshot = load_sealed_receipt_snapshot(receipt_path)
         except OSError:
             logger.exception("Could not read sealed receipt for run %s", run_id)
             return ReceiptRecoveryOutcome.RETRYABLE
+        except (AttributeError, json.JSONDecodeError, TypeError, UnicodeError, ValueError):
+            receipt_path.unlink(missing_ok=True)
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            receipt = json.loads(receipt_text)
-            errors = validate_receipt(receipt)
-            if errors:
-                raise ValueError("; ".join(errors))
+            receipt = snapshot.decode()
             expected_identity = {
                 "run_id": run_id,
                 "corpus_id": str(row["corpus_id"]),
@@ -270,12 +274,11 @@ class InvestigationService:
                 and receipt.get("receipt_sha256") != expected_receipt_sha256
             ):
                 raise ValueError("Sealed receipt digest does not match the persisted receipt")
-            envelope = _run_envelope_from_receipt(run_id, receipt)
         except (AttributeError, KeyError, TypeError, ValueError):
             receipt_path.unlink(missing_ok=True)
             return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
+            await self._commit_terminal(snapshot)
         except Exception:
             logger.exception("Could not persist validated receipt recovery for run %s", run_id)
             return ReceiptRecoveryOutcome.RETRYABLE
@@ -666,12 +669,13 @@ class InvestigationService:
     async def _finalize_run(self, ledger: RunLedger, state: TerminalState) -> None:
         try:
             receipt_path = self.settings.receipts_dir / f"{ledger.run_id}.json"
+            snapshot: SealedReceiptSnapshot | None = None
             try:
                 events = await self.database.list_events(ledger.run_id)
                 if not any(event["type"] == state.event_type for event in events):
                     await ledger.append(state.event_type, state.event_payload)
                 if not receipt_path.exists():
-                    receipt_path = await ledger.seal(
+                    snapshot = await ledger.seal(
                         state.envelope,
                         instruction_hash=INSTRUCTION_HASH,
                         tool_schema_hash=TOOL_SCHEMA_HASH,
@@ -680,7 +684,10 @@ class InvestigationService:
                         error=state.error,
                         rehearsal=state.rehearsal_metadata,
                     )
-                await self._commit_terminal(state.envelope, receipt_path, state.error)
+                    receipt_path = snapshot.path
+                else:
+                    snapshot = load_sealed_receipt_snapshot(receipt_path)
+                await self._commit_terminal(snapshot)
             except Exception as exc:  # noqa: BLE001 - persist a recoverable terminal state
                 error = {
                     "type": "finalization_interrupted",
@@ -701,12 +708,14 @@ class InvestigationService:
                     )
                 receipt_sha256 = None
                 persisted_receipt_path = None
-                if receipt_path.exists():
+                if snapshot is not None:
+                    receipt_sha256 = snapshot.receipt_sha256
+                    persisted_receipt_path = str(snapshot.path)
+                elif receipt_path.exists():
                     with suppress(Exception):
-                        sealed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-                        receipt_sha256 = sealed_receipt.get("receipt_sha256")
-                        if receipt_sha256:
-                            persisted_receipt_path = str(receipt_path)
+                        recovered_snapshot = load_sealed_receipt_snapshot(receipt_path)
+                        receipt_sha256 = recovered_snapshot.receipt_sha256
+                        persisted_receipt_path = str(recovered_snapshot.path)
                 await self.database.update_run(
                     ledger.run_id,
                     status=RunStatus.INTERRUPTED,
@@ -724,22 +733,19 @@ class InvestigationService:
 
     async def _commit_terminal(
         self,
-        envelope: RunEnvelope,
-        receipt_path: Path,
-        error: dict[str, Any] | None,
+        snapshot: SealedReceiptSnapshot,
     ) -> None:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt_sha256 = receipt.get("receipt_sha256")
-        if not receipt_sha256:
-            raise ValueError("Sealed receipt is missing its canonical digest")
+        receipt = snapshot.decode()
+        envelope = _run_envelope_from_receipt(str(receipt["run_id"]), receipt)
+        error = receipt.get("error")
         await self.database.update_run(
             envelope.run_id,
             status=envelope.status,
             completed_at=utc_now_iso(),
             answer=envelope.answer,
             result_json=envelope.model_dump_json(),
-            receipt_path=str(receipt_path),
-            receipt_sha256=receipt_sha256,
+            receipt_path=str(snapshot.path),
+            receipt_sha256=snapshot.receipt_sha256,
             error_json=json.dumps(error) if error else None,
         )
 

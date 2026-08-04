@@ -29,7 +29,8 @@ Current regression families include:
 - temporal equivalence, distinction, and exact observation-span binding;
 - conflict locality, value adjacency, and cross-metric decoys;
 - bounded absence completeness, bidirectional metric context, and forged-proof mutations;
-- receipt schema totality, version compatibility, event-chain consistency, and provenance;
+- receipt schema totality, version compatibility, event-chain consistency, provenance, and
+  single-snapshot recovery/serving integrity;
 - run lifecycle cancellation, persistence faults, reconciliation, reconnect, and idempotence;
 - opaque identifier serialization, browser ownership isolation, and terminal-state recovery;
 - retrieval ranking, filter behavior, artifact integrity, and real SQLite batching boundaries.
