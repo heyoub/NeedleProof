@@ -758,7 +758,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v30-proof-complete-identity-boundaries"
+    version = "deterministic-verifier-v31-fail-closed-linked-anaphoric-chain"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

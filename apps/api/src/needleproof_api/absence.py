@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v15-linked-anaphoric-context"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v16-fail-closed-anaphoric-chain"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -86,7 +86,8 @@ ABSENCE_PROTOCOL_SPEC = {
     "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
     "neighbor_radius": 1,
     "cross_chunk_context": (
-        "source_linked_neighbor_when_local_clause_or_anaphoric_assertion_edge_is_open"
+        "one_source_linked_sentence_when_local_clause_or_anaphoric_assertion_edge_is_open;"
+        "immediate_linked_anaphoric_chain_is_incomplete"
     ),
     "conclusion": "bounded_not_global",
 }
@@ -302,6 +303,12 @@ def _join_source_fragments(left: str, right: str) -> str:
     return f"{left}{separator}{right}"
 
 
+_ANAPHORIC_SENTENCE_LEAD = re.compile(
+    r"\s*(?:it|this|that|the\s+(?:figure|value|amount|number))\b",
+    re.IGNORECASE,
+)
+
+
 def _linked_following_fragment(
     chunk: ChunkRecord,
     chunks_by_id: Mapping[ChunkId, ChunkRecord],
@@ -315,7 +322,14 @@ def _linked_following_fragment(
         return "", False
     boundaries = punctuation_boundaries(following.normalized_text)
     if boundaries:
-        return following.normalized_text[: boundaries[0][1]], True
+        boundary_end = boundaries[0][1]
+        remainder = following.normalized_text[boundary_end:]
+        # One linked sentence is the maximum supported proof profile. An
+        # immediately following anaphoric sentence may still belong to the
+        # metric assertion, so omitting it cannot prove absence. Keep that
+        # shape deliberately unsupported and fail closed.
+        complete = _ANAPHORIC_SENTENCE_LEAD.match(remainder) is None
+        return following.normalized_text[:boundary_end], complete
     return following.normalized_text, following.next_chunk_id is None
 
 
@@ -324,12 +338,6 @@ class _AnalyzedMetricContext:
     display_occurrence: MetricOccurrence
     proof_occurrence: MetricOccurrence
     complete: bool
-
-
-_ANAPHORIC_SENTENCE_LEAD = re.compile(
-    r"\s*(?:it|this|that|the\s+(?:figure|value|amount|number))\b",
-    re.IGNORECASE,
-)
 
 
 def _metric_occurrence_with_open_neighbors(

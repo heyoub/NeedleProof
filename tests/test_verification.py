@@ -908,6 +908,18 @@ def test_new_bound_period_allows_a_distinct_anaphoric_value():
     assert match.temporal_span is not None
 
 
+def test_temporal_anchor_casefolding_does_not_inherit_metric_initialism_identity():
+    match = reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue was $2 million in FY 2025.",
+        temporal_anchor="FY 2025",
+    )
+
+    assert match is not None
+    assert match.temporal_span is not None
+
+
 def test_next_sentence_temporal_lead_cannot_hide_competing_subject():
     quote = (
         "Revenue was $2 million as of 2024. "

@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v15-separated-metric-and-value-identity",
+    "version": "positive-bindings-v16-separated-metric-value-temporal-identity",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -179,6 +179,8 @@ BINDING_CONTRACT_SPEC = {
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
     "qualitative_value_token_kind": "ignored_while_metric_token_kind_remains_authoritative",
+    "temporal_anchor_identity": "normalized_casefolded_word_token_sequence",
+    "temporal_anchor_token_kind": "ignored_while_metric_token_kind_remains_authoritative",
     "explicit_qualitative_negation_pattern": _EXPLICIT_QUALITATIVE_NEGATION.pattern,
     "explicit_qualitative_negation": "reject_before_positive_profile_matching",
     "intra_phrase_formatting_pattern": _INTRA_PHRASE_FORMATTING.pattern,
@@ -441,7 +443,11 @@ def _positive_anaphoric_antecedent(
 def _lead_binds_temporal_anchor(lead: str, temporal_anchor: str | None) -> bool:
     if temporal_anchor is None:
         return False
-    for start, end in word_phrase_spans(temporal_anchor, lead):
+    for start, end in word_phrase_spans(
+        temporal_anchor,
+        lead,
+        preserve_token_kind=False,
+    ):
         if _ANAPHORIC_TEMPORAL_LEAD_PREFIX.fullmatch(lead[:start]) and re.fullmatch(
             r"\s*,?\s*", lead[end:]
         ):
@@ -508,9 +514,17 @@ def _temporal_span(
 ) -> Span | None:
     if temporal_anchor is None:
         return None
-    for span in word_phrase_spans(temporal_anchor, assertion):
+    for span in word_phrase_spans(
+        temporal_anchor,
+        assertion,
+        preserve_token_kind=False,
+    ):
         if metric_span[1] <= span[0] and span[1] <= value_span[0]:
-            if word_phrase_spans(temporal_anchor, between):
+            if word_phrase_spans(
+                temporal_anchor,
+                between,
+                preserve_token_kind=False,
+            ):
                 return span
         elif span[1] <= metric_span[0]:
             gap = assertion[span[1] : metric_span[0]]

@@ -46,6 +46,16 @@ tests = [
 ]
 
 [[invariant]]
+id = "INV-TEMPORAL-010"
+family = "temporal-identity"
+severity = "P2"
+invariant = "Temporal anchors use case-folded word identity without inheriting metric initialism kinds."
+finding = "The temporal anchor FY 2025 failed to bind to its all-caps source spelling."
+disposition = "fixed"
+owner = "binding"
+tests = ["test_temporal_anchor_casefolding_does_not_inherit_metric_initialism_identity"]
+
+[[invariant]]
 id = "INV-ABSENCE-008"
 family = "bounded-work"
 severity = "P2"

@@ -560,16 +560,33 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("local_text", "linked_text", "expected_value"),
+    ("local_text", "linked_text", "expected_value", "expected_conclusion"),
     [
-        ("Fee-earning AUM. It remained at", "$82 billion.", "$82 billion"),
-        ("Fee-earning AUM. It was", "500 dollars.", "500"),
+        (
+            "Fee-earning AUM. It remained at",
+            "$82 billion.",
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
+        ),
+        (
+            "Fee-earning AUM. It was",
+            "500 dollars.",
+            "500",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
+        ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. It was $82 billion.",
+            None,
+            AbsenceConclusion.INCOMPLETE_PROBE,
+        ),
     ],
 )
 async def test_open_anaphoric_continuation_extends_into_linked_chunk(
     local_text,
     linked_text,
     expected_value,
+    expected_conclusion,
 ):
     metric_id = chunk_id_from_uint64(2**63 + 41)
     value_id = chunk_id_from_uint64(2**63 + 42)
@@ -625,14 +642,16 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk(
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Fee-earning AUM")
 
-    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
-    assert any(
-        candidate.value_text == expected_value for candidate in probe.supporting_value_candidates
-    )
+    assert probe.conclusion == expected_conclusion
     assert (
-        derive_absence_conclusion_against_corpus(probe, corpus)
-        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+        any(
+            candidate.value_text == expected_value
+            for candidate in probe.supporting_value_candidates
+        )
+        if expected_value
+        else not probe.supporting_value_candidates
     )
+    assert derive_absence_conclusion_against_corpus(probe, corpus) == expected_conclusion
     forged = probe.model_copy(
         update={
             "supporting_value_candidates": [],
