@@ -32,10 +32,19 @@ The authorized profiles are deliberately narrow: direct copula levels, direct re
 colon-delimited values, dated direct values, and bounded same/next-sentence anaphora. Anaphora must
 follow one closed positive antecedent shape; next-sentence anaphora must occur in the immediately
 following declarative sentence separated by a period, and any leading temporal phrase must contain
-the observation's bound temporal anchor. Questions, exclamations, and unknown syntax fail closed.
+the observation's bound temporal anchor. A numeric antecedent must have the same canonical currency,
+digits, magnitude, and unit as the selected anaphoric value unless the following sentence has its own
+exact bound temporal lead. Without that new period, a different value is competing evidence, not a
+reference. Questions, exclamations, and unknown syntax fail closed.
 Negation, modality, forecasts, targets, components, bounds, ranges, deltas, competing subjects,
 and compound values cannot become ordinary reported levels merely because the same number appears
 after a partial or ambiguous metric phrase.
+
+The selected assertion must preserve its structural boundary inside the exact quotation. A direct
+metric subject cannot be cropped out of a preceding word-level prefix, and a cropped tail must begin
+at punctuation. Therefore a draft cannot turn `Forecast revenue was $2 million` into a clean
+reported level merely by submitting `revenue was $2 million` as its assertion. Comma-separated
+commentary remains outside the atomic assertion but inside the exact quote and receipt.
 
 This inversion is the core safety property:
 
@@ -69,8 +78,9 @@ evidence relation. Unresolved relationships never enter authoritative prose.
 four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
 complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
 same complete-word matcher used by verification. The protocol records both result sets, opens every
-unique candidate, and inspects a fixed 384-character forward context from every complete metric
-occurrence. This does not attempt sentence parsing, so punctuation inside abbreviations such as
+unique candidate, and inspects a fixed 384-character window on both sides of every complete metric
+occurrence. Values before the metric require a closed `VALUE in/of METRIC` bridge; forward values
+remain conservatively reviewable. This does not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
@@ -78,7 +88,9 @@ predicate requires review. Qualitative predicate detection permits at most eight
 qualifier words between the exact metric and a closed positive connector, so `Credit rating for the
 period was stable` cannot authorize absence. A bare rubric or instruction mention does not by
 itself claim a value and therefore does not block the bounded conclusion. The conclusion remains
-bounded to the recorded probe and exact corpus version; it never claims that the corpus proves
+bounded to the recorded probe and exact corpus version. Metric occurrences are inspected in a
+bounded window on both sides so value-first and metric-first source shapes both fail closed; the
+result never claims that the corpus proves
 nonexistence. The verifier independently re-derives that conclusion from the typed search records,
 signatures, exact-scan state, candidate/opened ID coverage, and metric occurrences; it never trusts
 the producer's stored conclusion field by itself.

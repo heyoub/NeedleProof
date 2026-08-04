@@ -152,7 +152,10 @@ def test_final_ledger_event_must_be_terminal(settings):
 
 
 @pytest.mark.parametrize("extended_configuration", [False, True])
-def test_retained_schema_1_2_receipt_remains_integrity_checkable(tmp_path, extended_configuration):
+@pytest.mark.parametrize("claim_status", ["verified", "possible_conflict"])
+def test_retained_schema_1_2_receipt_remains_integrity_checkable(
+    tmp_path, extended_configuration, claim_status
+):
     run_id = "run_" + "1" * 32
     corpus_version = "v_" + "2" * 16
     previous_hash = "0" * 64
@@ -184,7 +187,7 @@ def test_retained_schema_1_2_receipt_remains_integrity_checkable(tmp_path, exten
             {
                 "statement": "Revenue was $2 million.",
                 "metric": "Revenue",
-                "status": "verified",
+                "status": claim_status,
                 "values": [
                     {
                         "value": "$2 million",

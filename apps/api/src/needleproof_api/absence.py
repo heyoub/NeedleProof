@@ -22,9 +22,13 @@ from .models import (
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v7-recomputed-proof"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v8-bidirectional-context"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
+_VALUE_FIRST_METRIC_BRIDGE = re.compile(
+    r"\s*(?:in|of)\s+(?:[^\W\d_]+\s+){0,3}",
+    re.IGNORECASE,
+)
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -47,12 +51,16 @@ ABSENCE_PROTOCOL_SPEC = {
     "requires_all_unique_candidates_opened": True,
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
-    "numeric_candidate_policy": "requires_review_even_without_positive_binding",
+    "numeric_candidate_policy": (
+        "forward_metric_context_or_closed_value_first_bridge_requires_review"
+    ),
     "qualitative_predicate_policy": (
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
-    "metric_context_policy": "forward_window_from_complete_metric_without_sentence_parsing",
+    "metric_context_policy": (
+        "bidirectional_window_around_complete_metric_without_sentence_parsing"
+    ),
     "conclusion": "bounded_not_global",
 }
 ABSENCE_PROTOCOL_SHA256 = sha256_text(canonical_json(ABSENCE_PROTOCOL_SPEC))
@@ -172,7 +180,7 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
 
     reviewable_occurrence = any(
         has_unresolved_metric_predicate(probe.metric, occurrence.sentence)
-        or bool(numeric_value_candidates(occurrence.sentence))
+        or bool(_metric_context_numeric_candidates(occurrence))
         for occurrence in probe.exact_metric_occurrences
     )
     if (
@@ -182,6 +190,24 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
     ):
         return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     return AbsenceConclusion.NOT_FOUND_IN_PROBE
+
+
+def _metric_context_numeric_candidates(
+    occurrence: MetricOccurrence,
+) -> list[tuple[str, tuple[int, int]]]:
+    """Return conservative forward values and closed value-first metric shapes."""
+
+    metric_start, metric_end = occurrence.span
+    candidates = []
+    for value_text, value_span in numeric_value_candidates(occurrence.sentence):
+        if value_span[0] >= metric_end:
+            candidates.append((value_text, value_span))
+            continue
+        if value_span[1] <= metric_start and _VALUE_FIRST_METRIC_BRIDGE.fullmatch(
+            occurrence.sentence[value_span[1] : metric_start]
+        ):
+            candidates.append((value_text, value_span))
+    return candidates
 
 
 async def probe_metric_absence(
@@ -279,20 +305,21 @@ async def probe_metric_absence(
     value_candidate_keys: set[tuple[ChunkId, str]] = set()
     for chunk in chunks:
         for metric_start, metric_end in word_phrase_spans(metric_phrase, chunk.normalized_text):
+            context_start = max(0, metric_start - ABSENCE_METRIC_CONTEXT_CHARACTERS)
             context_end = min(
                 len(chunk.normalized_text),
                 metric_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
             )
-            context = chunk.normalized_text[metric_start:context_end]
+            context = chunk.normalized_text[context_start:context_end]
             occurrence = MetricOccurrence(
                 chunk_id=chunk.chunk_id,
                 sentence=context,
-                span=(metric_start, metric_end),
+                span=(metric_start - context_start, metric_end - context_start),
             )
             occurrences.append(occurrence)
             if has_unresolved_metric_predicate(metric_phrase, context):
                 unresolved_predicates.append(occurrence)
-            for value_text, _span in numeric_value_candidates(context):
+            for value_text, _span in _metric_context_numeric_candidates(occurrence):
                 candidate_key = (chunk.chunk_id, value_text)
                 if candidate_key in value_candidate_keys:
                     continue

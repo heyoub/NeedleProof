@@ -218,6 +218,74 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
 @pytest.mark.parametrize(
     "sentence",
     [
+        "$2 million in revenue.",
+        "The company reported $2 million of revenue.",
+        "At year end, $2 million in revenue was recorded.",
+    ],
+)
+async def test_value_before_metric_prevents_authoritative_absence(sentence):
+    chunk_id = chunk_id_from_uint64(2**63 + 21)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_value_first",
+        document_name="Value-first absence fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=sentence,
+        normalized_text=sentence,
+        sha256="b" * 64,
+        token_estimate=8,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="c" * 64,
+                results=[
+                    SearchHit(
+                        chunk_id=chunk_id,
+                        score=1.0,
+                        lexical_score=1.0,
+                        lexical_rank=1,
+                        retrieval_mode=mode,
+                        document_id=chunk.document_id,
+                        document_name=chunk.document_name,
+                        physical_page_index=1,
+                        preview=chunk.text,
+                        sha256=chunk.sha256,
+                    )
+                ][:top_k],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return [chunk]
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "revenue")
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="revenue", request_absence_probe=True),
+        absence_probe=probe,
+    )
+
+    assert probe.supporting_value_candidates
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sentence",
+    [
         "Credit rating was stable.",
         "Credit rating: stable.",
         "Credit rating reached stable.",

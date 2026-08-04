@@ -62,6 +62,10 @@ _CONFLICT_COLLECTIVE_TAIL = re.compile(
     r"\s*(?:with\s+(?:one\s+another|each\s+other))?\s*[.!?]?\s*",
     re.IGNORECASE,
 )
+_DIRECT_ASSERTION_QUOTE_BOUNDARY = re.compile(
+    r"(?:[.!?;]|[,;:]\s*(?:and|but|while|whereas))\s*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +112,37 @@ def reported_value_found(value: str, quote: str) -> bool:
     if expected:
         return expected.issubset(numeric_signatures(normalized_quote))
     return _word_phrase_found(normalized_value, normalized_quote)
+
+
+def _binding_respects_quote_boundaries(
+    assertion: str,
+    quote: str,
+    binding: BindingMatch,
+) -> bool:
+    """Reject a clean relationship cropped out of role-changing quote context."""
+
+    normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
+    normalized_quote = normalize_evidence_text(quote)[0].casefold()
+    direct_metric_subject = bool(
+        re.fullmatch(r"\s*(?:the\s+)?", normalized_assertion[: binding.metric_span[0]])
+    )
+    for occurrence in re.finditer(re.escape(normalized_assertion), normalized_quote):
+        prefix = normalized_quote[: occurrence.start()].rstrip()
+        suffix = normalized_quote[occurrence.end() :]
+        if (
+            direct_metric_subject
+            and prefix
+            and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None
+        ):
+            continue
+        if (
+            suffix
+            and normalized_assertion.rstrip()[-1:] not in ".!?"
+            and re.match(r"\s*[,.;:!?]", suffix) is None
+        ):
+            continue
+        return True
+    return False
 
 
 def reported_value_linked_to_metric(
@@ -371,7 +406,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v13-recomputed-absence-proof"
+    version = "deterministic-verifier-v16-value-consistent-anaphora"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -468,6 +503,14 @@ class EvidenceVerifier:
                 binding = result.match
                 value_text_found = result.value_text_found
                 failure_reason = result.failure_reason
+                if binding and not _binding_respects_quote_boundaries(
+                    reference.exact_assertion,
+                    reference.exact_quote,
+                    binding,
+                ):
+                    binding = None
+                    assertion_found = False
+                    failure_reason = "assertion_not_bound_to_quote_context"
             metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
                 claim.metric
             )

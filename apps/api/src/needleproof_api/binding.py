@@ -131,7 +131,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v6-bounded-predicate-qualifiers",
+    "version": "positive-bindings-v7-value-consistent-anaphora",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -143,6 +143,9 @@ BINDING_CONTRACT_SPEC = {
     "same_sentence_binding_pattern": _SAME_SENTENCE_BINDING_PATTERN,
     "next_sentence_binding_pattern": _NEXT_SENTENCE_BINDING_PATTERN,
     "next_sentence_boundary": "period_only",
+    "numeric_anaphoric_antecedent": (
+        "must_equal_selected_canonical_numeric_signature_unless_a_new_temporal_lead_is_bound"
+    ),
     "immediate_following_anaphoric_pattern": _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
     "anaphoric_numeric_temporal_tail_pattern": _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.pattern,
     "anaphoric_temporal_lead_prefix_pattern": _ANAPHORIC_TEMPORAL_LEAD_PREFIX.pattern,
@@ -322,7 +325,12 @@ def _profile_for_between(between: str) -> BindingProfile | None:
     return None
 
 
-def _positive_anaphoric_antecedent(predicate: str) -> bool:
+def _positive_anaphoric_antecedent(
+    predicate: str,
+    selected_value: str,
+    *,
+    allow_temporal_variant: bool,
+) -> bool:
     if re.fullmatch(_POSITIVE_ANAPHORIC_ANTECEDENT, predicate, flags=re.IGNORECASE):
         return True
     for connector in (_COPULA, _REPORTED, _COLON):
@@ -330,8 +338,18 @@ def _positive_anaphoric_antecedent(predicate: str) -> bool:
         if match is None:
             continue
         numeric = _NUMERIC.match(predicate, match.end())
+        if numeric is None or not _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.fullmatch(
+            predicate[numeric.end() :]
+        ):
+            continue
+        selected = numeric_signature_sequence(selected_value)
         return bool(
-            numeric and _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.fullmatch(predicate[numeric.end() :])
+            allow_temporal_variant
+            or (
+                len(selected) == 1
+                and canonical_numeric_signature(_numeric_signature(numeric))
+                == canonical_numeric_signature(selected[0])
+            )
         )
     return False
 
@@ -363,8 +381,6 @@ def _immediate_next_sentence_anaphoric_profile(
     if not (boundary_start < value_span[0]):
         return False
     antecedent = assertion[metric_span[1] : boundary_start]
-    if not _positive_anaphoric_antecedent(antecedent):
-        return False
     candidate = assertion[next_start : value_span[0]]
     match = re.fullmatch(
         _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
@@ -374,7 +390,15 @@ def _immediate_next_sentence_anaphoric_profile(
     if match is None:
         return False
     lead = match.group("lead")
-    return not lead or _lead_binds_temporal_anchor(lead, temporal_anchor)
+    temporal_variant = bool(lead and _lead_binds_temporal_anchor(lead, temporal_anchor))
+    if lead and not temporal_variant:
+        return False
+    selected_value = assertion[value_span[0] : value_span[1]]
+    return _positive_anaphoric_antecedent(
+        antecedent,
+        selected_value,
+        allow_temporal_variant=temporal_variant,
+    )
 
 
 def _kind_accepts_signature(kind: ObservationKind, value: str) -> bool:

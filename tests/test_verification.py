@@ -113,6 +113,42 @@ def test_direct_value_is_verified_with_diagnostic_binding(corpus):
     assert verified.statement == "Fee-related earnings: $345 million"
 
 
+@pytest.mark.parametrize(
+    ("quote", "assertion"),
+    [
+        ("Forecast revenue was $2 million.", "revenue was $2 million."),
+        ("Revenue was $2 million forecast.", "Revenue was $2 million"),
+        ("Revenue was $2 million target.", "Revenue was $2 million"),
+    ],
+)
+def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, assertion):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 901),
+        document_id="doc_cropped_context",
+        document_name="Cropped context fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion=assertion,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
 def test_modified_quote_is_rejected(corpus):
     quote = "Fee-related earnings were $346 million."
     evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
@@ -336,6 +372,31 @@ def test_interrogative_or_exclamatory_antecedent_cannot_authorize_anaphora(bound
 )
 def test_anaphoric_binding_accepts_closed_positive_profiles(quote, value):
     assert reported_value_linked_to_metric(value, "Revenue", quote) is not None
+
+
+@pytest.mark.parametrize(
+    ("quote", "value", "expected"),
+    [
+        ("Revenue was $2 million. It was $2 million.", "$2 million", True),
+        ("Revenue was $2.0 million. It was $2 million.", "$2 million", True),
+        ("Revenue was $2 million. It was $3 million.", "$3 million", False),
+        ("Revenue was $2 million. It was 2 million euros.", "2 million euros", False),
+    ],
+)
+def test_numeric_anaphora_requires_the_same_canonical_value(quote, value, expected):
+    match = reported_value_linked_to_metric(value, "Revenue", quote)
+    assert bool(match) is expected
+
+
+def test_new_bound_period_allows_a_distinct_anaphoric_value():
+    match = reported_value_linked_to_metric(
+        "$3 million",
+        "Revenue",
+        "Revenue was $2 million in 2024. In 2025 it was $3 million.",
+        temporal_anchor="2025",
+    )
+    assert match is not None
+    assert match.temporal_span is not None
 
 
 def test_next_sentence_temporal_lead_cannot_hide_competing_subject():
@@ -616,8 +677,11 @@ def test_unrelated_incompatible_systems_do_not_turn_date_variants_into_conflict(
     assert verified.status == ClaimStatus.DATE_VARIANT
 
 
-def test_typed_conflict_characterization_binds_local_distinct_values():
-    quote = "Revenue was $2 million, and Revenue was $3 million; the figures are incompatible."
+@pytest.mark.parametrize("separator", [", and ", "; "])
+def test_typed_conflict_characterization_binds_local_distinct_values(separator):
+    quote = (
+        f"Revenue was $2 million{separator}Revenue was $3 million; the figures are incompatible."
+    )
     chunk = ChunkRecord(
         chunk_id=chunk_id_from_uint64(2**63 + 903),
         document_id="doc_typed_conflict",

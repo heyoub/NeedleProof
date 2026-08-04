@@ -5,6 +5,7 @@ import json
 import pytest
 from needleproof_api.db import AppDatabase
 from needleproof_api.models import ClaimStatus, RunStatus
+from needleproof_api.service import _run_envelope_from_receipt
 
 
 @pytest.mark.asyncio
@@ -97,4 +98,49 @@ async def test_retained_schema_1_2_run_envelope_is_adapted_read_only(tmp_path):
     assert adapted_evidence.temporal_anchor is None
     assert adapted_evidence.temporal_value_bound is False
     assert adapted_evidence.binding_profile is None
+    assert "schema-1.2" in envelope.claims[0].verification_notes[-1]
+
+
+def test_terminal_recovery_adapts_schema_1_2_claims_before_validation():
+    run_id = "run_" + "5" * 32
+    corpus_version = "v_" + "6" * 16
+    legacy_receipt = {
+        "schema_version": "1.2",
+        "run_id": run_id,
+        "status": "completed",
+        "question": "What was revenue?",
+        "answer": "Revenue was $2 million.",
+        "corpus_id": "legacy-corpus",
+        "corpus_version": corpus_version,
+        "corpus_manifest_sha256": "7" * 64,
+        "claims": [
+            {
+                "statement": "Revenue was $2 million.",
+                "metric": "Revenue",
+                "status": "possible_conflict",
+                "values": [
+                    {
+                        "value": "$2 million",
+                        "temporal_anchor": None,
+                        "evidence": [
+                            {
+                                "chunk_id": "chk_8000000000000001",
+                                "metric_anchor": "Revenue",
+                                "exact_quote": "Revenue was $2 million.",
+                                "relation": "supports",
+                            }
+                        ],
+                    }
+                ],
+                "evidence": [],
+                "verification_notes": [],
+            }
+        ],
+    }
+
+    envelope = _run_envelope_from_receipt(run_id, legacy_receipt)
+
+    assert envelope.status == RunStatus.COMPLETED
+    assert envelope.claims[0].status == ClaimStatus.POSSIBLE_CONFLICT
+    assert envelope.claims[0].observations[0].value_text == "$2 million"
     assert "schema-1.2" in envelope.claims[0].verification_notes[-1]

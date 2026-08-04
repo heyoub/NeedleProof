@@ -18,6 +18,7 @@ from .agent import (
 )
 from .config import Settings
 from .db import AppDatabase
+from .legacy import adapt_legacy_run_envelope
 from .models import (
     ClaimStatus,
     DraftClaim,
@@ -66,6 +67,24 @@ class ReceiptRecoveryOutcome(StrEnum):
     RETRYABLE = "retryable"
     UNRECOVERABLE = "unrecoverable"
     NOT_PENDING = "not_pending"
+
+
+def _run_envelope_from_receipt(run_id: str, receipt: dict[str, Any]) -> RunEnvelope:
+    envelope_data = {
+        "run_id": run_id,
+        "status": receipt["status"],
+        "question": receipt["question"],
+        "answer": receipt.get("answer"),
+        "corpus_id": receipt["corpus_id"],
+        "corpus_version": receipt["corpus_version"],
+        "corpus_manifest_sha256": receipt["corpus_manifest_sha256"],
+        "claims": receipt.get("claims", []),
+        "receipt_url": f"/api/runs/{run_id}/receipt",
+        "receipt_json_url": f"/api/runs/{run_id}/receipt.json",
+    }
+    if receipt.get("schema_version") == "1.2":
+        return adapt_legacy_run_envelope(envelope_data)
+    return RunEnvelope.model_validate(envelope_data)
 
 
 class RunCapacityError(RuntimeError):
@@ -251,18 +270,7 @@ class InvestigationService:
                 and receipt.get("receipt_sha256") != expected_receipt_sha256
             ):
                 raise ValueError("Sealed receipt digest does not match the persisted receipt")
-            envelope = RunEnvelope(
-                run_id=run_id,
-                status=RunStatus(receipt["status"]),
-                question=receipt["question"],
-                answer=receipt.get("answer"),
-                corpus_id=receipt["corpus_id"],
-                corpus_version=receipt["corpus_version"],
-                corpus_manifest_sha256=receipt["corpus_manifest_sha256"],
-                claims=[VerifiedClaim.model_validate(claim) for claim in receipt.get("claims", [])],
-                receipt_url=f"/api/runs/{run_id}/receipt",
-                receipt_json_url=f"/api/runs/{run_id}/receipt.json",
-            )
+            envelope = _run_envelope_from_receipt(run_id, receipt)
         except (AttributeError, KeyError, TypeError, ValueError):
             receipt_path.unlink(missing_ok=True)
             return ReceiptRecoveryOutcome.UNRECOVERABLE

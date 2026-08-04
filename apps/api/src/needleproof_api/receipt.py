@@ -538,14 +538,12 @@ def validate_receipt(receipt: object) -> list[str]:
         answer = receipt.get("answer")
         if not isinstance(answer, str) or not answer.strip():
             errors.append("A completed receipt requires a nonempty authoritative answer.")
-        if (
-            not isinstance(claims, list)
-            or not claims
-            or any(
-                not isinstance(claim, dict)
-                or claim.get("status") not in {"verified", "conflict", "date_variant", "not_found"}
-                for claim in claims
-            )
+        if not isinstance(claims, list) or not claims:
+            errors.append("A completed receipt requires at least one claim.")
+        elif schema_version == "1.4" and any(
+            not isinstance(claim, dict)
+            or claim.get("status") not in {"verified", "conflict", "date_variant", "not_found"}
+            for claim in claims
         ):
             errors.append("A completed receipt requires only authoritative claims.")
     corpus_version = receipt.get("corpus_version")

@@ -80,7 +80,7 @@ The longer diagram and trust boundaries are in [docs/architecture.md](docs/archi
 
 ## Verification model
 
-The model produces typed observations rather than a publishable proposition or proposed verdict. It must copy a canonical metric anchor and the smallest contiguous assertion beginning at that complete metric or a bound leading temporal anchor and ending at the proved value or its bound trailing temporal anchor, plus the exact value, observation kind, evidence relation, and enclosing quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from verified observations; the model's draft prose is never published. The verifier checks source integrity and a closed positive-binding contract—not arbitrary English entailment—and leaves unknown syntax and unauthorized value roles unverified. See [the verification boundary](docs/verification-boundary.md).
+The model produces typed observations rather than a publishable proposition or proposed verdict. It must copy a canonical metric anchor and the smallest contiguous assertion beginning at that complete metric or a bound leading temporal anchor and ending at the proved value or its bound trailing temporal anchor, plus the exact value, observation kind, evidence relation, and enclosing quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from verified observations; the model's draft prose is never published. The verifier checks source integrity and a closed positive-binding contract—not arbitrary English entailment—and leaves unknown syntax and unauthorized value roles unverified. See [the verification boundary](docs/verification-boundary.md). Valid review findings follow the repository's [quality feedback loop](docs/quality-feedback-loop.md): each becomes a shared invariant and enforced shape family, not a one-line patch.
 
 Verification checks include:
 
@@ -89,7 +89,7 @@ Verification checks include:
 - metric-anchor identity plus an authorized direct/anaphoric binding profile, explicit value role, currency, magnitude, percentages, basis points, units, and span-bound temporal anchors
 - supporting evidence for every accepted value; contextual or contradicting evidence cannot authorize a claim by itself
 - locally value-bound contradiction language versus canonically equivalent or genuinely different reporting periods
-- a server-owned four-probe absence protocol plus an exhaustive complete-metric phrase scan; it opens every unique candidate, independently re-derives the proof at authorization time, and refuses `not_found` when ranked retrieval is incomplete or any metric-adjacent value or bounded qualified predicate needs review
+- a server-owned four-probe absence protocol plus an exhaustive complete-metric phrase scan; it opens every unique candidate, inspects a bounded window on both sides of each exact metric occurrence, independently re-derives the proof at authorization time, and refuses `not_found` when ranked retrieval is incomplete or any metric-adjacent value or bounded qualified predicate needs review
 
 A rejected claim is removed from the authoritative answer. A timeout, cancellation, invalid structured response, tool failure, or rate limit seals a non-authoritative partial receipt instead.
 
