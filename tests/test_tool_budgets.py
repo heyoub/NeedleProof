@@ -82,6 +82,27 @@ def test_failed_search_does_not_count_as_completed(corpus):
     assert state.searches == 0
 
 
+def test_search_record_construction_failure_leaves_completed_accounting_unchanged(
+    corpus,
+    monkeypatch,
+):
+    state = context(Settings(max_searches=4), corpus)
+    state.begin_search()
+
+    def fail_chunk_lookup(_chunk_ids):
+        raise RuntimeError("corpus lookup failed")
+
+    monkeypatch.setattr(state.corpus, "get_chunks", fail_chunk_lookup)
+
+    with pytest.raises(RuntimeError, match="corpus lookup failed"):
+        complete_search(state, search_arguments())
+
+    assert state.attempted_searches == 1
+    assert state.completed_searches == 0
+    assert state.completed_search_records == []
+    assert state.unique_search_signatures == set()
+
+
 def test_rejected_fifth_search_does_not_increment_attempt_count(corpus):
     state = context(Settings(max_searches=4), corpus)
     for index in range(4):

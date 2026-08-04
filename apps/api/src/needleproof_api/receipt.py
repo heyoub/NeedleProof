@@ -46,11 +46,11 @@ class SealedReceiptSnapshot:
 
 def _snapshot_from_text(path: Path, serialized_text: str) -> SealedReceiptSnapshot:
     payload = json.loads(serialized_text)
+    if not isinstance(payload, dict):
+        raise TypeError("Sealed receipt root must be an object")
     errors = validate_receipt(payload)
     if errors:
         raise ValueError("; ".join(errors))
-    if not isinstance(payload, dict):
-        raise TypeError("Sealed receipt root must be an object")
     receipt_sha256 = payload.get("receipt_sha256")
     if not isinstance(receipt_sha256, str) or not receipt_sha256:
         raise ValueError("Sealed receipt is missing its canonical digest")

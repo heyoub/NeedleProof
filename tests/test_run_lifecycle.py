@@ -664,7 +664,12 @@ async def test_receipt_recovery_commits_one_validated_snapshot(
         _path, served = main_module._validated_receipt(recovered)
         assert served["receipt_sha256"] == original_digest
     else:
-        with pytest.raises(HTTPException, match="Receipt"):
+        expected_detail = (
+            "Receipt integrity validation failed"
+            if replacement_kind == "malformed"
+            else "Receipt database digest does not match"
+        )
+        with pytest.raises(HTTPException, match=expected_detail):
             main_module._validated_receipt(recovered)
 
 

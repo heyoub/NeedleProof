@@ -85,7 +85,7 @@ positive profile: the canonical metric, conflict relationship, and two distinct 
 or qualitative values must occur in the same local sentence. Qualitative identity uses the same
 canonical word-token representation as ordinary classification. A direct bridge must sit immediately between
 the two values, its left operand must have its own local positive binding to the claimed metric,
-and both bridged values must belong to the authorized disputed observation set; a
+and two modeled operands must belong to the authorized disputed observation set; a
 collective characterization must immediately follow two authorized values and
 end the sentence. Each collective operand must also have its own local positive binding to the
 claimed metric; a competing metric cannot lend its value to the conflict. Merely finding a word
@@ -93,6 +93,12 @@ such as `incompatible` elsewhere in the enclosing
 quotation proves nothing. Recognized same-metric conflict evidence
 prevents a lone reported value from becoming authoritative, regardless of the model-supplied
 evidence relation. Unresolved relationships never enter authoritative prose.
+
+For a single qualitative observation, an immediate qualitative operand on the right side of a
+locally owned direct conflict bridge is recorded only as an unmodeled conflict signal. It cannot
+become a verified or published observation, but a distinct operand prevents the known value from
+being published alone. Repeating the same canonical qualitative operand does not manufacture a
+conflict, and a bridge owned by a competing metric proves nothing about the claim metric.
 
 ## Bounded absence
 
@@ -102,8 +108,12 @@ rejected during model self-correction. A post-run server protocol issues
 four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
 complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
 same complete-word matcher used by verification. The protocol records both result sets, opens every
-unique candidate, and inspects a fixed 384-character window on both sides of every complete metric
-occurrence. Values before the metric require a closed `VALUE in/of METRIC` bridge; forward values
+unique candidate plus its source-linked immediate neighbors, and inspects a fixed 384-character
+window on both sides of every complete metric occurrence. When the local text reaches a chunk edge
+without terminal punctuation, the window continues into the loaded neighbor; a missing required
+neighbor makes the probe incomplete. A terminal sentence boundary prevents unrelated neighboring
+text from being stitched into the occurrence. Values before the metric require a closed
+`VALUE in/of METRIC` bridge; forward values
 and immediate `VALUE METRIC` adjacency make the occurrence reviewable, including bounded
 comma/colon/dash separators and opening parentheses, brackets, braces, or quotes. Closed
 qualitative states are inspected on both sides of the complete metric phrase, with bounded plain or

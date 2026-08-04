@@ -12,6 +12,7 @@ from needleproof_api.receipt import (
     _git_sha,
     _optional_env,
     _optional_sha256_env,
+    _snapshot_from_text,
     receipt_contract_schema,
     validate_receipt,
 )
@@ -76,6 +77,11 @@ def test_receipt_validation_is_total_for_arbitrary_json(receipt):
 
     assert errors
     assert all(isinstance(error, str) for error in errors)
+
+
+def test_sealed_snapshot_preserves_non_object_root_type_failure(tmp_path):
+    with pytest.raises(TypeError, match="root must be an object"):
+        _snapshot_from_text(tmp_path / "receipt.json", "[]")
 
 
 json_scalar = st.none() | st.booleans() | st.integers() | st.text()

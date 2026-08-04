@@ -1102,6 +1102,84 @@ def test_qualitative_conflict_does_not_borrow_a_competing_metrics_value():
     assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
 
 
+@pytest.mark.parametrize(
+    ("conflicting_value", "expected"),
+    [
+        ("negative", ClaimStatus.POSSIBLE_CONFLICT),
+        ("stable", ClaimStatus.VERIFIED),
+    ],
+)
+def test_unmodeled_qualitative_bridge_operand_blocks_only_a_distinct_single_value(
+    conflicting_value,
+    expected,
+):
+    quote = f"Credit rating was stable, which cannot be right alongside {conflicting_value}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 929),
+        document_id="doc_unmodeled_qualitative_bridge",
+        document_name="Unmodeled qualitative bridge fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="a" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Credit rating", observation("stable", evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == expected
+
+
+def test_unmodeled_qualitative_bridge_requires_left_operand_metric_ownership():
+    value_quote = "Credit rating was stable."
+    conflict_quote = (
+        "Credit rating was discussed, while Market outlook was stable, "
+        "which cannot be right alongside negative."
+    )
+    chunk_text = f"{value_quote} {conflict_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 930),
+        document_id="doc_unmodeled_qualitative_bridge_scope",
+        document_name="Unmodeled qualitative bridge scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="b" * 64,
+        token_estimate=18,
+    )
+    evidence = reference(chunk.chunk_id, value_quote, "Credit rating")
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Credit rating",
+        assertion="Credit rating was discussed",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Credit rating", observation("stable", evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
 def test_year_is_not_mistaken_for_second_unitless_conflict_value():
     quote = "Headcount was 100 in 2024; the figures are incompatible."
     chunk = ChunkRecord(

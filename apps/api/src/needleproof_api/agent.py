@@ -181,7 +181,6 @@ class InvestigationContext:
         arguments: dict[str, Any],
         result: SearchResult,
     ) -> None:
-        self.completed_searches += 1
         top_k = int(arguments.get("top_k", 8))
         signature = search_signature(
             query=arguments["query"],
@@ -193,34 +192,34 @@ class InvestigationContext:
             date_to=arguments.get("date_to"),
         )
         result_chunks = self.corpus.get_chunks([hit.chunk_id for hit in result.results])
-        self.unique_search_signatures.add(signature)
-        self.completed_search_records.append(
-            CompletedSearchRecord(
-                query=arguments["query"],
-                normalized_query=_search_text_signature(arguments["query"]),
-                mode=arguments["mode"],
-                metric=arguments.get("metric"),
-                top_k=top_k,
-                document_ids=arguments.get("document_ids") or [],
-                date_from=arguments.get("date_from"),
-                date_to=arguments.get("date_to"),
-                signature=signature,
-                result_chunk_ids=[hit.chunk_id for hit in result.results],
-                result_count=len(result.results),
-                exact_metric_hit_count=sum(
-                    bool(
-                        word_phrase_spans(
-                            canonical_metric_key(arguments["metric"]),
-                            chunk.normalized_text,
-                        )
+        record = CompletedSearchRecord(
+            query=arguments["query"],
+            normalized_query=_search_text_signature(arguments["query"]),
+            mode=arguments["mode"],
+            metric=arguments.get("metric"),
+            top_k=top_k,
+            document_ids=arguments.get("document_ids") or [],
+            date_from=arguments.get("date_from"),
+            date_to=arguments.get("date_to"),
+            signature=signature,
+            result_chunk_ids=[hit.chunk_id for hit in result.results],
+            result_count=len(result.results),
+            exact_metric_hit_count=sum(
+                bool(
+                    word_phrase_spans(
+                        canonical_metric_key(arguments["metric"]),
+                        chunk.normalized_text,
                     )
-                    for chunk in result_chunks
                 )
-                if arguments.get("metric")
-                else 0,
-                completion_status="completed",
+                for chunk in result_chunks
             )
+            if arguments.get("metric")
+            else 0,
+            completion_status="completed",
         )
+        self.unique_search_signatures.add(signature)
+        self.completed_search_records.append(record)
+        self.completed_searches += 1
 
     async def use_tool(self, name: str) -> None:
         if self.tool_calls >= self.settings.max_tool_calls:
@@ -550,9 +549,11 @@ class ReceiptHooks(RunHooksBase[InvestigationContext, Agent]):
             + context.context.settings.max_model_output_tokens_per_call
         )
         await context.context.ledger.reserve_model_call_capacity(call_token_ceiling)
-        self._llm_started = time.perf_counter()
-        self._llm_started_at = utc_now_iso()
+        started = time.perf_counter()
+        started_at = utc_now_iso()
         await context.context.ledger.append("agent.model.started", {"model": agent.model})
+        self._llm_started = started
+        self._llm_started_at = started_at
 
     async def on_llm_end(
         self,
@@ -571,26 +572,28 @@ class ReceiptHooks(RunHooksBase[InvestigationContext, Agent]):
             "reasoning_tokens": usage.output_tokens_details.reasoning_tokens,
             "total_tokens": usage.total_tokens,
         }
-        await context.context.ledger.record_openai_call(
-            {
-                "operation": "model",
-                "model": str(agent.model),
-                "response_id": response.response_id,
-                "request_id": response.request_id,
-                "started_at": self._llm_started_at or utc_now_iso(),
-                "ended_at": utc_now_iso(),
-                "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-                "token_usage": token_usage,
-                "retry_count": 0,
-                "error": None,
-            }
-        )
-        await context.context.ledger.append(
-            "agent.model.completed",
-            {"response_id": response.response_id, "token_usage": token_usage},
-        )
-        self._llm_started = None
-        self._llm_started_at = None
+        try:
+            await context.context.ledger.record_openai_call(
+                {
+                    "operation": "model",
+                    "model": str(agent.model),
+                    "response_id": response.response_id,
+                    "request_id": response.request_id,
+                    "started_at": self._llm_started_at or utc_now_iso(),
+                    "ended_at": utc_now_iso(),
+                    "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+                    "token_usage": token_usage,
+                    "retry_count": 0,
+                    "error": None,
+                }
+            )
+            await context.context.ledger.append(
+                "agent.model.completed",
+                {"response_id": response.response_id, "token_usage": token_usage},
+            )
+        finally:
+            self._llm_started = None
+            self._llm_started_at = None
 
     async def record_failed_model_call(
         self,
@@ -600,22 +603,24 @@ class ReceiptHooks(RunHooksBase[InvestigationContext, Agent]):
     ) -> None:
         if self._llm_started is None:
             return
-        await context.ledger.record_openai_call(
-            {
-                "operation": "model",
-                "model": model,
-                "response_id": None,
-                "request_id": getattr(error, "request_id", None),
-                "started_at": self._llm_started_at or utc_now_iso(),
-                "ended_at": utc_now_iso(),
-                "duration_ms": round((time.perf_counter() - self._llm_started) * 1000, 3),
-                "token_usage": {},
-                "retry_count": 0,
-                "error": {"type": type(error).__name__, "message": str(error)[:500]},
-            }
-        )
-        self._llm_started = None
-        self._llm_started_at = None
+        try:
+            await context.ledger.record_openai_call(
+                {
+                    "operation": "model",
+                    "model": model,
+                    "response_id": None,
+                    "request_id": getattr(error, "request_id", None),
+                    "started_at": self._llm_started_at or utc_now_iso(),
+                    "ended_at": utc_now_iso(),
+                    "duration_ms": round((time.perf_counter() - self._llm_started) * 1000, 3),
+                    "token_usage": {},
+                    "retry_count": 0,
+                    "error": {"type": type(error).__name__, "message": str(error)[:500]},
+                }
+            )
+        finally:
+            self._llm_started = None
+            self._llm_started_at = None
 
 
 @dataclass

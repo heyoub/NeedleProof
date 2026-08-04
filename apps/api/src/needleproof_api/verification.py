@@ -62,6 +62,11 @@ _TEMPORAL_LEAD = re.compile(r"^(?:as\s+of|at|by|during|for|in|on|through)\s+", r
 _QUARTER_NUMBERS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
 _CONFLICT_BRIDGE_LEFT_GAP = re.compile(r"\s*,?\s*(?:which\s+)?", re.IGNORECASE)
 _CONFLICT_BRIDGE_RIGHT_GAP = re.compile(r"\s*(?:the\s*)?", re.IGNORECASE)
+_QUALITATIVE_BRIDGE_OPERAND = re.compile(
+    r"\s*(?:the\s+)?(?P<value>(?!the\b)[^\W\d_]+)\b"
+    r"(?=\s*(?:[,;.!?]|$|(?:figure|value|state|rating)\b))",
+    re.IGNORECASE,
+)
 _CONFLICT_COLLECTIVE_LEAD_GAP = re.compile(
     r"\s*[,;:]?\s*(?:(?:and|but)\s+)?(?:the\s+)?",
     re.IGNORECASE,
@@ -529,6 +534,24 @@ def _qualitative_conflict_candidates(
     return sorted(candidates, key=lambda candidate: candidate[1])
 
 
+def _unmodeled_qualitative_bridge_candidate(
+    sentence: str,
+    relation: re.Match[str],
+) -> ConflictCandidate | None:
+    """Expose one immediate qualitative bridge operand without authorizing it.
+
+    The operand exists only to prevent a known value from becoming authoritative
+    when the source explicitly says it conflicts with an unmodeled qualitative
+    counterpart. It never becomes a verified observation or published value.
+    """
+
+    match = _QUALITATIVE_BRIDGE_OPERAND.match(sentence, relation.end())
+    if match is None:
+        return None
+    value = match.group("value")
+    return canonical_word_phrase(value), match.span("value")
+
+
 def _qualitative_values_bound_to_metric(
     sentence: str,
     metric: str,
@@ -624,6 +647,8 @@ def _has_explicit_conflict(
                 measurements = list(locally_owned_measurements)
             else:
                 measurements = [*numeric_measurements, *qualitative_values]
+                if candidate := _unmodeled_qualitative_bridge_candidate(sentence, relation):
+                    measurements.append(candidate)
             measurements.sort(key=lambda candidate: candidate[1])
             if _relation_binds_distinct_values(
                 sentence,
@@ -690,7 +715,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v23-owned-conflicts-and-disjoint-periods"
+    version = "deterministic-verifier-v24-unmodeled-conflict-operands"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

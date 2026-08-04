@@ -26,9 +26,9 @@ Current regression families include:
 - positive observation bindings and fail-closed role, scope, modality, and predicate mutations;
 - assertion/quotation boundary preservation and coordinated-clause boundaries;
 - numeric injectivity, sign/unit identity, and decimal-context independence;
-- temporal equivalence, distinction, and exact observation-span binding;
-- conflict locality, value adjacency, and cross-metric decoys;
-- bounded absence completeness, bidirectional metric context, and forged-proof mutations;
+- temporal equivalence, overlap, provable distinction, and exact observation-span binding;
+- conflict locality, modeled/unmodeled operand adjacency, and cross-metric decoys;
+- bounded absence completeness, bidirectional and cross-chunk metric context, and forged-proof mutations;
 - receipt schema totality, version compatibility, event-chain consistency, provenance, and
   single-snapshot recovery/serving integrity;
 - run lifecycle cancellation, persistence faults, reconciliation, reconnect, and idempotence;

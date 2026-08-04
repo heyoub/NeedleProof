@@ -450,6 +450,79 @@ async def test_failed_search_makes_absence_probe_incomplete():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metric_text", "include_neighbor", "expected"),
+    [
+        ("Revenue", True, AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW),
+        ("Revenue.", True, AbsenceConclusion.NOT_FOUND_IN_PROBE),
+        ("Revenue", False, AbsenceConclusion.INCOMPLETE_PROBE),
+    ],
+)
+async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
+    metric_text,
+    include_neighbor,
+    expected,
+):
+    metric_id = chunk_id_from_uint64(2**63 + 31)
+    value_id = chunk_id_from_uint64(2**63 + 32)
+    metric_chunk = ChunkRecord(
+        chunk_id=metric_id,
+        document_id="doc_split_metric",
+        document_name="Split metric fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=metric_text,
+        normalized_text=metric_text,
+        next_chunk_id=value_id,
+        sha256="1" * 64,
+        token_estimate=1,
+    )
+    value_chunk = ChunkRecord(
+        chunk_id=value_id,
+        document_id="doc_split_metric",
+        document_name="Split metric fixture",
+        physical_page_index=1,
+        chunk_position=1,
+        text="was $2 million.",
+        normalized_text="was $2 million.",
+        previous_chunk_id=metric_id,
+        sha256="2" * 64,
+        token_estimate=4,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000031"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="3" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            if metric_id not in chunk_ids:
+                return []
+            if neighbor_radius and include_neighbor:
+                return [metric_chunk, value_chunk]
+            return [metric_chunk]
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return [metric_chunk]
+
+    probe = await probe_metric_absence(Corpus(), "Revenue")
+
+    assert probe.conclusion == expected
+    if include_neighbor:
+        assert value_id in probe.opened_chunk_ids
+    else:
+        assert probe.exact_metric_scan_error == "NeighborChunkMissing"
+
+
+@pytest.mark.asyncio
 async def test_exhaustive_metric_scan_defeats_top_k_or_token_displacement():
     answer_id = chunk_id_from_uint64(2**63 + 500)
     answer = ChunkRecord(

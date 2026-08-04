@@ -185,3 +185,95 @@ async def test_failed_model_attempt_is_written_to_openai_call_ledger():
     assert len(calls) == 1
     assert calls[0]["operation"] == "model"
     assert calls[0]["error"] == {"type": "RuntimeError", "message": "provider down"}
+
+
+@pytest.mark.asyncio
+async def test_failed_model_telemetry_failure_still_clears_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            return None
+
+        async def record_openai_call(self, _record):
+            raise RuntimeError("telemetry unavailable")
+
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    hooks = ReceiptHooks()
+    await hooks.on_llm_start(context, SimpleNamespace(model="gpt-5.6-terra"), None, [])
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.record_failed_model_call(
+            state,
+            "gpt-5.6-terra",
+            RuntimeError("provider down"),
+        )
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_model_start_telemetry_failure_never_arms_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            raise RuntimeError("telemetry unavailable")
+
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    hooks = ReceiptHooks()
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.on_llm_start(
+            context,
+            SimpleNamespace(model="gpt-5.6-terra"),
+            None,
+            [],
+        )
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_completed_model_telemetry_failure_still_clears_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            return None
+
+        async def record_openai_call(self, _record):
+            raise RuntimeError("telemetry unavailable")
+
+    token_details = SimpleNamespace(cached_tokens=0, cache_write_tokens=0)
+    output_details = SimpleNamespace(reasoning_tokens=0)
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            requests=1,
+            input_tokens=1,
+            input_tokens_details=token_details,
+            output_tokens=1,
+            output_tokens_details=output_details,
+            total_tokens=2,
+        ),
+        response_id="resp_test",
+        request_id="req_test",
+    )
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+    hooks = ReceiptHooks()
+    await hooks.on_llm_start(context, agent, None, [])
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.on_llm_end(context, agent, response)
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Literal, Protocol
 
 from .binding import (
@@ -22,7 +22,7 @@ from .models import (
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v11-bidirectional-enclosures"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v12-open-edge-neighbors"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -60,8 +60,10 @@ ABSENCE_PROTOCOL_SPEC = {
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
     "metric_context_policy": (
-        "bidirectional_window_around_complete_metric_without_sentence_parsing"
+        "bidirectional_window_around_complete_metric_with_open_edge_neighbors"
     ),
+    "neighbor_radius": 1,
+    "cross_chunk_context": "source_linked_neighbor_only_when_local_clause_edge_is_open",
     "conclusion": "bounded_not_global",
 }
 ABSENCE_PROTOCOL_SHA256 = sha256_text(canonical_json(ABSENCE_PROTOCOL_SPEC))
@@ -211,6 +213,79 @@ def _metric_context_numeric_candidates(
     return candidates
 
 
+def _join_source_fragments(left: str, right: str) -> str:
+    if not left:
+        return right
+    if not right:
+        return left
+    separator = "" if left[-1].isspace() or right[0].isspace() else " "
+    return f"{left}{separator}{right}"
+
+
+def _metric_occurrence_with_open_neighbors(
+    chunk: ChunkRecord,
+    chunks_by_id: Mapping[ChunkId, ChunkRecord],
+    metric_start: int,
+    metric_end: int,
+) -> tuple[MetricOccurrence, bool]:
+    """Build one bounded context, extending only grammatically open chunk edges."""
+
+    local_before = chunk.normalized_text[
+        max(0, metric_start - ABSENCE_METRIC_CONTEXT_CHARACTERS) : metric_start
+    ]
+    local_after = chunk.normalized_text[
+        metric_end : min(
+            len(chunk.normalized_text),
+            metric_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
+        )
+    ]
+    missing_neighbor = False
+
+    if (
+        metric_start < ABSENCE_METRIC_CONTEXT_CHARACTERS
+        and chunk.previous_chunk_id is not None
+        and not re.search(r"[.!?;]", local_before)
+    ):
+        previous = chunks_by_id.get(chunk.previous_chunk_id)
+        if previous is None:
+            missing_neighbor = True
+        else:
+            remaining = ABSENCE_METRIC_CONTEXT_CHARACTERS - len(local_before)
+            local_before = _join_source_fragments(
+                previous.normalized_text[-remaining:],
+                local_before,
+            )
+
+    if (
+        len(chunk.normalized_text) - metric_end < ABSENCE_METRIC_CONTEXT_CHARACTERS
+        and chunk.next_chunk_id is not None
+        and not re.search(r"[.!?;]", local_after)
+    ):
+        following = chunks_by_id.get(chunk.next_chunk_id)
+        if following is None:
+            missing_neighbor = True
+        else:
+            remaining = ABSENCE_METRIC_CONTEXT_CHARACTERS - len(local_after)
+            local_after = _join_source_fragments(
+                local_after,
+                following.normalized_text[:remaining],
+            )
+
+    metric_text = chunk.normalized_text[metric_start:metric_end]
+    context = _join_source_fragments(local_before, metric_text)
+    span_end = len(context)
+    span_start = span_end - len(metric_text)
+    context = _join_source_fragments(context, local_after)
+    return (
+        MetricOccurrence(
+            chunk_id=chunk.chunk_id,
+            sentence=context,
+            span=(span_start, span_end),
+        ),
+        missing_neighbor,
+    )
+
+
 async def probe_metric_absence(
     corpus: AbsenceCorpus,
     metric: str,
@@ -299,26 +374,25 @@ async def probe_metric_absence(
             candidate_ids.extend(exact_metric_scan_chunk_ids)
 
     unique_ids = list(dict.fromkeys(candidate_ids))
-    chunks = await asyncio.to_thread(corpus.get_chunks, unique_ids)
+    chunks = await asyncio.to_thread(corpus.get_chunks, unique_ids, 1)
+    unique_ids = list(dict.fromkeys([*unique_ids, *(chunk.chunk_id for chunk in chunks)]))
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
     occurrences: list[MetricOccurrence] = []
     unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
     value_candidate_keys: set[tuple[ChunkId, str]] = set()
+    missing_open_edge_neighbor = False
     for chunk in chunks:
         for metric_start, metric_end in word_phrase_spans(metric_phrase, chunk.normalized_text):
-            context_start = max(0, metric_start - ABSENCE_METRIC_CONTEXT_CHARACTERS)
-            context_end = min(
-                len(chunk.normalized_text),
-                metric_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
+            occurrence, missing_neighbor = _metric_occurrence_with_open_neighbors(
+                chunk,
+                chunks_by_id,
+                metric_start,
+                metric_end,
             )
-            context = chunk.normalized_text[context_start:context_end]
-            occurrence = MetricOccurrence(
-                chunk_id=chunk.chunk_id,
-                sentence=context,
-                span=(metric_start - context_start, metric_end - context_start),
-            )
+            missing_open_edge_neighbor = missing_open_edge_neighbor or missing_neighbor
             occurrences.append(occurrence)
-            if has_unresolved_metric_predicate(metric_phrase, context):
+            if has_unresolved_metric_predicate(metric_phrase, occurrence.sentence):
                 unresolved_predicates.append(occurrence)
             for value_text, _span in _metric_context_numeric_candidates(occurrence):
                 candidate_key = (chunk.chunk_id, value_text)
@@ -335,6 +409,10 @@ async def probe_metric_absence(
                         ),
                     )
                 )
+
+    if missing_open_edge_neighbor:
+        exact_metric_scan_completed = False
+        exact_metric_scan_error = "NeighborChunkMissing"
 
     probe = AbsenceProbeResult(
         protocol_version=ABSENCE_PROTOCOL_VERSION,
