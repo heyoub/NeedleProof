@@ -168,13 +168,33 @@ def punctuation_boundaries(
         for offset in range(token.start, token.end)
         if text[offset] == "."
     }
-    return tuple(
-        (offset, offset + 1)
-        for offset, character in enumerate(text)
-        if character in punctuation
-        and offset not in initialism_periods
-        and (character != "." or offset + 1 == len(text) or text[offset + 1].isspace())
-    )
+    boundaries = []
+    for offset, character in enumerate(text):
+        if character not in punctuation or offset in initialism_periods:
+            continue
+        if character == "." and offset + 1 < len(text):
+            if not text[offset + 1].isspace():
+                continue
+            next_offset = offset + 1
+            while next_offset < len(text) and text[next_offset].isspace():
+                next_offset += 1
+            previous_word = re.search(r"[^\W\d_]+$", text[:offset])
+            next_character = text[next_offset : next_offset + 1]
+            if (
+                next_character.islower()
+                or next_character.isdigit()
+                or (
+                    previous_word
+                    and len(previous_word.group()) <= 4
+                    and previous_word.group()[0].isupper()
+                    and next_character.isupper()
+                )
+            ):
+                # Ambiguous abbreviation punctuation stays open. Expanding the
+                # proof context can cause review, never stronger authority.
+                continue
+        boundaries.append((offset, offset + 1))
+    return tuple(boundaries)
 
 
 def sentence_fragments(text: str) -> tuple[str, ...]:

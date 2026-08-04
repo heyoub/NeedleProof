@@ -892,3 +892,51 @@ async def test_too_broad_exact_scan_is_typed_incomplete_not_absence():
     assert probe.exact_metric_scan_completed is False
     assert probe.exact_metric_scan_error == "ExactScanTooBroad"
     assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Total headcount at Acme Inc. was 500 employees.",
+        "Total headcount was approx. 500 employees.",
+    ],
+)
+async def test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value(text):
+    chunk_id = chunk_id_from_uint64(2**63 + 1600)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_abbreviation_context",
+        document_name="Abbreviation context",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="a" * 64,
+        token_estimate=10,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="b" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return exact_scan(chunk)
+
+    probe = await probe_metric_absence(Corpus(), "Total headcount")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert probe.supporting_value_candidates

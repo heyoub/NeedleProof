@@ -26,6 +26,7 @@ disposition = "fixed"
 owner = "absence"
 tests = [
   "test_complete_same_chunk_context_blocks_absence_beyond_display_window",
+  "test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value",
   "test_absence_probe_handles_metric_values_split_across_chunk_edges",
 ]
 

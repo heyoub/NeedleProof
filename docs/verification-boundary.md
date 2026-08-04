@@ -116,12 +116,13 @@ Variant generation is capped; a pathologically acronym-heavy metric falls back t
 chunk-table scan instead of allocating an exponential query. Exact scans first count candidate
 rows and characters; a configured contract limit produces a typed incomplete result before source
 rows are materialized. The protocol records both result sets and opens every unique candidate plus
-its source-linked immediate neighbors. Proof analysis uses the complete local clause; a separate
+its source-linked immediate neighbors. Proof analysis uses a complete proposition selected only by
+positive punctuation boundaries; ambiguous abbreviation punctuation expands the analysis context
+rather than truncating it. A separate
 fixed 384-character window on both sides of every complete metric occurrence is only the receipt
-and UI excerpt. When the local clause reaches a chunk edge without terminal punctuation, analysis
-continues into the loaded neighbor; a missing required neighbor makes the probe incomplete. A
-terminal sentence boundary prevents unrelated neighboring text from being stitched into the
-occurrence. Values before the metric require a closed
+and UI excerpt. A missing required neighbor makes the probe incomplete. This deliberately accepts
+some false-negative review outcomes rather than turning punctuation guesses into false absence.
+Values before the metric require a closed
 `VALUE in/of METRIC` bridge; forward values
 and immediate `VALUE METRIC` adjacency make the occurrence reviewable, including bounded
 comma/colon/dash separators and opening parentheses, brackets, braces, or quotes. Closed

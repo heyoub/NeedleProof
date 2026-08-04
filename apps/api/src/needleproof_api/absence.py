@@ -79,7 +79,9 @@ ABSENCE_PROTOCOL_SPEC = {
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
-    "metric_context_policy": "complete_clause_analysis_with_bounded_display_excerpt",
+    "metric_context_policy": (
+        "complete_positive_boundary_context_with_ambiguous_punctuation_expanding_fail_closed"
+    ),
     "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
     "neighbor_radius": 1,
     "cross_chunk_context": "source_linked_neighbor_only_when_local_clause_edge_is_open",
@@ -316,7 +318,7 @@ def _metric_occurrence_with_open_neighbors(
     metric_start: int,
     metric_end: int,
 ) -> _AnalyzedMetricContext:
-    """Analyze a complete local clause while storing only a bounded display excerpt."""
+    """Analyze one complete, conservatively bounded source proposition."""
 
     before = chunk.normalized_text[:metric_start]
     after = chunk.normalized_text[metric_end:]
