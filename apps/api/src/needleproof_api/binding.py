@@ -56,6 +56,11 @@ _BEFORE_METRIC_TEMPORAL_GAP = re.compile(
     re.IGNORECASE,
 )
 _TERMINAL_ASSERTION_TAIL = re.compile(r"\s*[.!?]?\s*")
+_DIRECT_METRIC_PREFIX = re.compile(r"\s*(?:the\s+)?", re.IGNORECASE)
+_TEMPORAL_METRIC_PREFIX = re.compile(
+    r"\s*(?:(?:as\s+of|at|by|during|for|in|on|through)\s+)?(?:the\s+)?",
+    re.IGNORECASE,
+)
 
 AUTHORIZED_OBSERVATION_KINDS = frozenset(
     {
@@ -73,7 +78,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v2-atomic-assertions",
+    "version": "positive-bindings-v3-atomic-subjects",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -90,6 +95,9 @@ BINDING_CONTRACT_SPEC = {
     "post_value_tail": (
         "only terminal punctuation after the value or its bound trailing temporal anchor"
     ),
+    "direct_metric_prefix_pattern": _DIRECT_METRIC_PREFIX.pattern,
+    "temporal_metric_prefix_pattern": _TEMPORAL_METRIC_PREFIX.pattern,
+    "pre_metric_subject": "complete metric or bound leading temporal anchor",
     "unresolved_predicate_detection": "known positive connector with nonempty predicate",
     "unknown_syntax": "reject",
     "compound_numeric_observation": "reject",
@@ -318,6 +326,23 @@ def _post_value_tail_is_authorized(
     return bool(_TERMINAL_ASSERTION_TAIL.fullmatch(assertion[relationship_end:]))
 
 
+def _metric_prefix_is_authorized(
+    assertion: str,
+    metric_span: Span,
+    temporal_span: Span | None,
+) -> bool:
+    """Require the selected metric to own the complete assertion subject.
+
+    A bound leading temporal anchor may precede the metric. Otherwise only an
+    optional article is allowed; role, scope, modality, and negation modifiers must
+    be included in the canonical metric anchor or the observation fails closed.
+    """
+
+    if temporal_span is not None and temporal_span[1] <= metric_span[0]:
+        return bool(_TEMPORAL_METRIC_PREFIX.fullmatch(assertion[: temporal_span[0]]))
+    return bool(_DIRECT_METRIC_PREFIX.fullmatch(assertion[: metric_span[0]]))
+
+
 def bind_observation(
     *,
     metric_anchor: str,
@@ -368,6 +393,12 @@ def bind_observation(
             if not _post_value_tail_is_authorized(
                 normalized_assertion,
                 value_span,
+                temporal_span,
+            ):
+                continue
+            if not _metric_prefix_is_authorized(
+                normalized_assertion,
+                metric_span,
                 temporal_span,
             ):
                 continue

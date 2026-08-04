@@ -13,6 +13,9 @@ An authoritative observation must prove all of these facts:
 - the cited chunk belongs to the run's immutable corpus version;
 - the quote and assertion exist under the documented normalization contract;
 - the complete metric anchor occurs in that assertion and matches the canonical metric;
+- the assertion begins at that complete metric subject, an optional article, or a bound leading
+  temporal anchor, so pre-metric negation, forecasts, targets, adjustments, and scope qualifiers
+  cannot disappear from the authoritative metric;
 - the exact value occurs in the assertion;
 - one closed positive binding profile connects that metric span to that value span;
 - the exact assertion ends at the value or its bound trailing temporal anchor, apart from terminal

@@ -80,7 +80,7 @@ The longer diagram and trust boundaries are in [docs/architecture.md](docs/archi
 
 ## Verification model
 
-The model produces typed observations rather than a publishable proposition or proposed verdict. It must copy a canonical metric anchor, the smallest contiguous assertion ending at the proved value or its bound temporal anchor, exact value, observation kind, optional exact temporal anchor, evidence relation, and enclosing quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from verified observations; the model's draft prose is never published. The verifier checks source integrity and a closed positive-binding contract—not arbitrary English entailment—and leaves unknown syntax and unauthorized value roles unverified. See [the verification boundary](docs/verification-boundary.md).
+The model produces typed observations rather than a publishable proposition or proposed verdict. It must copy a canonical metric anchor and the smallest contiguous assertion beginning at that complete metric or a bound leading temporal anchor and ending at the proved value or its bound trailing temporal anchor, plus the exact value, observation kind, evidence relation, and enclosing quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from verified observations; the model's draft prose is never published. The verifier checks source integrity and a closed positive-binding contract—not arbitrary English entailment—and leaves unknown syntax and unauthorized value roles unverified. See [the verification boundary](docs/verification-boundary.md).
 
 Verification checks include:
 

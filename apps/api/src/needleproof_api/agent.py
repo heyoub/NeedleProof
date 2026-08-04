@@ -68,7 +68,9 @@ contains the complete metric/value relationship from the same exact_quote. The c
 metric must match that anchor after capitalization, punctuation, and spacing are normalized. For
 an authoritative reported value, end exact_assertion immediately after the value, terminal
 punctuation, or a trailing temporal anchor bound to that value; keep later commentary in
-exact_quote rather than appending it to exact_assertion. For
+exact_quote rather than appending it to exact_assertion. Start exact_assertion at the complete
+metric anchor or at a leading temporal anchor bound to that metric. Do not leave role, scope,
+modality, negation, or qualifiers outside metric_anchor. For
 coordinated or modified metric names, include the complete metric phrase (for example, "Revenue
 from products and services") rather than shortening it to an ambiguous head noun. For
 every typed observation, classify its kind and copy an exact temporal_anchor when the assertion

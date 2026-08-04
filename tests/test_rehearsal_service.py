@@ -118,9 +118,7 @@ async def test_rehearsal_preserves_context_evidence_needed_for_conflict(tmp_path
         chunk_id=chunk_id_from_uint64(6812131146285660789),
         metric_anchor="Fee-earning AUM",
         exact_quote=second_quote,
-        exact_assertion=(
-            "First, my note from the February call has fee-earning AUM at $8.2 billion"
-        ),
+        exact_assertion="fee-earning AUM at $8.2 billion",
     )
     context_reference = EvidenceReference(
         chunk_id=chunk_id_from_uint64(6812131146285660789),

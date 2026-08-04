@@ -199,6 +199,13 @@ def test_non_supporting_evidence_cannot_authorize_observation(corpus, relation):
         "Revenue was $2 million maximum.",
         "Revenue was $2 million, forecast.",
         "Revenue was $2 million, not the reported actual.",
+        "No revenue was $2 million.",
+        "Forecast revenue was $2 million.",
+        "Target revenue was $2 million.",
+        "Projected revenue was $2 million.",
+        "Adjusted revenue was $2 million.",
+        "Non-GAAP revenue was $2 million.",
+        "Company revenue was $2 million.",
     ],
 )
 def test_unknown_negated_modal_component_delta_and_competing_subject_forms_fail_closed(quote):
@@ -212,7 +219,7 @@ def test_unknown_negated_modal_component_delta_and_competing_subject_forms_fail_
         "Revenue reached $2 million.",
         "Revenue stood at $2 million.",
         "Revenue ended the year at $2 million.",
-        "At year end, Revenue was $2 million.",
+        "The Revenue was $2 million.",
         "Revenue was stable. It remained at $2 million.",
     ],
 )
@@ -232,6 +239,25 @@ def test_trailing_temporal_anchor_is_part_of_the_same_atomic_binding():
     )
 
 
+@pytest.mark.parametrize(
+    ("quote", "temporal_anchor"),
+    [
+        ("At year end, Revenue was $2 million.", "year end"),
+        ("February call has Revenue at $2 million.", "February call"),
+    ],
+)
+def test_bound_leading_temporal_anchor_may_precede_complete_metric(quote, temporal_anchor):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            quote,
+            temporal_anchor=temporal_anchor,
+        )
+        is not None
+    )
+
+
 def test_compound_metric_anchor_is_not_split_at_and():
     metric = "Research and development expenses"
     quote = f"{metric} were $2 million."
@@ -243,7 +269,15 @@ def test_compound_metric_anchor_is_not_split_at_and():
 def test_qualitative_predicate_does_not_leak_across_metrics(separator):
     quote = f"Revenue was flat{separator} operating expenses were stable."
     assert reported_value_linked_to_metric("stable", "Revenue", quote) is None
-    assert reported_value_linked_to_metric("stable", "operating expenses", quote) is not None
+    assert reported_value_linked_to_metric("stable", "operating expenses", quote) is None
+    assert (
+        reported_value_linked_to_metric(
+            "stable",
+            "operating expenses",
+            "operating expenses were stable.",
+        )
+        is not None
+    )
 
 
 def test_compound_numeric_value_is_rejected_as_ambiguous():
@@ -325,7 +359,7 @@ def test_seeded_fee_aum_source_characterization_is_conflict(corpus):
         MEMO_CONTINUATION_CHUNK,
         second_quote,
         "fee-earning AUM",
-        assertion=("First, my note from the February call has fee-earning AUM at $8.2 billion"),
+        assertion="February call has fee-earning AUM at $8.2 billion",
     )
     verified = EvidenceVerifier(corpus).verify_claim(
         claim(

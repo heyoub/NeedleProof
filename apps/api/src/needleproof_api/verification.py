@@ -250,7 +250,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v6-atomic-bindings"
+    version = "deterministic-verifier-v7-atomic-subjects"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

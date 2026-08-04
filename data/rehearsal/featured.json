@@ -134,7 +134,7 @@
               "chunk_id": "chk_5e898d2f71bb3a75",
               "metric_anchor": "fee-earning AUM",
               "exact_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
-              "exact_assertion": "First, my note from the February call has fee-earning AUM at $8.2 billion",
+              "exact_assertion": "February call has fee-earning AUM at $8.2 billion",
               "relation": "supports"
             }
           ]
@@ -179,7 +179,7 @@
           "printed_page_label": "6",
           "metric_anchor": "fee-earning AUM",
           "metric_anchor_found": true,
-          "assertion": "First, my note from the February call has fee-earning AUM at $8.2 billion",
+          "assertion": "February call has fee-earning AUM at $8.2 billion",
           "assertion_found": true,
           "temporal_anchor": "February call",
           "temporal_value_bound": true,
@@ -923,11 +923,11 @@
     },
     "agent_instruction_hash": "83ff33260196b7d79378e20364ac9b26c65d7fbef6e431766a6013b9e5b9ffb9",
     "tool_schema_hash": "b11889d6954d66029248163c937d7996b8dc886fe7e1054d0dee2ffb23ec8e1f",
-    "verifier_version": "deterministic-verifier-v6-atomic-bindings",
+    "verifier_version": "deterministic-verifier-v7-atomic-subjects",
     "trace_id": "trace_d07dcbb6d5134e9199b9aa2f3d1bacd6",
     "sealed_at": "2026-08-04T03:35:37.285775+00:00",
     "event_chain_head": "db0fb3475822239e3208a0ab9c4942aad0dbe198179657c710c19908502d1e02",
-    "binding_contract_sha256": "9e050cf6da6ad732e195987005ef8092f28ba410c2e68d6a3eb3892d4205389e",
+    "binding_contract_sha256": "51755318a8382b88b251606e8222c18f4644128c1b2cfdfa70dde94232b254e2",
     "absence_protocol_version": "bounded-absence-v3-exact-occurrence-review",
     "absence_protocol_sha256": "28ce5efe8412fdac3e97125110387b5fa869b2ef01b7930b6d343f362592c672",
     "image_revision": null,
@@ -938,5 +938,5 @@
   },
   "error": null,
   "rehearsal": null,
-  "receipt_sha256": "d8367757b8e2b20517b34c198aa355f4cc74571be62c7513476c37a1774068e2"
+  "receipt_sha256": "59b0fe4d9e9e7fc34981c82d902d4d544b2b77ac9c050c7bf33b939dff6c0ed8"
 }
