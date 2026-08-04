@@ -3,7 +3,29 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from needleproof_api.receipt import _git_sha, receipt_contract_schema, validate_receipt
+import pytest
+from fastapi import HTTPException
+from hypothesis import given
+from hypothesis import strategies as st
+from needleproof_api.main import _validated_receipt
+from needleproof_api.receipt import (
+    TRUSTED_MIGRATION_RECORDS,
+    ReceiptProvenance,
+    TrustedMigrationRecord,
+    _git_sha,
+    _optional_env,
+    _optional_sha256_env,
+    _snapshot_from_text,
+    receipt_contract_schema,
+    validate_receipt,
+)
+from needleproof_api.util import canonical_json, sha256_text
+from pydantic import TypeAdapter
+
+
+def reseal_receipt(receipt: dict[str, object]) -> None:
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = sha256_text(canonical_json(unsigned))
 
 
 def test_featured_rehearsal_receipt_is_sealed(settings):
@@ -16,6 +38,27 @@ def test_featured_rehearsal_receipt_is_sealed(settings):
     assert receipt["configuration"]["model"] == "gpt-5.6-terra"
     assert receipt["configuration"]["reasoning_effort"] == "medium"
     assert receipt["configuration"]["trace_include_sensitive_data"] is False
+    assert receipt["provenance"]["receipt_derivation"] == "contract_migration"
+    assert receipt["provenance"]["source_receipt_sha256"]
+    assert receipt["provenance"]["source_verifier_version"]
+
+
+def test_trusted_migration_registry_binds_hash_addressed_source_and_complete_target(settings):
+    assert TRUSTED_MIGRATION_RECORDS
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    for expected_digest, migration in TRUSTED_MIGRATION_RECORDS.items():
+        assert migration.source_path.name == f"{expected_digest}.json"
+        source = json.loads(migration.source_path.read_text(encoding="utf-8"))
+        assert source["receipt_sha256"] == expected_digest
+        unsigned = {key: value for key, value in source.items() if key != "receipt_sha256"}
+        assert sha256_text(canonical_json(unsigned)) == expected_digest
+        assert len(migration.target_receipt_sha256) == 64
+        assert set(migration.target_receipt_sha256) <= set("0123456789abcdef")
+    featured_source = receipt["provenance"]["source_receipt_sha256"]
+    assert (
+        receipt["receipt_sha256"]
+        == TRUSTED_MIGRATION_RECORDS[featured_source].target_receipt_sha256
+    )
 
 
 def test_committed_receipt_schema_is_generated_from_pydantic_contract():
@@ -25,10 +68,63 @@ def test_committed_receipt_schema_is_generated_from_pydantic_contract():
     assert committed == receipt_contract_schema()
 
 
+def test_receipt_schema_exposes_provenance_derivation_contract():
+    schema = receipt_contract_schema()
+    provenance = schema["properties"]["provenance"]
+    assert provenance["discriminator"]["propertyName"] == "receipt_derivation"
+    assert len(provenance["oneOf"]) == 2
+    for definition_name in ("LiveReceiptProvenance", "MigratedReceiptProvenance"):
+        definition = schema["$defs"][definition_name]
+        assert "receipt_derivation" in definition["required"]
+        assert "source_receipt_sha256" in definition["required"]
+        assert "source_verifier_version" in definition["required"]
+
+
 def test_receipt_contract_rejects_unknown_top_level_fields(settings):
     receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
     receipt["surprise"] = "not part of the contract"
     assert any("Extra inputs" in error for error in validate_receipt(receipt))
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        None,
+        [],
+        "receipt",
+        7,
+        {"events": None},
+        {"events": [None]},
+        {"events": [], "provenance": None},
+    ],
+)
+def test_receipt_validation_is_total_for_arbitrary_json(receipt):
+    errors = validate_receipt(receipt)
+
+    assert errors
+    assert all(isinstance(error, str) for error in errors)
+
+
+def test_sealed_snapshot_preserves_non_object_root_type_failure(tmp_path):
+    with pytest.raises(TypeError, match="root must be an object"):
+        _snapshot_from_text(tmp_path / "receipt.json", "[]")
+
+
+json_scalar = st.none() | st.booleans() | st.integers() | st.text()
+json_value = st.recursive(
+    json_scalar,
+    lambda children: (
+        st.lists(children, max_size=8) | st.dictionaries(st.text(max_size=20), children, max_size=8)
+    ),
+    max_leaves=50,
+)
+
+
+@given(json_value)
+def test_receipt_validation_never_raises_for_recursive_json(value):
+    errors = validate_receipt(value)
+    assert isinstance(errors, list)
+    assert all(isinstance(error, str) for error in errors)
 
 
 def test_git_sha_is_optional_when_git_executable_is_missing(monkeypatch):
@@ -37,3 +133,292 @@ def test_git_sha_is_optional_when_git_executable_is_missing(monkeypatch):
 
     monkeypatch.setattr("needleproof_api.receipt.subprocess.run", missing_git)
     assert _git_sha() is None
+
+
+def test_empty_build_provenance_is_normalized_to_none(monkeypatch):
+    monkeypatch.setenv("NEEDLEPROOF_IMAGE_REVISION", "")
+    assert _optional_env("NEEDLEPROOF_IMAGE_REVISION") is None
+
+
+def test_injected_lock_digest_must_be_canonical_sha256(monkeypatch):
+    monkeypatch.setenv("NEEDLEPROOF_UV_LOCK_SHA256", "not-a-digest")
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        _optional_sha256_env("NEEDLEPROOF_UV_LOCK_SHA256")
+
+
+def test_contract_migration_requires_source_provenance(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    provenance = receipt["provenance"]
+    provenance["source_receipt_sha256"] = None
+    with pytest.raises(ValueError):
+        TypeAdapter(ReceiptProvenance).validate_python(provenance)
+
+
+def test_live_provenance_rejects_migration_source_identity(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    provenance = receipt["provenance"]
+    provenance["receipt_derivation"] = "live"
+    with pytest.raises(ValueError):
+        TypeAdapter(ReceiptProvenance).validate_python(provenance)
+
+
+def test_resealed_migration_cannot_select_an_untrusted_source(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    receipt["provenance"]["source_receipt_sha256"] = "0" * 64
+    reseal_receipt(receipt)
+
+    errors = validate_receipt(receipt)
+    assert "Migrated receipt source is not present in the trusted source registry." in errors
+
+    receipt_path = tmp_path / "forged-migration.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(HTTPException, match="Receipt integrity validation failed"):
+        _validated_receipt(
+            {
+                "receipt_path": str(receipt_path),
+                "receipt_sha256": receipt["receipt_sha256"],
+                "status": receipt["status"],
+            }
+        )
+
+
+def test_trusted_migration_source_content_is_hash_checked(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    source_digest = receipt["provenance"]["source_receipt_sha256"]
+    migration = TRUSTED_MIGRATION_RECORDS[source_digest]
+    source = json.loads(migration.source_path.read_text(encoding="utf-8"))
+    source["question"] = "A modified source question"
+    tampered_source = tmp_path / "source.json"
+    tampered_source.write_text(json.dumps(source), encoding="utf-8")
+
+    errors = validate_receipt(
+        receipt,
+        trusted_migrations={
+            source_digest: TrustedMigrationRecord(
+                source_path=tampered_source,
+                target_receipt_sha256=migration.target_receipt_sha256,
+            )
+        },
+    )
+    assert "Migrated receipt source artifact does not match its trusted digest." in errors
+    assert "Migrated receipt source identity differs at question." in errors
+
+
+def test_unrelated_valid_source_artifact_cannot_donate_lineage(settings, tmp_path):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    original_digest = receipt["provenance"]["source_receipt_sha256"]
+    source = json.loads(
+        TRUSTED_MIGRATION_RECORDS[original_digest].source_path.read_text(encoding="utf-8")
+    )
+    source["run_id"] = "run_" + "f" * 32
+    reseal_receipt(source)
+    unrelated_digest = source["receipt_sha256"]
+    unrelated_source = tmp_path / "unrelated.json"
+    unrelated_source.write_text(json.dumps(source), encoding="utf-8")
+    receipt["provenance"]["source_receipt_sha256"] = unrelated_digest
+    reseal_receipt(receipt)
+
+    errors = validate_receipt(
+        receipt,
+        trusted_migrations={
+            unrelated_digest: TrustedMigrationRecord(
+                source_path=unrelated_source,
+                target_receipt_sha256=receipt["receipt_sha256"],
+            )
+        },
+    )
+    assert "Migrated receipt source identity differs at run_id." in errors
+
+
+@pytest.mark.parametrize("field", ["answer", "claims", "events", "configuration"])
+def test_resealed_migration_cannot_change_any_substantive_target_content(
+    settings,
+    field,
+):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    if field == "answer":
+        receipt[field] = "Forged authoritative answer."
+    elif field == "claims":
+        receipt[field][0]["statement"] = "Forged claim statement."
+    elif field == "events":
+        receipt[field][0]["payload"]["forged"] = True
+        # Keep the event-chain mutation independently valid so lineage is the rejecting layer.
+        previous_hash = "0" * 64
+        for event in receipt[field]:
+            event["previous_hash"] = previous_hash
+            event_body = {
+                "run_id": receipt["run_id"],
+                "sequence": event["sequence"],
+                "type": event["type"],
+                "occurred_at": event["occurred_at"],
+                "payload": event["payload"],
+                "previous_hash": previous_hash,
+            }
+            previous_hash = sha256_text(previous_hash + canonical_json(event_body))
+            event["event_hash"] = previous_hash
+        receipt["provenance"]["event_chain_head"] = previous_hash
+    else:
+        receipt[field]["max_turns"] = receipt[field]["max_turns"] + 1
+    reseal_receipt(receipt)
+
+    errors = validate_receipt(receipt)
+    assert "Migrated receipt content does not match its trusted target digest." in errors
+
+
+def test_migration_source_verifier_identity_must_match(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    receipt["provenance"]["source_verifier_version"] = "forged-verifier"
+    reseal_receipt(receipt)
+
+    assert (
+        "Migrated receipt source verifier identity does not match provenance."
+        in validate_receipt(receipt)
+    )
+
+
+def test_final_ledger_event_must_be_terminal(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    previous_hash = receipt["events"][-1]["event_hash"]
+    sequence = len(receipt["events"]) + 1
+    event_body = {
+        "run_id": receipt["run_id"],
+        "sequence": sequence,
+        "type": "tool.search.completed",
+        "occurred_at": receipt["events"][-1]["occurred_at"],
+        "payload": {},
+        "previous_hash": previous_hash,
+    }
+    event_hash = sha256_text(previous_hash + canonical_json(event_body))
+    receipt["events"].append({**event_body, "event_hash": event_hash})
+    receipt["provenance"]["event_chain_head"] = event_hash
+    unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = sha256_text(canonical_json(unsigned))
+
+    assert any("final terminal event" in error for error in validate_receipt(receipt))
+
+
+@pytest.mark.parametrize("extended_configuration", [False, True])
+@pytest.mark.parametrize("claim_status", ["verified", "possible_conflict"])
+def test_retained_schema_1_2_receipt_remains_integrity_checkable(
+    tmp_path, extended_configuration, claim_status
+):
+    run_id = "run_" + "1" * 32
+    corpus_version = "v_" + "2" * 16
+    previous_hash = "0" * 64
+    event_body = {
+        "run_id": run_id,
+        "sequence": 1,
+        "type": "run.completed",
+        "occurred_at": "2026-08-01T12:00:00+00:00",
+        "payload": {"status": "completed"},
+        "previous_hash": previous_hash,
+    }
+    event_hash = sha256_text(previous_hash + canonical_json(event_body))
+    evidence_reference = {
+        "chunk_id": "chk_8000000000000001",
+        "metric_anchor": "Revenue",
+        "exact_quote": "Revenue was $2 million.",
+        "relation": "supports",
+    }
+    receipt = {
+        "schema_version": "1.2",
+        "run_id": run_id,
+        "status": "completed",
+        "question": "What was revenue?",
+        "answer": "Revenue was $2 million.",
+        "corpus_id": "legacy-corpus",
+        "corpus_version": corpus_version,
+        "corpus_manifest_sha256": "3" * 64,
+        "claims": [
+            {
+                "statement": "Revenue was $2 million.",
+                "metric": "Revenue",
+                "status": claim_status,
+                "values": [
+                    {
+                        "value": "$2 million",
+                        "temporal_anchor": None,
+                        "evidence": [evidence_reference],
+                    }
+                ],
+                "evidence": [
+                    {
+                        "chunk_id": "chk_8000000000000001",
+                        "document_id": "doc_legacy",
+                        "document_name": "Legacy report",
+                        "physical_page_index": 1,
+                        "printed_page_label": "1",
+                        "metric_anchor": "Revenue",
+                        "metric_anchor_found": True,
+                        "temporal_anchors": [],
+                        "temporal_anchors_found": True,
+                        "quote": "Revenue was $2 million.",
+                        "normalized_quote": "Revenue was $2 million.",
+                        "normalization_operations": [],
+                        "relation": "supports",
+                        "quote_found": True,
+                        "value_found": True,
+                        "chunk_sha256": "4" * 64,
+                        "source_url": (
+                            f"/api/corpora/{corpus_version}/documents/doc_legacy/pdf#page=1"
+                        ),
+                    }
+                ],
+                "verification_notes": [],
+            }
+        ],
+        "events": [
+            {
+                key: value
+                for key, value in {**event_body, "event_hash": event_hash}.items()
+                if key != "run_id"
+            }
+        ],
+        "openai_calls": [],
+        "configuration": {
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "medium",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_dimensions": 768,
+            "embedding_l2_normalized": True,
+            "turbovec_version": "0.8.0",
+            "turbovec_bit_width": 4,
+            "retrieval_modes": ["dense", "lexical", "hybrid"],
+            "parallel_tool_calls": False,
+            "max_turns": 6,
+            "trace_include_sensitive_data": False,
+        },
+        "provenance": {
+            "application_version": "0.1.0",
+            "git_commit_sha": None,
+            "dependency_lock_digests": {},
+            "agent_instruction_hash": "agent",
+            "tool_schema_hash": "tools",
+            "verifier_version": "deterministic-verifier-v4-bound-anchors",
+            "trace_id": None,
+            "sealed_at": "2026-08-01T12:00:00+00:00",
+            "event_chain_head": event_hash,
+        },
+        "error": None,
+        "rehearsal": None,
+    }
+    if extended_configuration:
+        receipt["configuration"].update(
+            {
+                "max_model_output_tokens_per_call": 8_000,
+                "model_token_reservation_per_run": 100_000,
+            }
+        )
+    receipt["receipt_sha256"] = sha256_text(canonical_json(receipt))
+
+    assert validate_receipt(receipt) == []
+    receipt_path = tmp_path / "legacy-receipt.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    _path, served = _validated_receipt(
+        {
+            "receipt_path": str(receipt_path),
+            "receipt_sha256": receipt["receipt_sha256"],
+            "status": "completed",
+        }
+    )
+    assert served["schema_version"] == "1.2"

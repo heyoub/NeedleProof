@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.4",
+  "schema_version": "1.3",
   "run_id": "run_4f3a91fcdfa34deeaebc95335b7cc244",
   "status": "completed",
   "question": "Report the two assets-under-management dates, the conflicting fee-earning AUM figures, and fee-related earnings.",
@@ -22,7 +22,7 @@
               "chunk_id": "chk_239af774f09d8cac",
               "metric_anchor": "Assets under management",
               "exact_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
-              "exact_assertion": "Assets under management were $146.1 billion as of 31 December 2025.",
+              "exact_assertion": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
               "relation": "supports"
             }
           ]
@@ -36,13 +36,12 @@
               "chunk_id": "chk_239af774f09d8cac",
               "metric_anchor": "Assets under management",
               "exact_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
-              "exact_assertion": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion",
+              "exact_assertion": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
               "relation": "supports"
             }
           ]
         }
       ],
-      "context_evidence": [],
       "evidence": [
         {
           "chunk_id": "chk_239af774f09d8cac",
@@ -52,41 +51,10 @@
           "printed_page_label": "6",
           "metric_anchor": "Assets under management",
           "metric_anchor_found": true,
-          "assertion": "Assets under management were $146.1 billion as of 31 December 2025.",
-          "assertion_found": true,
-          "temporal_anchor": "as of 31 December 2025",
-          "temporal_value_bound": true,
-          "observation_kind": "reported_level",
-          "value_text": "$146.1 billion",
-          "quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
-          "normalized_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
-          "normalization_operations": [
-            "unicode_casefold_comparison"
-          ],
-          "relation": "supports",
-          "quote_found": true,
-          "value_text_found": true,
-          "metric_value_bound": true,
-          "value_role_authorized": true,
-          "binding_profile": "direct_copula",
-          "binding_failure_reason": null,
-          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
-          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
-        },
-        {
-          "chunk_id": "chk_239af774f09d8cac",
-          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
-          "document_name": "Northbank Advisors — Hamilton Lane annual review",
-          "physical_page_index": 6,
-          "printed_page_label": "6",
-          "metric_anchor": "Assets under management",
-          "metric_anchor_found": true,
-          "assertion": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion",
+          "assertion": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
           "assertion_found": true,
           "temporal_anchor": "on 31 March 2026",
           "temporal_value_bound": true,
-          "observation_kind": "reported_level",
-          "value_text": "$142 billion",
           "quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
           "normalized_quote": "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December. Both numbers get quoted in different places and I want the committee to be clear that they are simply different reporting dates, not a discrepancy.",
           "normalization_operations": [
@@ -120,7 +88,7 @@
               "chunk_id": "chk_239af774f09d8cac",
               "metric_anchor": "Fee-earning AUM",
               "exact_quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
-              "exact_assertion": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion",
+              "exact_assertion": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
               "relation": "supports"
             }
           ]
@@ -134,13 +102,12 @@
               "chunk_id": "chk_5e898d2f71bb3a75",
               "metric_anchor": "fee-earning AUM",
               "exact_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
-              "exact_assertion": "February call has fee-earning AUM at $8.2 billion",
+              "exact_assertion": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
               "relation": "supports"
             }
           ]
         }
       ],
-      "context_evidence": [],
       "evidence": [
         {
           "chunk_id": "chk_239af774f09d8cac",
@@ -150,12 +117,10 @@
           "printed_page_label": "6",
           "metric_anchor": "Fee-earning AUM",
           "metric_anchor_found": true,
-          "assertion": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion",
+          "assertion": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
           "assertion_found": true,
           "temporal_anchor": "ended the year",
           "temporal_value_bound": true,
-          "observation_kind": "reported_level",
-          "value_text": "$82 billion",
           "quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
           "normalized_quote": "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
           "normalization_operations": [
@@ -179,12 +144,10 @@
           "printed_page_label": "6",
           "metric_anchor": "fee-earning AUM",
           "metric_anchor_found": true,
-          "assertion": "February call has fee-earning AUM at $8.2 billion",
+          "assertion": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
           "assertion_found": true,
           "temporal_anchor": "February call",
           "temporal_value_bound": true,
-          "observation_kind": "reported_level",
-          "value_text": "$8.2 billion",
           "quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
           "normalized_quote": "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
           "normalization_operations": [
@@ -218,13 +181,12 @@
               "chunk_id": "chk_239af774f09d8cac",
               "metric_anchor": "Fee-related earnings",
               "exact_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
-              "exact_assertion": "Fee-related earnings were $345 million",
+              "exact_assertion": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
               "relation": "supports"
             }
           ]
         }
       ],
-      "context_evidence": [],
       "evidence": [
         {
           "chunk_id": "chk_239af774f09d8cac",
@@ -234,12 +196,10 @@
           "printed_page_label": "6",
           "metric_anchor": "Fee-related earnings",
           "metric_anchor_found": true,
-          "assertion": "Fee-related earnings were $345 million",
+          "assertion": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
           "assertion_found": true,
           "temporal_anchor": null,
           "temporal_value_bound": true,
-          "observation_kind": "reported_level",
-          "value_text": "$345 million",
           "quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
           "normalized_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
           "normalization_operations": [
@@ -923,20 +883,17 @@
     },
     "agent_instruction_hash": "83ff33260196b7d79378e20364ac9b26c65d7fbef6e431766a6013b9e5b9ffb9",
     "tool_schema_hash": "b11889d6954d66029248163c937d7996b8dc886fe7e1054d0dee2ffb23ec8e1f",
-    "verifier_version": "deterministic-verifier-v7-atomic-subjects",
+    "verifier_version": "deterministic-verifier-v5-positive-bindings",
     "trace_id": "trace_d07dcbb6d5134e9199b9aa2f3d1bacd6",
     "sealed_at": "2026-08-04T03:35:37.285775+00:00",
     "event_chain_head": "db0fb3475822239e3208a0ab9c4942aad0dbe198179657c710c19908502d1e02",
-    "binding_contract_sha256": "51755318a8382b88b251606e8222c18f4644128c1b2cfdfa70dde94232b254e2",
-    "absence_protocol_version": "bounded-absence-v3-exact-occurrence-review",
-    "absence_protocol_sha256": "28ce5efe8412fdac3e97125110387b5fa869b2ef01b7930b6d343f362592c672",
+    "binding_contract_sha256": "fc6fe596367e0775e2ac733682b1ccf87d9443c942762c28679f4769f7d5bdeb",
+    "absence_protocol_version": "bounded-absence-v2",
+    "absence_protocol_sha256": "a96a17ec29dc7af5e65cc2c7a3feb6fef1ed2d330adf6a306a8e873b3252793f",
     "image_revision": null,
-    "numeric_contract_sha256": "2bdae9e1033857a4c55f5512442274170cc6a934c978e9e6628c2fec9c63c56e",
-    "receipt_derivation": "contract_migration",
-    "source_receipt_sha256": "547f8cc77017f9df449b8a2a0fb6df0a29dbc5f98c47f09a353f76512ace0526",
-    "source_verifier_version": "deterministic-verifier-v5-positive-bindings"
+    "numeric_contract_sha256": "2bdae9e1033857a4c55f5512442274170cc6a934c978e9e6628c2fec9c63c56e"
   },
   "error": null,
   "rehearsal": null,
-  "receipt_sha256": "59b0fe4d9e9e7fc34981c82d902d4d544b2b77ac9c050c7bf33b939dff6c0ed8"
+  "receipt_sha256": "547f8cc77017f9df449b8a2a0fb6df0a29dbc5f98c47f09a353f76512ace0526"
 }

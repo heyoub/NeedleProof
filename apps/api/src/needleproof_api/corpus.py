@@ -522,7 +522,7 @@ class CorpusBuilder:
             sqlite_sha = sha256_file(db_path)
             index_sha = sha256_file(build_dir / "index.tvim")
 
-            manifest_without_digest = {
+            manifest_without_digest: dict[str, Any] = {
                 "schema_version": "1.2",
                 "corpus_id": source["corpus_id"],
                 "display_name": source["display_name"],
@@ -556,7 +556,7 @@ class CorpusBuilder:
             }
             manifest_sha = sha256_text(canonical_json(manifest_without_digest))
             corpus_version = f"v_{manifest_sha[:16]}"
-            manifest = {
+            manifest: dict[str, Any] = {
                 **manifest_without_digest,
                 "corpus_version": corpus_version,
                 "manifest_sha256": manifest_sha,

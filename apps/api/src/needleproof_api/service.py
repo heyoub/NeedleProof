@@ -6,9 +6,9 @@ import logging
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Any
 
+from .absence import probe_metric_absence
 from .agent import (
     INSTRUCTION_HASH,
     TOOL_SCHEMA_HASH,
@@ -17,22 +17,27 @@ from .agent import (
 )
 from .config import Settings
 from .db import AppDatabase
+from .legacy import adapt_legacy_run_envelope
 from .models import (
     ClaimStatus,
     DraftClaim,
-    DraftStatus,
+    DraftObservation,
     EvidenceReference,
-    ReportedValue,
     RunCreateRequest,
     RunCreateResponse,
     RunEnvelope,
     RunStatus,
     VerifiedClaim,
 )
-from .receipt import RunLedger, validate_receipt
+from .receipt import (
+    RunLedger,
+    SealedReceiptSnapshot,
+    load_sealed_receipt_snapshot,
+    validate_receipt,
+)
 from .retrieval import CorpusStore
 from .security import PublicUsageLimiter
-from .util import canonical_json, new_run_id, utc_now_iso
+from .util import canonical_metric_key, new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
 VERIFIER_VERSION = EvidenceVerifier.version
@@ -45,6 +50,10 @@ TERMINAL_EVENT_TYPES = {
     "run.timeout",
     "run.interrupted",
 }
+
+
+def _metric_key(value: str) -> str:
+    return canonical_metric_key(value)
 
 
 @dataclass(slots=True)
@@ -62,6 +71,24 @@ class ReceiptRecoveryOutcome(StrEnum):
     RETRYABLE = "retryable"
     UNRECOVERABLE = "unrecoverable"
     NOT_PENDING = "not_pending"
+
+
+def _run_envelope_from_receipt(run_id: str, receipt: dict[str, Any]) -> RunEnvelope:
+    envelope_data = {
+        "run_id": run_id,
+        "status": receipt["status"],
+        "question": receipt["question"],
+        "answer": receipt.get("answer"),
+        "corpus_id": receipt["corpus_id"],
+        "corpus_version": receipt["corpus_version"],
+        "corpus_manifest_sha256": receipt["corpus_manifest_sha256"],
+        "claims": receipt.get("claims", []),
+        "receipt_url": f"/api/runs/{run_id}/receipt",
+        "receipt_json_url": f"/api/runs/{run_id}/receipt.json",
+    }
+    if receipt.get("schema_version") == "1.2":
+        return adapt_legacy_run_envelope(envelope_data)
+    return RunEnvelope.model_validate(envelope_data)
 
 
 class RunCapacityError(RuntimeError):
@@ -224,15 +251,15 @@ class InvestigationService:
         if not receipt_path.exists():
             return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            receipt_text = receipt_path.read_text(encoding="utf-8")
+            snapshot = load_sealed_receipt_snapshot(receipt_path)
         except OSError:
             logger.exception("Could not read sealed receipt for run %s", run_id)
             return ReceiptRecoveryOutcome.RETRYABLE
+        except (AttributeError, json.JSONDecodeError, TypeError, UnicodeError, ValueError):
+            receipt_path.unlink(missing_ok=True)
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            receipt = json.loads(receipt_text)
-            errors = validate_receipt(receipt)
-            if errors:
-                raise ValueError("; ".join(errors))
+            receipt = snapshot.decode()
             expected_identity = {
                 "run_id": run_id,
                 "corpus_id": str(row["corpus_id"]),
@@ -247,23 +274,11 @@ class InvestigationService:
                 and receipt.get("receipt_sha256") != expected_receipt_sha256
             ):
                 raise ValueError("Sealed receipt digest does not match the persisted receipt")
-            envelope = RunEnvelope(
-                run_id=run_id,
-                status=RunStatus(receipt["status"]),
-                question=receipt["question"],
-                answer=receipt.get("answer"),
-                corpus_id=receipt["corpus_id"],
-                corpus_version=receipt["corpus_version"],
-                corpus_manifest_sha256=receipt["corpus_manifest_sha256"],
-                claims=[VerifiedClaim.model_validate(claim) for claim in receipt.get("claims", [])],
-                receipt_url=f"/api/runs/{run_id}/receipt",
-                receipt_json_url=f"/api/runs/{run_id}/receipt.json",
-            )
         except (AttributeError, KeyError, TypeError, ValueError):
             receipt_path.unlink(missing_ok=True)
             return ReceiptRecoveryOutcome.UNRECOVERABLE
         try:
-            await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
+            await self._commit_terminal(snapshot)
         except Exception:
             logger.exception("Could not persist validated receipt recovery for run %s", run_id)
             return ReceiptRecoveryOutcome.RETRYABLE
@@ -362,7 +377,8 @@ class InvestigationService:
                     state = await self._run_rehearsal(run_id, request, ledger)
                 else:
                     soft_timer = asyncio.create_task(self._soft_timeout(ledger))
-                    state = await self._run_live(run_id, request, session_id, ledger)
+                    async with asyncio.timeout(self.settings.hard_timeout_seconds):
+                        state = await self._run_live(run_id, request, session_id, ledger)
         except asyncio.CancelledError:
             error = {"type": "cancelled", "message": "The investigation was cancelled."}
             state = TerminalState(
@@ -450,19 +466,31 @@ class InvestigationService:
             ledger=ledger,
             settings=self.settings,
         )
-        outcome = await asyncio.wait_for(
-            investigate(
-                request.question,
-                context=context,
-                session_id=f"{session_id}:{run_id}",
-            ),
-            timeout=self.settings.hard_timeout_seconds,
+        outcome = await investigate(
+            request.question,
+            context=context,
+            session_id=f"{session_id}:{run_id}",
         )
         await ledger.append("verification.authoritative_started", {})
+        absence_probes = {}
+        for claim in outcome.draft.claims:
+            if not claim.request_absence_probe:
+                continue
+            await ledger.append("absence_probe.started", {"metric": claim.metric})
+            probe = await probe_metric_absence(
+                self.corpus,
+                claim.metric,
+                top_k=8,
+                recorder=ledger.record_openai_call,
+            )
+            absence_probes[_metric_key(claim.metric)] = probe
+            await ledger.append(
+                "absence_probe.completed",
+                probe.model_dump(mode="json"),
+            )
         verification = self.verifier.verify_claims(
             outcome.draft.claims,
-            completed_searches=context.searches,
-            completed_search_records=context.completed_search_records,
+            absence_probes=absence_probes,
         )
         claims = verification.claims
         for claim in claims:
@@ -485,7 +513,11 @@ class InvestigationService:
                 run_id, request.question, status=status, answer=answer, claims=claims
             ),
             event_type=("run.completed" if status == RunStatus.COMPLETED else "run.incomplete"),
-            event_payload={"status": status.value, "authoritative": bool(answer)},
+            event_payload={
+                "status": status.value,
+                "authoritative": status == RunStatus.COMPLETED,
+                "verified_partial_answer_available": bool(answer),
+            },
             trace_id=outcome.trace_id,
         )
 
@@ -501,7 +533,7 @@ class InvestigationService:
             raise ValueError(
                 "Rehearsal receipt failed integrity validation: " + "; ".join(validation_errors)
             )
-        if receipt.get("schema_version") != "1.2":
+        if receipt.get("schema_version") != "1.4":
             raise ValueError("Rehearsal receipt uses an unsupported schema version")
         if receipt.get("status") != RunStatus.COMPLETED.value:
             raise ValueError("Rehearsal source receipt must be completed")
@@ -520,48 +552,64 @@ class InvestigationService:
 
         draft_claims: list[DraftClaim] = []
         source_statuses: list[str] = []
-        status_map: dict[str, DraftStatus] = {
-            ClaimStatus.VERIFIED.value: "supported",
-            ClaimStatus.CONFLICT.value: "conflict",
-            ClaimStatus.DATE_VARIANT.value: "date_variant",
-            ClaimStatus.NOT_FOUND.value: "not_found",
+        authoritative_statuses = {
+            ClaimStatus.VERIFIED.value,
+            ClaimStatus.CONFLICT.value,
+            ClaimStatus.DATE_VARIANT.value,
+            ClaimStatus.NOT_FOUND.value,
         }
         for source_claim in receipt.get("claims", []):
             source_status = str(source_claim.get("status"))
-            if source_status not in status_map:
+            if source_status not in authoritative_statuses:
                 raise ValueError(
                     f"Rehearsal source contains non-authoritative claim {source_status!r}"
                 )
-            values = [
-                ReportedValue.model_validate(value) for value in source_claim.get("values", [])
+            source_observations = source_claim.get("observations")
+            if not isinstance(source_observations, list):
+                raise TypeError("Rehearsal source claim has no typed observations")
+            observations = [
+                DraftObservation.model_validate(observation) for observation in source_observations
             ]
-            references: list[EvidenceReference] = []
-            for value in values:
-                references.extend(value.evidence)
+            source_context_evidence = source_claim.get("context_evidence", [])
+            if not isinstance(source_context_evidence, list):
+                raise TypeError("Rehearsal source claim has invalid context evidence")
+            context_evidence = [
+                EvidenceReference.model_validate(reference) for reference in source_context_evidence
+            ]
             draft_claims.append(
                 DraftClaim(
                     metric=source_claim["metric"],
-                    status=status_map[source_status],
-                    values=values,
-                    evidence=references,
+                    observations=observations,
+                    context_evidence=context_evidence,
+                    request_absence_probe=source_status == ClaimStatus.NOT_FOUND.value,
                 )
             )
             source_statuses.append(source_status)
 
-        completed_searches = sum(
-            event.get("type") == "tool.search.completed" for event in receipt.get("events", [])
-        )
+        absence_probes = {}
+        for claim in draft_claims:
+            if claim.request_absence_probe:
+                await ledger.append(
+                    "absence_probe.started",
+                    {"metric": claim.metric, "rehearsal_reverification": True},
+                )
+                probe = await probe_metric_absence(
+                    self.corpus,
+                    claim.metric,
+                    top_k=8,
+                    recorder=ledger.record_openai_call,
+                )
+                absence_probes[_metric_key(claim.metric)] = probe
+                await ledger.append(
+                    "absence_probe.completed",
+                    {
+                        **probe.model_dump(mode="json"),
+                        "rehearsal_reverification": True,
+                    },
+                )
         verification = self.verifier.verify_claims(
             draft_claims,
-            completed_searches=completed_searches,
-            completed_search_records=[
-                {
-                    **(event.get("payload", {}).get("arguments") or {}),
-                    "signature": canonical_json(event.get("payload", {}).get("arguments") or {}),
-                }
-                for event in receipt.get("events", [])
-                if event.get("type") == "tool.search.completed"
-            ],
+            absence_probes=absence_probes,
         )
         if not verification.all_claims_authoritative:
             raise ValueError("Rehearsal evidence failed current deterministic verification")
@@ -585,7 +633,11 @@ class InvestigationService:
                 continue
             await ledger.append(event["type"], {**event.get("payload", {}), "replayed": True})
         answer = compose_authoritative_answer(
-            verification.claims, completed_searches, self.corpus.corpus_version
+            verification.claims,
+            sum(
+                event.get("type") == "tool.search.completed" for event in receipt.get("events", [])
+            ),
+            self.corpus.corpus_version,
         )
         envelope = self._envelope(
             run_id,
@@ -617,12 +669,13 @@ class InvestigationService:
     async def _finalize_run(self, ledger: RunLedger, state: TerminalState) -> None:
         try:
             receipt_path = self.settings.receipts_dir / f"{ledger.run_id}.json"
+            snapshot: SealedReceiptSnapshot | None = None
             try:
                 events = await self.database.list_events(ledger.run_id)
                 if not any(event["type"] == state.event_type for event in events):
                     await ledger.append(state.event_type, state.event_payload)
                 if not receipt_path.exists():
-                    receipt_path = await ledger.seal(
+                    snapshot = await ledger.seal(
                         state.envelope,
                         instruction_hash=INSTRUCTION_HASH,
                         tool_schema_hash=TOOL_SCHEMA_HASH,
@@ -631,7 +684,10 @@ class InvestigationService:
                         error=state.error,
                         rehearsal=state.rehearsal_metadata,
                     )
-                await self._commit_terminal(state.envelope, receipt_path, state.error)
+                    receipt_path = snapshot.path
+                else:
+                    snapshot = load_sealed_receipt_snapshot(receipt_path)
+                await self._commit_terminal(snapshot)
             except Exception as exc:  # noqa: BLE001 - persist a recoverable terminal state
                 error = {
                     "type": "finalization_interrupted",
@@ -652,12 +708,14 @@ class InvestigationService:
                     )
                 receipt_sha256 = None
                 persisted_receipt_path = None
-                if receipt_path.exists():
+                if snapshot is not None:
+                    receipt_sha256 = snapshot.receipt_sha256
+                    persisted_receipt_path = str(snapshot.path)
+                elif receipt_path.exists():
                     with suppress(Exception):
-                        sealed_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-                        receipt_sha256 = sealed_receipt.get("receipt_sha256")
-                        if receipt_sha256:
-                            persisted_receipt_path = str(receipt_path)
+                        recovered_snapshot = load_sealed_receipt_snapshot(receipt_path)
+                        receipt_sha256 = recovered_snapshot.receipt_sha256
+                        persisted_receipt_path = str(recovered_snapshot.path)
                 await self.database.update_run(
                     ledger.run_id,
                     status=RunStatus.INTERRUPTED,
@@ -675,22 +733,19 @@ class InvestigationService:
 
     async def _commit_terminal(
         self,
-        envelope: RunEnvelope,
-        receipt_path: Path,
-        error: dict[str, Any] | None,
+        snapshot: SealedReceiptSnapshot,
     ) -> None:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        receipt_sha256 = receipt.get("receipt_sha256")
-        if not receipt_sha256:
-            raise ValueError("Sealed receipt is missing its canonical digest")
+        receipt = snapshot.decode()
+        envelope = _run_envelope_from_receipt(str(receipt["run_id"]), receipt)
+        error = receipt.get("error")
         await self.database.update_run(
             envelope.run_id,
             status=envelope.status,
             completed_at=utc_now_iso(),
             answer=envelope.answer,
             result_json=envelope.model_dump_json(),
-            receipt_path=str(receipt_path),
-            receipt_sha256=receipt_sha256,
+            receipt_path=str(snapshot.path),
+            receipt_sha256=snapshot.receipt_sha256,
             error_json=json.dumps(error) if error else None,
         )
 

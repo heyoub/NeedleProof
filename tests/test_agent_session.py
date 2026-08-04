@@ -4,9 +4,86 @@ from types import SimpleNamespace
 
 import pytest
 from needleproof_api import agent as agent_module
-from needleproof_api.agent import InvestigationContext, investigate
+from needleproof_api.agent import (
+    AGENT_INSTRUCTIONS,
+    InvestigationContext,
+    ReceiptHooks,
+    _draft_verification_feedback,
+    investigate,
+    record_tool_failures,
+)
 from needleproof_api.config import Settings
-from needleproof_api.models import AgentDraft
+from needleproof_api.models import (
+    AgentDraft,
+    ClaimStatus,
+    DraftClaim,
+    DraftObservation,
+    EvidenceReference,
+    EvidenceRelation,
+    EvidenceVerificationResult,
+    ObservationKind,
+    VerifiedClaim,
+)
+
+
+def test_draft_verifier_defers_server_owned_absence_instead_of_rejecting_it():
+    draft = DraftClaim(metric="total headcount", request_absence_probe=True)
+    rejected_without_probe = VerifiedClaim(
+        statement="Unverified claim about total headcount",
+        metric="total headcount",
+        status=ClaimStatus.UNVERIFIED,
+    )
+
+    feedback = _draft_verification_feedback(
+        [draft],
+        EvidenceVerificationResult(
+            claims=[rejected_without_probe],
+            all_claims_authoritative=False,
+        ),
+    )
+
+    assert feedback["claims"][0]["status"] == "pending_absence_probe"
+    assert feedback["claims"][0]["requires_server_absence_probe"] is True
+    assert feedback["pending_absence_metrics"] == ["total headcount"]
+    assert feedback["server_absence_probe_required"] is True
+    assert feedback["all_claims_authoritative"] is False
+    assert "pending_absence_probe" in AGENT_INSTRUCTIONS
+
+
+@pytest.mark.parametrize("mixed_evidence_kind", ["observation", "context"])
+def test_draft_verifier_rejects_mixed_absence_requests(mixed_evidence_kind):
+    reference = EvidenceReference(
+        chunk_id="chk_8000000000000001",
+        metric_anchor="total headcount",
+        exact_quote="Total headcount was 100.",
+        exact_assertion="Total headcount was 100.",
+        relation=EvidenceRelation.SUPPORTS,
+    )
+    draft = DraftClaim(metric="total headcount", request_absence_probe=True)
+    if mixed_evidence_kind == "observation":
+        draft.observations.append(
+            DraftObservation(
+                kind=ObservationKind.REPORTED_LEVEL,
+                value_text="100",
+                evidence=[reference],
+            )
+        )
+    else:
+        draft.context_evidence.append(reference)
+    rejected = VerifiedClaim(
+        statement="Unverified claim about total headcount",
+        metric="total headcount",
+        status=ClaimStatus.UNVERIFIED,
+    )
+
+    feedback = _draft_verification_feedback(
+        [draft],
+        EvidenceVerificationResult(claims=[rejected], all_claims_authoritative=False),
+    )
+
+    assert feedback["claims"][0]["status"] == "unverified"
+    assert feedback["pending_absence_metrics"] == []
+    assert feedback["server_absence_probe_required"] is False
 
 
 @pytest.mark.asyncio
@@ -24,13 +101,22 @@ async def test_investigation_purges_and_closes_its_private_agent_session(tmp_pat
             calls.append("close")
 
     class FakeResult:
-        final_output = AgentDraft(answer="", claims=[])
+        final_output = AgentDraft(claims=[])
 
         async def stream_events(self):
             if False:
                 yield None
 
+    class FakeOpenAI:
+        def __init__(self, *, max_retries, timeout):
+            assert max_retries == 0
+            assert timeout == 30.0
+
+        async def close(self):
+            calls.append("openai-close")
+
     monkeypatch.setattr(agent_module, "AsyncSQLiteSession", FakeSession)
+    monkeypatch.setattr(agent_module, "AsyncOpenAI", FakeOpenAI)
     monkeypatch.setattr(
         agent_module.Runner,
         "run_streamed",
@@ -46,4 +132,148 @@ async def test_investigation_purges_and_closes_its_private_agent_session(tmp_pat
 
     await investigate("What is the metric?", context=context, session_id="private-session")
 
-    assert calls == ["clear", "close"]
+    assert calls == ["clear", "close", "openai-close"]
+
+
+@pytest.mark.asyncio
+async def test_tool_failures_are_recorded_before_the_error_escapes():
+    events: list[tuple[str, dict[str, object]]] = []
+
+    class Ledger:
+        async def append(self, event_type, payload):
+            events.append((event_type, payload))
+
+    @record_tool_failures("sample")
+    async def fail(context):
+        del context
+        raise RuntimeError("private database detail")
+
+    context = SimpleNamespace(context=SimpleNamespace(ledger=Ledger()))
+    with pytest.raises(RuntimeError, match="private database detail"):
+        await fail(context)
+
+    assert events[0][0] == "tool.sample.failed"
+    assert events[0][1]["error"] == {
+        "type": "RuntimeError",
+        "message": "private database detail",
+    }
+
+
+@pytest.mark.asyncio
+async def test_failed_model_attempt_is_written_to_openai_call_ledger():
+    calls: list[dict[str, object]] = []
+
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            return None
+
+        async def record_openai_call(self, record):
+            calls.append(record)
+
+    state = SimpleNamespace(
+        settings=Settings(),
+        ledger=Ledger(),
+    )
+    context = SimpleNamespace(context=state)
+    hooks = ReceiptHooks()
+    await hooks.on_llm_start(context, SimpleNamespace(model="gpt-5.6-terra"), None, [])
+    await hooks.record_failed_model_call(state, "gpt-5.6-terra", RuntimeError("provider down"))
+
+    assert len(calls) == 1
+    assert calls[0]["operation"] == "model"
+    assert calls[0]["error"] == {"type": "RuntimeError", "message": "provider down"}
+
+
+@pytest.mark.asyncio
+async def test_failed_model_telemetry_failure_still_clears_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            return None
+
+        async def record_openai_call(self, _record):
+            raise RuntimeError("telemetry unavailable")
+
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    hooks = ReceiptHooks()
+    await hooks.on_llm_start(context, SimpleNamespace(model="gpt-5.6-terra"), None, [])
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.record_failed_model_call(
+            state,
+            "gpt-5.6-terra",
+            RuntimeError("provider down"),
+        )
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_model_start_telemetry_failure_never_arms_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            raise RuntimeError("telemetry unavailable")
+
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    hooks = ReceiptHooks()
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.on_llm_start(
+            context,
+            SimpleNamespace(model="gpt-5.6-terra"),
+            None,
+            [],
+        )
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_completed_model_telemetry_failure_still_clears_hook_state():
+    class Ledger:
+        async def reserve_model_call_capacity(self, _ceiling):
+            return None
+
+        async def append(self, _event_type, _payload):
+            return None
+
+        async def record_openai_call(self, _record):
+            raise RuntimeError("telemetry unavailable")
+
+    token_details = SimpleNamespace(cached_tokens=0, cache_write_tokens=0)
+    output_details = SimpleNamespace(reasoning_tokens=0)
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            requests=1,
+            input_tokens=1,
+            input_tokens_details=token_details,
+            output_tokens=1,
+            output_tokens_details=output_details,
+            total_tokens=2,
+        ),
+        response_id="resp_test",
+        request_id="req_test",
+    )
+    state = SimpleNamespace(settings=Settings(), ledger=Ledger())
+    context = SimpleNamespace(context=state)
+    agent = SimpleNamespace(model="gpt-5.6-terra")
+    hooks = ReceiptHooks()
+    await hooks.on_llm_start(context, agent, None, [])
+
+    with pytest.raises(RuntimeError, match="telemetry unavailable"):
+        await hooks.on_llm_end(context, agent, response)
+
+    assert hooks._llm_started is None
+    assert hooks._llm_started_at is None

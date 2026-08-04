@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 from .chunk_ids import ChunkId
 
@@ -31,6 +37,36 @@ class EvidenceRelation(StrEnum):
     SUPPORTS = "supports"
     CONTRADICTS = "contradicts"
     CONTEXTUALIZES = "contextualizes"
+
+
+class ObservationKind(StrEnum):
+    REPORTED_LEVEL = "reported_level"
+    REPORTED_RATE = "reported_rate"
+    REPORTED_PER_SHARE = "reported_per_share"
+    REPORTED_DELTA = "reported_delta"
+    REPORTED_BOUND = "reported_bound"
+    TARGET = "target"
+    FORECAST = "forecast"
+    COMPONENT = "component"
+    RANGE = "range"
+
+
+class BindingProfile(StrEnum):
+    DIRECT_COPULA = "direct_copula"
+    DIRECT_REPORTED = "direct_reported"
+    COLON = "colon"
+    DATED_DIRECT = "dated_direct"
+    SAME_SENTENCE_ANAPHORIC = "same_sentence_anaphoric"
+    NEXT_SENTENCE_ANAPHORIC = "next_sentence_anaphoric"
+
+
+class AbsenceConclusion(StrEnum):
+    NOT_FOUND_IN_PROBE = "not_found_in_probe"
+    EVIDENCE_REQUIRES_REVIEW = "evidence_requires_review"
+    INCOMPLETE_PROBE = "incomplete_probe"
+
+
+NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class DocumentRecord(BaseModel):
@@ -89,49 +125,88 @@ class EvidenceReference(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     chunk_id: ChunkId
-    metric_anchor: str = Field(min_length=1)
-    exact_quote: str
+    metric_anchor: NonEmptyText
+    exact_quote: NonEmptyText
+    exact_assertion: NonEmptyText
     relation: EvidenceRelation = EvidenceRelation.SUPPORTS
 
 
-class ReportedValue(BaseModel):
+class DraftObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    value: str
-    temporal_anchor: str | None = None
+    kind: ObservationKind
+    value_text: NonEmptyText
+    temporal_anchor: NonEmptyText | None = None
     evidence: list[EvidenceReference] = Field(min_length=1)
-
-    @field_validator("value")
-    @classmethod
-    def require_value_text(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("reported value must contain non-whitespace text")
-        return value
-
-
-DraftStatus = Literal[
-    "supported",
-    "possible_conflict",
-    "conflict",
-    "date_variant",
-    "not_found",
-    "insufficient_evidence",
-]
 
 
 class DraftClaim(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    metric: str
-    status: DraftStatus
-    values: list[ReportedValue] = Field(default_factory=list)
-    evidence: list[EvidenceReference] = Field(default_factory=list)
+    metric: NonEmptyText
+    observations: list[DraftObservation] = Field(default_factory=list)
+    context_evidence: list[EvidenceReference] = Field(default_factory=list)
+    request_absence_probe: bool = False
 
 
 class AgentDraft(BaseModel):
-    answer: str
+    model_config = ConfigDict(extra="forbid")
+
     claims: list[DraftClaim]
     unresolved_questions: list[str] = Field(default_factory=list)
+
+
+class CompletedSearchRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: NonEmptyText
+    normalized_query: NonEmptyText
+    metric: NonEmptyText | None = None
+    mode: Literal["dense", "lexical", "hybrid"]
+    top_k: int = Field(ge=1, le=20)
+    document_ids: list[str] = Field(default_factory=list)
+    date_from: str | None = None
+    date_to: str | None = None
+    signature: NonEmptyText
+    result_chunk_ids: list[ChunkId] = Field(default_factory=list)
+    result_count: int = Field(ge=0)
+    exact_metric_hit_count: int = Field(ge=0)
+    completion_status: Literal["completed", "failed"]
+
+
+class MetricOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
+    sentence: str
+    span: tuple[int, int]
+
+
+class ValueCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: ChunkId
+    metric_anchor: str
+    value_text: str
+    binding_profile: BindingProfile | None = None
+    binding_failure_reason: str | None = None
+
+
+class AbsenceProbeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol_version: str
+    metric: str
+    searches: list[CompletedSearchRecord]
+    exact_metric_scan_completed: bool = False
+    exact_metric_scan_chunk_ids: list[ChunkId] = Field(default_factory=list)
+    exact_metric_scan_error: str | None = None
+    unique_candidate_chunk_ids: list[ChunkId]
+    opened_chunk_ids: list[ChunkId]
+    exact_metric_occurrences: list[MetricOccurrence]
+    unresolved_predicate_occurrences: list[MetricOccurrence]
+    supporting_value_candidates: list[ValueCandidate]
+    conclusion: AbsenceConclusion
 
 
 class VerifiedEvidence(BaseModel):
@@ -144,14 +219,22 @@ class VerifiedEvidence(BaseModel):
     printed_page_label: str | None = None
     metric_anchor: str
     metric_anchor_found: bool
-    temporal_anchors: list[str] = Field(default_factory=list)
-    temporal_anchors_found: bool
+    assertion: str
+    assertion_found: bool
+    temporal_anchor: str | None = None
+    temporal_value_bound: bool
+    observation_kind: ObservationKind | None = None
+    value_text: str | None = None
     quote: str
     normalized_quote: str
     normalization_operations: list[str] = Field(default_factory=list)
     relation: EvidenceRelation
     quote_found: bool
-    value_found: bool
+    value_text_found: bool
+    metric_value_bound: bool
+    value_role_authorized: bool
+    binding_profile: BindingProfile | None = None
+    binding_failure_reason: str | None = None
     chunk_sha256: str
     source_url: str
 
@@ -162,8 +245,10 @@ class VerifiedClaim(BaseModel):
     statement: str
     metric: str
     status: ClaimStatus
-    values: list[ReportedValue] = Field(default_factory=list)
+    observations: list[DraftObservation] = Field(default_factory=list)
+    context_evidence: list[EvidenceReference] = Field(default_factory=list)
     evidence: list[VerifiedEvidence] = Field(default_factory=list)
+    absence_probe: AbsenceProbeResult | None = None
     verification_notes: list[str] = Field(default_factory=list)
 
 

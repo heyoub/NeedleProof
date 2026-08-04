@@ -14,14 +14,22 @@ RUN pnpm --filter @needleproof/web build
 FROM ghcr.io/astral-sh/uv:0.10.3 AS uv
 
 FROM python:3.12-slim AS runtime
+ARG NEEDLEPROOF_GIT_SHA
+ARG NEEDLEPROOF_UV_LOCK_SHA256
+ARG NEEDLEPROOF_PNPM_LOCK_SHA256
+ARG NEEDLEPROOF_IMAGE_REVISION
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     NEEDLEPROOF_DATA_DIR=/app/data \
-    NEEDLEPROOF_WEB_DIST=/app/apps/web/dist
+    NEEDLEPROOF_WEB_DIST=/app/apps/web/dist \
+    NEEDLEPROOF_GIT_SHA=${NEEDLEPROOF_GIT_SHA} \
+    NEEDLEPROOF_UV_LOCK_SHA256=${NEEDLEPROOF_UV_LOCK_SHA256} \
+    NEEDLEPROOF_PNPM_LOCK_SHA256=${NEEDLEPROOF_PNPM_LOCK_SHA256} \
+    NEEDLEPROOF_IMAGE_REVISION=${NEEDLEPROOF_IMAGE_REVISION}
 WORKDIR /app
 COPY --from=uv /uv /uvx /usr/local/bin/
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock pnpm-lock.yaml README.md ./
 COPY apps/api apps/api
 RUN uv sync --frozen --no-dev
 COPY data data

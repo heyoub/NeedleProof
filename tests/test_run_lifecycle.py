@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,11 +13,11 @@ from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
 from needleproof_api.main import get_run, receipt_json, receipt_page, run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
-from needleproof_api.receipt import RunLedger
+from needleproof_api.receipt import RunLedger, validate_receipt
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter
 from needleproof_api.service import InvestigationService, ReceiptRecoveryOutcome
-from needleproof_api.util import new_run_id, utc_now_iso
+from needleproof_api.util import canonical_json, new_run_id, sha256_text, utc_now_iso
 
 
 def lifecycle_service(tmp_path: Path) -> tuple[InvestigationService, AppDatabase, Settings]:
@@ -187,6 +188,36 @@ async def test_live_cancellation_releases_reserved_model_tokens(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_hard_timeout_covers_the_entire_live_pipeline(tmp_path, monkeypatch):
+    service, database, settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    settings.hard_timeout_seconds = 0.02
+
+    async def blocked_live(_run_id, _request, _session_id, _ledger):
+        # This stands in for any live phase, including the server-owned absence post-pass.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_run_live", blocked_live)
+    created = await service.create_run(
+        RunCreateRequest(question="Bound every live phase"),
+        session_id="alice",
+        client_ip="192.0.2.22",
+    )
+    await service._tasks[created.run_id]
+
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.INCOMPLETE.value
+    receipt_path = Path(str(row["receipt_path"]))
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["events"][-1]["type"] == "run.timeout"
+    assert validate_receipt(receipt) == []
+    events = await database.list_events(created.run_id)
+    assert events[-1]["type"] == "run.timeout"
+
+
+@pytest.mark.asyncio
 async def test_run_creation_failure_releases_reservation(tmp_path, monkeypatch):
     service, database, settings = lifecycle_service(tmp_path)
     await database.initialize()
@@ -229,10 +260,10 @@ async def test_terminal_sse_waits_for_terminal_database_commit(tmp_path, monkeyp
     release_commit = asyncio.Event()
     original_commit = service._commit_terminal
 
-    async def blocked_commit(envelope, receipt_path, error):
+    async def blocked_commit(snapshot):
         commit_entered.set()
         await release_commit.wait()
-        await original_commit(envelope, receipt_path, error)
+        await original_commit(snapshot)
 
     monkeypatch.setattr(service, "_commit_terminal", blocked_commit)
     created = await service.create_run(
@@ -350,12 +381,12 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
     original_commit = service._commit_terminal
     commit_attempts = 0
 
-    async def fail_twice(envelope, receipt_path, error):
+    async def fail_twice(snapshot):
         nonlocal commit_attempts
         commit_attempts += 1
         if commit_attempts <= 2:
             raise RuntimeError("injected terminal database failure")
-        await original_commit(envelope, receipt_path, error)
+        await original_commit(snapshot)
 
     monkeypatch.setattr(service, "_commit_terminal", fail_twice)
     created = await service.create_run(
@@ -417,6 +448,42 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_receipt_download_serves_the_exact_validated_snapshot(tmp_path, monkeypatch):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Serve one validated receipt snapshot", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    receipt_path = Path(str(row["receipt_path"]))
+    original_serialized = receipt_path.read_text(encoding="utf-8")
+    replacement_serialized = '{"replacement":"must not be served"}'
+    original_validation = main_module._validated_receipt
+
+    def replace_file_after_validation(run_row):
+        snapshot, receipt = original_validation(run_row)
+        receipt_path.write_text(replacement_serialized, encoding="utf-8")
+        return snapshot, receipt
+
+    monkeypatch.setattr(main_module, "_validated_receipt", replace_file_after_validation)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(database=database)),
+        state=SimpleNamespace(session_id="alice"),
+    )
+    response = await receipt_json(request, created.run_id)
+
+    assert response.body.decode("utf-8") == original_serialized
+    assert response.body.decode("utf-8") != replacement_serialized
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="needleproof-{created.run_id}.json"'
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_run_returns_retryable_error_while_receipt_recovery_is_unavailable(
     tmp_path, monkeypatch
 ):
@@ -429,7 +496,7 @@ async def test_get_run_returns_retryable_error_while_receipt_recovery_is_unavail
     await service._tasks[created.run_id]
     await database.update_run(created.run_id, status=RunStatus.INTERRUPTED)
 
-    async def unavailable_commit(_envelope, _receipt_path, _error):
+    async def unavailable_commit(_snapshot):
         raise OSError("injected persistent recovery failure")
 
     monkeypatch.setattr(service, "_commit_terminal", unavailable_commit)
@@ -464,12 +531,12 @@ async def test_terminal_sse_retries_transient_receipt_reconciliation_on_same_con
     original_commit = service._commit_terminal
     commit_attempts = 0
 
-    async def fail_twice_then_recover(envelope, receipt_path, error):
+    async def fail_twice_then_recover(snapshot):
         nonlocal commit_attempts
         commit_attempts += 1
         if commit_attempts <= 2:
             raise OSError("injected transient terminal persistence failure")
-        await original_commit(envelope, receipt_path, error)
+        await original_commit(snapshot)
 
     monkeypatch.setattr(service, "_commit_terminal", fail_twice_then_recover)
     created = await service.create_run(
@@ -517,12 +584,12 @@ async def test_terminal_sse_retries_transient_receipt_read_on_same_connection(
     original_commit = service._commit_terminal
     failed_commit = False
 
-    async def fail_initial_commit(envelope, receipt_path, error):
+    async def fail_initial_commit(snapshot):
         nonlocal failed_commit
         if not failed_commit:
             failed_commit = True
             raise OSError("injected initial terminal persistence failure")
-        await original_commit(envelope, receipt_path, error)
+        await original_commit(snapshot)
 
     monkeypatch.setattr(service, "_commit_terminal", fail_initial_commit)
     created = await service.create_run(
@@ -571,6 +638,75 @@ async def test_terminal_sse_retries_transient_receipt_read_on_same_connection(
     recovered = await database.get_run_row(created.run_id)
     assert recovered is not None
     assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_kind", ["unchanged", "valid", "malformed"])
+async def test_receipt_recovery_commits_one_validated_snapshot(
+    tmp_path,
+    monkeypatch,
+    replacement_kind,
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Recover one receipt snapshot", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    original_row = await database.get_run_row(created.run_id)
+    assert original_row is not None
+    receipt_path = Path(str(original_row["receipt_path"]))
+    original_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    original_digest = original_receipt["receipt_sha256"]
+
+    replacement_receipt = {**original_receipt}
+    replacement_receipt["provenance"] = {
+        **original_receipt["provenance"],
+        "trace_id": "trace_replaced_after_validation",
+    }
+    replacement_receipt.pop("receipt_sha256")
+    replacement_digest = sha256_text(canonical_json(replacement_receipt))
+    replacement_receipt["receipt_sha256"] = replacement_digest
+    assert validate_receipt(replacement_receipt) == []
+    replacement_text = (
+        "{not valid json" if replacement_kind == "malformed" else json.dumps(replacement_receipt)
+    )
+
+    await database.update_run(
+        created.run_id,
+        status=RunStatus.INTERRUPTED,
+        answer=None,
+        result_json=None,
+    )
+    original_commit = service._commit_terminal
+
+    async def replace_after_validation(snapshot):
+        if replacement_kind != "unchanged":
+            receipt_path.write_text(replacement_text, encoding="utf-8")
+        await original_commit(snapshot)
+
+    monkeypatch.setattr(service, "_commit_terminal", replace_after_validation)
+
+    outcome = await service.reconcile_pending_receipt(created.run_id)
+    recovered = await database.get_run_row(created.run_id)
+
+    assert outcome == ReceiptRecoveryOutcome.RECOVERED
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+    assert recovered["receipt_sha256"] == original_digest
+    assert recovered["receipt_sha256"] != replacement_digest
+    if replacement_kind == "unchanged":
+        _path, served = main_module._validated_receipt(recovered)
+        assert served["receipt_sha256"] == original_digest
+    else:
+        expected_detail = (
+            "Receipt integrity validation failed"
+            if replacement_kind == "malformed"
+            else "Receipt database digest does not match"
+        )
+        with pytest.raises(HTTPException, match=expected_detail):
+            main_module._validated_receipt(recovered)
 
 
 @pytest.mark.asyncio
@@ -705,7 +841,7 @@ async def test_reconciliation_preserves_valid_receipt_when_commit_is_unavailable
     original_commit = service._commit_terminal
     await database.update_run(created.run_id, status=RunStatus.INTERRUPTED)
 
-    async def unavailable_commit(_envelope, _receipt_path, _error):
+    async def unavailable_commit(_snapshot):
         raise OSError("injected recovery persistence failure")
 
     monkeypatch.setattr(service, "_commit_terminal", unavailable_commit)

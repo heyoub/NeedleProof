@@ -1,5 +1,124 @@
 {
   "$defs": {
+    "AbsenceConclusion": {
+      "enum": [
+        "not_found_in_probe",
+        "evidence_requires_review",
+        "incomplete_probe"
+      ],
+      "title": "AbsenceConclusion",
+      "type": "string"
+    },
+    "AbsenceProbeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": {
+          "title": "Protocol Version",
+          "type": "string"
+        },
+        "metric": {
+          "title": "Metric",
+          "type": "string"
+        },
+        "searches": {
+          "items": {
+            "$ref": "#/$defs/CompletedSearchRecord"
+          },
+          "title": "Searches",
+          "type": "array"
+        },
+        "exact_metric_scan_completed": {
+          "default": false,
+          "title": "Exact Metric Scan Completed",
+          "type": "boolean"
+        },
+        "exact_metric_scan_chunk_ids": {
+          "items": {
+            "pattern": "^chk_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Exact Metric Scan Chunk Ids",
+          "type": "array"
+        },
+        "exact_metric_scan_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Exact Metric Scan Error"
+        },
+        "unique_candidate_chunk_ids": {
+          "items": {
+            "pattern": "^chk_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Unique Candidate Chunk Ids",
+          "type": "array"
+        },
+        "opened_chunk_ids": {
+          "items": {
+            "pattern": "^chk_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Opened Chunk Ids",
+          "type": "array"
+        },
+        "exact_metric_occurrences": {
+          "items": {
+            "$ref": "#/$defs/MetricOccurrence"
+          },
+          "title": "Exact Metric Occurrences",
+          "type": "array"
+        },
+        "unresolved_predicate_occurrences": {
+          "items": {
+            "$ref": "#/$defs/MetricOccurrence"
+          },
+          "title": "Unresolved Predicate Occurrences",
+          "type": "array"
+        },
+        "supporting_value_candidates": {
+          "items": {
+            "$ref": "#/$defs/ValueCandidate"
+          },
+          "title": "Supporting Value Candidates",
+          "type": "array"
+        },
+        "conclusion": {
+          "$ref": "#/$defs/AbsenceConclusion"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "metric",
+        "searches",
+        "unique_candidate_chunk_ids",
+        "opened_chunk_ids",
+        "exact_metric_occurrences",
+        "unresolved_predicate_occurrences",
+        "supporting_value_candidates",
+        "conclusion"
+      ],
+      "title": "AbsenceProbeResult",
+      "type": "object"
+    },
+    "BindingProfile": {
+      "enum": [
+        "direct_copula",
+        "direct_reported",
+        "colon",
+        "dated_direct",
+        "same_sentence_anaphoric",
+        "next_sentence_anaphoric"
+      ],
+      "title": "BindingProfile",
+      "type": "string"
+    },
     "ClaimStatus": {
       "enum": [
         "verified",
@@ -11,6 +130,164 @@
       ],
       "title": "ClaimStatus",
       "type": "string"
+    },
+    "CompletedSearchRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "query": {
+          "minLength": 1,
+          "title": "Query",
+          "type": "string"
+        },
+        "normalized_query": {
+          "minLength": 1,
+          "title": "Normalized Query",
+          "type": "string"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "mode": {
+          "enum": [
+            "dense",
+            "lexical",
+            "hybrid"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "top_k": {
+          "maximum": 20,
+          "minimum": 1,
+          "title": "Top K",
+          "type": "integer"
+        },
+        "document_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Document Ids",
+          "type": "array"
+        },
+        "date_from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date From"
+        },
+        "date_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Date To"
+        },
+        "signature": {
+          "minLength": 1,
+          "title": "Signature",
+          "type": "string"
+        },
+        "result_chunk_ids": {
+          "items": {
+            "pattern": "^chk_[0-9a-f]{16}$",
+            "type": "string"
+          },
+          "title": "Result Chunk Ids",
+          "type": "array"
+        },
+        "result_count": {
+          "minimum": 0,
+          "title": "Result Count",
+          "type": "integer"
+        },
+        "exact_metric_hit_count": {
+          "minimum": 0,
+          "title": "Exact Metric Hit Count",
+          "type": "integer"
+        },
+        "completion_status": {
+          "enum": [
+            "completed",
+            "failed"
+          ],
+          "title": "Completion Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query",
+        "normalized_query",
+        "mode",
+        "top_k",
+        "signature",
+        "result_count",
+        "exact_metric_hit_count",
+        "completion_status"
+      ],
+      "title": "CompletedSearchRecord",
+      "type": "object"
+    },
+    "DraftObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ObservationKind"
+        },
+        "value_text": {
+          "minLength": 1,
+          "title": "Value Text",
+          "type": "string"
+        },
+        "temporal_anchor": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temporal Anchor"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceReference"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "value_text",
+        "evidence"
+      ],
+      "title": "DraftObservation",
+      "type": "object"
     },
     "EvidenceReference": {
       "additionalProperties": false,
@@ -26,7 +303,13 @@
           "type": "string"
         },
         "exact_quote": {
+          "minLength": 1,
           "title": "Exact Quote",
+          "type": "string"
+        },
+        "exact_assertion": {
+          "minLength": 1,
+          "title": "Exact Assertion",
           "type": "string"
         },
         "relation": {
@@ -37,7 +320,8 @@
       "required": [
         "chunk_id",
         "metric_anchor",
-        "exact_quote"
+        "exact_quote",
+        "exact_assertion"
       ],
       "title": "EvidenceReference",
       "type": "object"
@@ -49,6 +333,306 @@
         "contextualizes"
       ],
       "title": "EvidenceRelation",
+      "type": "string"
+    },
+    "LiveReceiptProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "application_version": {
+          "title": "Application Version",
+          "type": "string"
+        },
+        "git_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Git Commit Sha"
+        },
+        "dependency_lock_digests": {
+          "additionalProperties": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Dependency Lock Digests",
+          "type": "object"
+        },
+        "agent_instruction_hash": {
+          "title": "Agent Instruction Hash",
+          "type": "string"
+        },
+        "tool_schema_hash": {
+          "title": "Tool Schema Hash",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "binding_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binding Contract Sha256",
+          "type": "string"
+        },
+        "numeric_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Numeric Contract Sha256",
+          "type": "string"
+        },
+        "absence_protocol_version": {
+          "title": "Absence Protocol Version",
+          "type": "string"
+        },
+        "absence_protocol_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Absence Protocol Sha256",
+          "type": "string"
+        },
+        "image_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Image Revision"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        },
+        "sealed_at": {
+          "title": "Sealed At",
+          "type": "string"
+        },
+        "event_chain_head": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Chain Head",
+          "type": "string"
+        },
+        "receipt_derivation": {
+          "const": "live",
+          "title": "Receipt Derivation",
+          "type": "string"
+        },
+        "source_receipt_sha256": {
+          "title": "Source Receipt Sha256",
+          "type": "null"
+        },
+        "source_verifier_version": {
+          "title": "Source Verifier Version",
+          "type": "null"
+        }
+      },
+      "required": [
+        "application_version",
+        "git_commit_sha",
+        "dependency_lock_digests",
+        "agent_instruction_hash",
+        "tool_schema_hash",
+        "verifier_version",
+        "binding_contract_sha256",
+        "numeric_contract_sha256",
+        "absence_protocol_version",
+        "absence_protocol_sha256",
+        "image_revision",
+        "trace_id",
+        "sealed_at",
+        "event_chain_head",
+        "receipt_derivation",
+        "source_receipt_sha256",
+        "source_verifier_version"
+      ],
+      "title": "LiveReceiptProvenance",
+      "type": "object"
+    },
+    "MetricOccurrence": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "pattern": "^chk_[0-9a-f]{16}$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "sentence": {
+          "title": "Sentence",
+          "type": "string"
+        },
+        "span": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Span",
+          "type": "array"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "sentence",
+        "span"
+      ],
+      "title": "MetricOccurrence",
+      "type": "object"
+    },
+    "MigratedReceiptProvenance": {
+      "additionalProperties": false,
+      "properties": {
+        "application_version": {
+          "title": "Application Version",
+          "type": "string"
+        },
+        "git_commit_sha": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Git Commit Sha"
+        },
+        "dependency_lock_digests": {
+          "additionalProperties": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "title": "Dependency Lock Digests",
+          "type": "object"
+        },
+        "agent_instruction_hash": {
+          "title": "Agent Instruction Hash",
+          "type": "string"
+        },
+        "tool_schema_hash": {
+          "title": "Tool Schema Hash",
+          "type": "string"
+        },
+        "verifier_version": {
+          "title": "Verifier Version",
+          "type": "string"
+        },
+        "binding_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Binding Contract Sha256",
+          "type": "string"
+        },
+        "numeric_contract_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Numeric Contract Sha256",
+          "type": "string"
+        },
+        "absence_protocol_version": {
+          "title": "Absence Protocol Version",
+          "type": "string"
+        },
+        "absence_protocol_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Absence Protocol Sha256",
+          "type": "string"
+        },
+        "image_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Image Revision"
+        },
+        "trace_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Trace Id"
+        },
+        "sealed_at": {
+          "title": "Sealed At",
+          "type": "string"
+        },
+        "event_chain_head": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Event Chain Head",
+          "type": "string"
+        },
+        "receipt_derivation": {
+          "const": "contract_migration",
+          "title": "Receipt Derivation",
+          "type": "string"
+        },
+        "source_receipt_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Source Receipt Sha256",
+          "type": "string"
+        },
+        "source_verifier_version": {
+          "minLength": 1,
+          "title": "Source Verifier Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "application_version",
+        "git_commit_sha",
+        "dependency_lock_digests",
+        "agent_instruction_hash",
+        "tool_schema_hash",
+        "verifier_version",
+        "binding_contract_sha256",
+        "numeric_contract_sha256",
+        "absence_protocol_version",
+        "absence_protocol_sha256",
+        "image_revision",
+        "trace_id",
+        "sealed_at",
+        "event_chain_head",
+        "receipt_derivation",
+        "source_receipt_sha256",
+        "source_verifier_version"
+      ],
+      "title": "MigratedReceiptProvenance",
+      "type": "object"
+    },
+    "ObservationKind": {
+      "enum": [
+        "reported_level",
+        "reported_rate",
+        "reported_per_share",
+        "reported_delta",
+        "reported_bound",
+        "target",
+        "forecast",
+        "component",
+        "range"
+      ],
+      "title": "ObservationKind",
       "type": "string"
     },
     "ReceiptConfiguration": {
@@ -97,6 +681,46 @@
           "title": "Max Turns",
           "type": "integer"
         },
+        "max_tool_calls": {
+          "title": "Max Tool Calls",
+          "type": "integer"
+        },
+        "max_searches": {
+          "title": "Max Searches",
+          "type": "integer"
+        },
+        "max_top_k": {
+          "title": "Max Top K",
+          "type": "integer"
+        },
+        "max_opened_chunks": {
+          "title": "Max Opened Chunks",
+          "type": "integer"
+        },
+        "max_opened_tokens": {
+          "title": "Max Opened Tokens",
+          "type": "integer"
+        },
+        "max_document_inspections": {
+          "title": "Max Document Inspections",
+          "type": "integer"
+        },
+        "max_inspection_pages": {
+          "title": "Max Inspection Pages",
+          "type": "integer"
+        },
+        "max_inspection_characters": {
+          "title": "Max Inspection Characters",
+          "type": "integer"
+        },
+        "soft_timeout_seconds": {
+          "title": "Soft Timeout Seconds",
+          "type": "number"
+        },
+        "hard_timeout_seconds": {
+          "title": "Hard Timeout Seconds",
+          "type": "number"
+        },
         "max_model_output_tokens_per_call": {
           "default": 8000,
           "title": "Max Model Output Tokens Per Call",
@@ -110,6 +734,14 @@
         "trace_include_sensitive_data": {
           "title": "Trace Include Sensitive Data",
           "type": "boolean"
+        },
+        "openai_client_max_retries": {
+          "title": "Openai Client Max Retries",
+          "type": "integer"
+        },
+        "tool_execution_concurrency": {
+          "title": "Tool Execution Concurrency",
+          "type": "integer"
         }
       },
       "required": [
@@ -123,7 +755,19 @@
         "retrieval_modes",
         "parallel_tool_calls",
         "max_turns",
-        "trace_include_sensitive_data"
+        "max_tool_calls",
+        "max_searches",
+        "max_top_k",
+        "max_opened_chunks",
+        "max_opened_tokens",
+        "max_document_inspections",
+        "max_inspection_pages",
+        "max_inspection_characters",
+        "soft_timeout_seconds",
+        "hard_timeout_seconds",
+        "trace_include_sensitive_data",
+        "openai_client_max_retries",
+        "tool_execution_concurrency"
       ],
       "title": "ReceiptConfiguration",
       "type": "object"
@@ -265,78 +909,6 @@
       "title": "ReceiptOpenAICall",
       "type": "object"
     },
-    "ReceiptProvenance": {
-      "additionalProperties": false,
-      "properties": {
-        "application_version": {
-          "title": "Application Version",
-          "type": "string"
-        },
-        "git_commit_sha": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Git Commit Sha"
-        },
-        "dependency_lock_digests": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "title": "Dependency Lock Digests",
-          "type": "object"
-        },
-        "agent_instruction_hash": {
-          "title": "Agent Instruction Hash",
-          "type": "string"
-        },
-        "tool_schema_hash": {
-          "title": "Tool Schema Hash",
-          "type": "string"
-        },
-        "verifier_version": {
-          "title": "Verifier Version",
-          "type": "string"
-        },
-        "trace_id": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Trace Id"
-        },
-        "sealed_at": {
-          "title": "Sealed At",
-          "type": "string"
-        },
-        "event_chain_head": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Event Chain Head",
-          "type": "string"
-        }
-      },
-      "required": [
-        "application_version",
-        "git_commit_sha",
-        "dependency_lock_digests",
-        "agent_instruction_hash",
-        "tool_schema_hash",
-        "verifier_version",
-        "trace_id",
-        "sealed_at",
-        "event_chain_head"
-      ],
-      "title": "ReceiptProvenance",
-      "type": "object"
-    },
     "ReceiptRehearsal": {
       "additionalProperties": false,
       "properties": {
@@ -384,14 +956,34 @@
       "title": "ReceiptRehearsal",
       "type": "object"
     },
-    "ReportedValue": {
+    "ValueCandidate": {
       "additionalProperties": false,
       "properties": {
-        "value": {
-          "title": "Value",
+        "chunk_id": {
+          "pattern": "^chk_[0-9a-f]{16}$",
+          "title": "Chunk Id",
           "type": "string"
         },
-        "temporal_anchor": {
+        "metric_anchor": {
+          "title": "Metric Anchor",
+          "type": "string"
+        },
+        "value_text": {
+          "title": "Value Text",
+          "type": "string"
+        },
+        "binding_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BindingProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "binding_failure_reason": {
           "anyOf": [
             {
               "type": "string"
@@ -401,22 +993,15 @@
             }
           ],
           "default": null,
-          "title": "Temporal Anchor"
-        },
-        "evidence": {
-          "items": {
-            "$ref": "#/$defs/EvidenceReference"
-          },
-          "minItems": 1,
-          "title": "Evidence",
-          "type": "array"
+          "title": "Binding Failure Reason"
         }
       },
       "required": [
-        "value",
-        "evidence"
+        "chunk_id",
+        "metric_anchor",
+        "value_text"
       ],
-      "title": "ReportedValue",
+      "title": "ValueCandidate",
       "type": "object"
     },
     "VerifiedClaim": {
@@ -433,11 +1018,18 @@
         "status": {
           "$ref": "#/$defs/ClaimStatus"
         },
-        "values": {
+        "observations": {
           "items": {
-            "$ref": "#/$defs/ReportedValue"
+            "$ref": "#/$defs/DraftObservation"
           },
-          "title": "Values",
+          "title": "Observations",
+          "type": "array"
+        },
+        "context_evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceReference"
+          },
+          "title": "Context Evidence",
           "type": "array"
         },
         "evidence": {
@@ -446,6 +1038,17 @@
           },
           "title": "Evidence",
           "type": "array"
+        },
+        "absence_probe": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbsenceProbeResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "verification_notes": {
           "items": {
@@ -503,16 +1106,52 @@
           "title": "Metric Anchor Found",
           "type": "boolean"
         },
-        "temporal_anchors": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Temporal Anchors",
-          "type": "array"
+        "assertion": {
+          "title": "Assertion",
+          "type": "string"
         },
-        "temporal_anchors_found": {
-          "title": "Temporal Anchors Found",
+        "assertion_found": {
+          "title": "Assertion Found",
           "type": "boolean"
+        },
+        "temporal_anchor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Temporal Anchor"
+        },
+        "temporal_value_bound": {
+          "title": "Temporal Value Bound",
+          "type": "boolean"
+        },
+        "observation_kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObservationKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "value_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value Text"
         },
         "quote": {
           "title": "Quote",
@@ -536,9 +1175,40 @@
           "title": "Quote Found",
           "type": "boolean"
         },
-        "value_found": {
-          "title": "Value Found",
+        "value_text_found": {
+          "title": "Value Text Found",
           "type": "boolean"
+        },
+        "metric_value_bound": {
+          "title": "Metric Value Bound",
+          "type": "boolean"
+        },
+        "value_role_authorized": {
+          "title": "Value Role Authorized",
+          "type": "boolean"
+        },
+        "binding_profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BindingProfile"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "binding_failure_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Binding Failure Reason"
         },
         "chunk_sha256": {
           "title": "Chunk Sha256",
@@ -556,12 +1226,16 @@
         "physical_page_index",
         "metric_anchor",
         "metric_anchor_found",
-        "temporal_anchors_found",
+        "assertion",
+        "assertion_found",
+        "temporal_value_bound",
         "quote",
         "normalized_quote",
         "relation",
         "quote_found",
-        "value_found",
+        "value_text_found",
+        "metric_value_bound",
+        "value_role_authorized",
         "chunk_sha256",
         "source_url"
       ],
@@ -572,7 +1246,7 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.2",
+      "const": "1.4",
       "title": "Schema Version",
       "type": "string"
     },
@@ -646,7 +1320,22 @@
       "$ref": "#/$defs/ReceiptConfiguration"
     },
     "provenance": {
-      "$ref": "#/$defs/ReceiptProvenance"
+      "discriminator": {
+        "mapping": {
+          "contract_migration": "#/$defs/MigratedReceiptProvenance",
+          "live": "#/$defs/LiveReceiptProvenance"
+        },
+        "propertyName": "receipt_derivation"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LiveReceiptProvenance"
+        },
+        {
+          "$ref": "#/$defs/MigratedReceiptProvenance"
+        }
+      ],
+      "title": "Provenance"
     },
     "error": {
       "anyOf": [

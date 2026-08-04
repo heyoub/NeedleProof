@@ -17,16 +17,18 @@ jobs:
       matrix:
         python: ["3.11", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.10.3"
           python-version: ${{ matrix.python }}
           enable-cache: true
       - run: uv sync --frozen
       - run: uv run ruff format --check apps/api/src/needleproof_api tests
       - run: uv run ruff check apps/api/src/needleproof_api tests
+      - run: uv run ty check --python-version ${{ matrix.python }} apps/api/src/needleproof_api
       - run: uv run pytest -q
       - run: uv run needleproof rehearsal
 
@@ -34,17 +36,18 @@ jobs:
     name: Web and browser contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: "0.10.3"
           python-version: "3.13"
           enable-cache: true
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 10.32.1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: pnpm
@@ -59,12 +62,66 @@ jobs:
     name: Container build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Compute lockfile digests
+        id: locks
+        run: |
+          echo "uv=$(sha256sum uv.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "pnpm=$(sha256sum pnpm-lock.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: false
+          load: true
           tags: needleproof:ci
+          build-args: |
+            NEEDLEPROOF_GIT_SHA=${{ github.sha }}
+            NEEDLEPROOF_UV_LOCK_SHA256=${{ steps.locks.outputs.uv }}
+            NEEDLEPROOF_PNPM_LOCK_SHA256=${{ steps.locks.outputs.pnpm }}
+            NEEDLEPROOF_IMAGE_REVISION=${{ github.sha }}
+      - name: Offline container runtime smoke
+        run: |
+          container_id=$(docker run --detach --publish 18000:8000 needleproof:ci)
+          trap 'docker rm --force "$container_id"' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18000/api/live >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:18000/api/live | jq -e '.status == "alive"'
+          curl --silent http://127.0.0.1:18000/api/ready \
+            | jq -e '.status == "degraded" and .model_ready == false and .corpus_version != null'
+          curl --fail --silent --cookie-jar /tmp/needleproof.cookies \
+            --header 'content-type: application/json' \
+            --data '{"question":"Replay the featured investigation","rehearsal":true}' \
+            http://127.0.0.1:18000/api/runs > /tmp/needleproof-run.json
+          run_id=$(jq --raw-output '.run_id' /tmp/needleproof-run.json)
+          status=""
+          for _ in $(seq 1 30); do
+            status=$(curl --fail --silent --cookie /tmp/needleproof.cookies \
+              "http://127.0.0.1:18000/api/runs/$run_id" | jq --raw-output '.status') \
+              || status=""
+            if [ "$status" = completed ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$status" = completed
+          curl --fail --silent --cookie /tmp/needleproof.cookies \
+            "http://127.0.0.1:18000/api/runs/$run_id/receipt.json" \
+            | jq -e '
+                .status == "completed"
+                and .schema_version == "1.4"
+                and .provenance.receipt_derivation == "live"
+                and .provenance.git_commit_sha == "${{ github.sha }}"
+                and .provenance.image_revision == "${{ github.sha }}"
+                and (.provenance.dependency_lock_digests["uv.lock"] | length == 64)
+                and (.provenance.dependency_lock_digests["pnpm-lock.yaml"] | length == 64)
+                and (.provenance.binding_contract_sha256 | length == 64)
+                and (.provenance.numeric_contract_sha256 | length == 64)
+                and (.provenance.absence_protocol_sha256 | length == 64)
+              '

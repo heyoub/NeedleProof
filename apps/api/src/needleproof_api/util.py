@@ -7,7 +7,9 @@ import re
 import tempfile
 import unicodedata
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import product
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,44 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 _LINE_HYPHEN = re.compile(r"(?<=\w)-\s*\n\s*(?=\w)")
 _WHITESPACE = re.compile(r"\s+")
+_METRIC_TOKEN = re.compile(
+    r"(?P<initialism>"
+    r"(?<![\w])(?:"
+    r"(?:[^\W\d_]\.){2,}|"
+    r"(?:[^\W\d_]\.)+[^\W\d_](?![\w])"
+    r")"
+    r")|(?P<word>[^\W_]+)"
+)
+MAX_METRIC_FTS_VARIANTS = 64
+
+
+@dataclass(frozen=True, slots=True)
+class MetricToken:
+    """One canonical metric token with its exact source span."""
+
+    value: str
+    start: int
+    end: int
+    is_initialism: bool
+
+
+def metric_tokens(value: str) -> tuple[MetricToken, ...]:
+    """Tokenize metric text while treating dotted initialisms as one word."""
+
+    tokens = []
+    for match in _METRIC_TOKEN.finditer(value):
+        raw = match.group()
+        is_initialism = match.lastgroup == "initialism"
+        canonical = raw.replace(".", "") if is_initialism else raw
+        tokens.append(
+            MetricToken(
+                value=canonical.casefold(),
+                start=match.start(),
+                end=match.end(),
+                is_initialism=is_initialism,
+            )
+        )
+    return tuple(tokens)
 
 
 def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
@@ -77,6 +117,45 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
     if folded != dehyphenated:
         operations.append("whitespace_folding")
     return folded, operations
+
+
+def canonical_metric_key(value: str) -> str:
+    """Return one normalized complete-word key for claim/probe identity."""
+
+    normalized, _ = normalize_evidence_text(value)
+    return " ".join(token.value for token in metric_tokens(normalized))
+
+
+def metric_fts_phrase_variants(
+    value: str,
+    *,
+    max_variants: int = MAX_METRIC_FTS_VARIANTS,
+) -> tuple[str, ...] | None:
+    """Return conservative FTS phrases for compact and dotted initialisms.
+
+    SQLite FTS tokenizes ``U.S.`` as ``u s`` while the application canonicalizes
+    it to ``us``. The exhaustive absence scan queries both representations and
+    still post-filters every result with the span-preserving metric tokenizer.
+    """
+
+    normalized, _ = normalize_evidence_text(value)
+    alternatives: list[tuple[str, ...]] = []
+    variant_count = 1
+    for token in metric_tokens(normalized):
+        raw = normalized[token.start : token.end]
+        looks_compact_initialism = (
+            2 <= len(token.value) <= 8 and raw.isalpha() and raw.upper() == raw
+        )
+        if token.is_initialism or looks_compact_initialism:
+            alternatives.append((token.value, " ".join(token.value)))
+            variant_count *= 2
+        else:
+            alternatives.append((token.value,))
+    if not alternatives:
+        return ()
+    if variant_count > max_variants:
+        return None
+    return tuple(dict.fromkeys(" ".join(candidate) for candidate in product(*alternatives)))
 
 
 def evidence_text_contains(needle: str, haystack: str) -> bool:

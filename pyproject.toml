@@ -29,9 +29,11 @@ packages = ["apps/api/src/needleproof_api"]
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.138,<7",
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
   "ruff>=0.12,<1",
+  "ty==0.0.65",
 ]
 
 [tool.pytest.ini_options]

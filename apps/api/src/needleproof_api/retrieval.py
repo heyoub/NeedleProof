@@ -12,6 +12,7 @@ from typing import Any, Literal
 import numpy as np
 from openai import AsyncOpenAI
 
+from .binding import word_phrase_spans
 from .chunk_ids import ChunkId
 from .config import Settings
 from .corpus import (
@@ -23,10 +24,11 @@ from .corpus import (
     load_current_manifest,
 )
 from .models import ChunkRecord, SearchHit, SearchResult
-from .util import sha256_file, utc_now_iso
+from .util import canonical_metric_key, metric_fts_phrase_variants, sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
+_SQLITE_IN_BATCH_SIZE = 500
 
 
 def _fts_query(query: str) -> str:
@@ -121,7 +123,10 @@ class CorpusStore:
         clock = time.perf_counter()
         try:
             if self._openai is None:
-                self._openai = AsyncOpenAI()
+                self._openai = AsyncOpenAI(
+                    max_retries=0,
+                    timeout=min(30.0, self.settings.soft_timeout_seconds),
+                )
             response = await self._openai.embeddings.create(
                 model=self.settings.embedding_model,
                 input=[query],
@@ -231,6 +236,43 @@ class CorpusStore:
             if len(output) >= k:
                 break
         return output
+
+    def find_exact_metric_chunks(self, metric: str) -> list[ChunkRecord]:
+        """Return every chunk containing the complete normalized metric phrase.
+
+        This is an exhaustive corpus primitive for bounded absence, not a ranked
+        retrieval operation. FTS narrows the scan with one phrase query and the
+        caller performs the canonical complete-word check before authorizing any
+        conclusion.
+        """
+
+        metric_key = canonical_metric_key(metric)
+        phrases = metric_fts_phrase_variants(metric)
+        if phrases == ():
+            return []
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            if phrases is None:
+                rows = connection.execute(
+                    "SELECT chunk_external_id FROM chunks ORDER BY internal_id"
+                ).fetchall()
+            else:
+                fts_query = " OR ".join(
+                    f'"{phrase.replace(chr(34), chr(34) * 2)}"' for phrase in phrases
+                )
+                rows = connection.execute(
+                    """
+                    SELECT chunk_external_id
+                    FROM chunks_fts
+                    WHERE chunks_fts MATCH ?
+                    ORDER BY rowid
+                    """,
+                    (fts_query,),
+                ).fetchall()
+        return [
+            chunk
+            for chunk in self.get_chunks([row[0] for row in rows])
+            if word_phrase_spans(metric_key, chunk.normalized_text)
+        ]
 
     async def search(
         self,
@@ -355,13 +397,18 @@ class CorpusStore:
         wanted = self.resolve_chunk_ids(chunk_ids, neighbor_radius)
         if not wanted:
             return []
+        rows: list[sqlite3.Row] = []
         with closing(sqlite3.connect(self.db_path)) as connection:
             connection.row_factory = sqlite3.Row
-            placeholders = ",".join("?" for _ in wanted)
-            rows = connection.execute(
-                f"SELECT * FROM chunks WHERE chunk_external_id IN ({placeholders})",
-                wanted,
-            ).fetchall()
+            for start in range(0, len(wanted), _SQLITE_IN_BATCH_SIZE):
+                batch = wanted[start : start + _SQLITE_IN_BATCH_SIZE]
+                placeholders = ",".join("?" for _ in batch)
+                rows.extend(
+                    connection.execute(
+                        f"SELECT * FROM chunks WHERE chunk_external_id IN ({placeholders})",
+                        batch,
+                    ).fetchall()
+                )
         mapped = {
             row["chunk_external_id"]: ChunkRecord(
                 internal_id=row["internal_id"],

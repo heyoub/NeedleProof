@@ -1,21 +1,38 @@
 from __future__ import annotations
 
+from decimal import Context, getcontext, setcontext
+
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from needleproof_api.agent import AGENT_INSTRUCTIONS
+from needleproof_api.binding import (
+    canonical_decimal_digits,
+    canonical_numeric_signature,
+    numeric_signature_sequence,
+    word_phrase_spans,
+)
 from needleproof_api.chunk_ids import ChunkId, chunk_id_from_uint64
 from needleproof_api.models import (
+    ChunkRecord,
     ClaimStatus,
     DraftClaim,
+    DraftObservation,
     EvidenceReference,
     EvidenceRelation,
-    ReportedValue,
+    ObservationKind,
+    VerifiedClaim,
 )
 from needleproof_api.service import compose_authoritative_answer
-from needleproof_api.util import normalize_evidence_text
+from needleproof_api.util import canonical_metric_key, normalize_evidence_text
 from needleproof_api.verification import (
     EvidenceVerifier,
+    _compatible_measurements,
     _distinct_values,
+    _measurements_bound_to_metric,
+    _temporal_anchor_is_valid,
     _temporal_signature,
+    _temporal_signatures_provably_distinct,
     reported_value_found,
     reported_value_linked_to_metric,
 )
@@ -28,863 +45,1931 @@ def reference(
     chunk_id: ChunkId,
     quote: str,
     metric_anchor: str,
-    relation=EvidenceRelation.SUPPORTS,
-):
+    *,
+    assertion: str | None = None,
+    relation: EvidenceRelation = EvidenceRelation.SUPPORTS,
+) -> EvidenceReference:
     return EvidenceReference(
         chunk_id=chunk_id,
         metric_anchor=metric_anchor,
         exact_quote=quote,
+        exact_assertion=assertion or quote,
         relation=relation,
     )
 
 
-def test_normalization_allows_pdf_linebreak_dehyphenation_and_whitespace():
-    normalized, operations = normalize_evidence_text("fee-earn-\ning   assets\tunder  management")
+def observation(
+    value: str,
+    evidence: EvidenceReference,
+    *,
+    kind: ObservationKind = ObservationKind.REPORTED_LEVEL,
+    temporal_anchor: str | None = None,
+) -> DraftObservation:
+    return DraftObservation(
+        kind=kind,
+        value_text=value,
+        temporal_anchor=temporal_anchor,
+        evidence=[evidence],
+    )
+
+
+def claim(metric: str, *observations: DraftObservation) -> DraftClaim:
+    return DraftClaim(metric=metric, observations=list(observations))
+
+
+def corpus_with_chunk(chunk: ChunkRecord):
+    return corpus_with_chunks(chunk)
+
+
+def corpus_with_chunks(*chunks: ChunkRecord):
+    class Corpus:
+        corpus_version = "v_0000000000000009"
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk for chunk in chunks if chunk.chunk_id in chunk_ids]
+
+    return Corpus()
+
+
+def test_normalization_records_pdf_linebreak_and_whitespace_operations():
+    normalized, operations = normalize_evidence_text("fee-earn-\ning   assets\tunder management")
     assert normalized == "fee-earning assets under management"
-    assert "pdf_linebreak_dehyphenation" in operations
-    assert "whitespace_folding" in operations
+    assert operations == ["pdf_linebreak_dehyphenation", "whitespace_folding"]
 
 
-def test_direct_value_and_quote_are_verified(corpus):
+def test_numeric_value_preserves_full_signature_and_sign():
+    quote = "The loss was ($4 billion), not $4 million."
+    assert reported_value_found("($4 billion)", quote)
+    assert not reported_value_found("$4 billion", quote)
+    assert not reported_value_found("$4 million", "The loss was $4 billion.")
+
+
+def test_direct_value_is_verified_with_diagnostic_binding(corpus):
     quote = (
         "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
         "improving to 50 percent from 48 percent."
     )
-    evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
-    claim = DraftClaim(
-        metric="fee-related earnings",
-        status="supported",
-        values=[ReportedValue(value="$345 million", evidence=[evidence])],
-        evidence=[evidence],
-    )
-    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-    assert result.status == ClaimStatus.VERIFIED
-    assert result.evidence[0].quote_found
-    assert result.evidence[0].value_found
-
-
-def test_numeric_value_must_match_the_complete_signature():
-    quote = "Assets under management were $142 billion at fiscal year end."
-
-    assert reported_value_found("$142 billion", quote)
-    assert not reported_value_found("42", quote)
-    assert not reported_value_found("142", quote)
-
-
-def test_numeric_value_preserves_explicit_and_accounting_signs():
-    assert reported_value_found("-$4 billion", "The loss was -$4 billion.")
-    assert reported_value_found("($4 billion)", "The loss was ($4 billion).")
-    assert not reported_value_found("-$4 billion", "The gain was $4 billion.")
-    assert not reported_value_found("$4 billion", "The loss was ($4 billion).")
-
-
-def test_reported_value_rejects_whitespace_only_text():
     evidence = reference(
-        MEMO_CHUNK, "Fee-related earnings were $345 million.", "Fee-related earnings"
+        MEMO_CHUNK,
+        quote,
+        "Fee-related earnings",
+        assertion="Fee-related earnings were $345 million",
     )
-    with pytest.raises(ValueError, match="non-whitespace"):
-        ReportedValue(value="   ", evidence=[evidence])
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim("fee-related earnings", observation("$345 million", evidence))
+    )
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].metric_value_bound
+    assert verified.evidence[0].binding_profile == "direct_copula"
+    assert verified.statement == "Fee-related earnings: $345 million"
 
 
-def test_modified_or_fabricated_quote_is_rejected(corpus):
-    quote = "Fee-related earnings were $346 million for the year."
+@pytest.mark.parametrize(
+    ("quote", "assertion"),
+    [
+        ("Forecast revenue was $2 million.", "revenue was $2 million."),
+        ("Revenue was $2 million forecast.", "Revenue was $2 million"),
+        ("Revenue was $2 million target.", "Revenue was $2 million"),
+        ("Revenue was $2 million, a forecast for next year.", "Revenue was $2 million"),
+        ("Revenue was $2 million. This was a forecast.", "Revenue was $2 million."),
+        ("Revenue was $2 million. That amount was a target.", "Revenue was $2 million."),
+        ("Revenue was $2 million. This was a forecast for 2026.", "Revenue was $2 million."),
+        ("Revenue was $2 million. This was a forecast for 2026.", "Revenue was $2 million"),
+    ],
+)
+def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, assertion):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 901),
+        document_id="doc_cropped_context",
+        document_name="Cropped context fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion=assertion,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
+@pytest.mark.parametrize("qualifier", ["Forecast", "Target", "Estimated", "Adjusted"])
+def test_role_changing_chunk_context_cannot_be_cropped_from_quote(qualifier):
+    chunk_text = f"{qualifier} revenue was $2 million."
+    quote = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 922),
+        document_id="doc_cropped_quote_context",
+        document_name="Cropped quote context fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="8" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].quote_found
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
+
+
+def test_quote_may_begin_after_a_real_chunk_sentence_boundary():
+    chunk_text = "The forecast was withdrawn. Revenue was $2 million."
+    quote = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 923),
+        document_id="doc_quote_sentence_boundary",
+        document_name="Quote sentence boundary fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="7" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+@pytest.mark.parametrize(
+    ("quote", "assertion", "expected_reason"),
+    [
+        (
+            "Forecast 2025 Revenue was $2 million.",
+            "2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
+        (
+            "Target as of 2025 Revenue was $2 million.",
+            "as of 2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
+        (
+            "Forecast in the report for 2025 Revenue was $2 million.",
+            "2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
+    ],
+)
+def test_temporal_led_binding_cannot_crop_role_prefix_from_quote(
+    quote,
+    assertion,
+    expected_reason,
+):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 931),
+        document_id="doc_temporal_role_prefix_quote",
+        document_name="Temporal role prefix quote fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="c" * 64,
+        token_estimate=8,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue", assertion=assertion)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == expected_reason
+
+
+def test_temporal_led_quote_cannot_crop_role_prefix_from_chunk():
+    chunk_text = "Forecast 2025 Revenue was $2 million."
+    quote = "2025 Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 932),
+        document_id="doc_temporal_role_prefix_chunk",
+        document_name="Temporal role prefix chunk fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="d" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
+
+
+@pytest.mark.parametrize(
+    "chunk_text",
+    [
+        "2025 Revenue was $2 million.",
+        "The forecast was withdrawn. 2025 Revenue was $2 million.",
+        "The report for 2025 Revenue was $2 million.",
+    ],
+)
+def test_temporal_led_binding_preserves_real_source_boundaries(chunk_text):
+    quote = "2025 Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 933),
+        document_id="doc_temporal_source_boundary",
+        document_name="Temporal source boundary fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="e" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence, temporal_anchor="2025"))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_temporal_led_context_evidence_cannot_crop_forecast_prefix():
+    observations_text = "Revenue was $1 million. Revenue was $2 million."
+    observations_chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 934),
+        document_id="doc_temporal_context_observations",
+        document_name="Temporal context observations fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=observations_text,
+        normalized_text=observations_text,
+        sha256="f" * 64,
+        token_estimate=10,
+    )
+    context_text = (
+        "Forecast 2025 Revenue was $1 million, which cannot be right alongside $2 million."
+    )
+    cropped_context = "2025 Revenue was $1 million, which cannot be right alongside $2 million."
+    context_chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 935),
+        document_id="doc_temporal_context_forecast",
+        document_name="Temporal context forecast fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=context_text,
+        normalized_text=context_text,
+        sha256="0" * 64,
+        token_estimate=13,
+    )
+    draft = claim(
+        "Revenue",
+        observation(
+            "$1 million",
+            reference(
+                observations_chunk.chunk_id,
+                observations_text,
+                "Revenue",
+                assertion="Revenue was $1 million.",
+            ),
+        ),
+        observation(
+            "$2 million",
+            reference(
+                observations_chunk.chunk_id,
+                observations_text,
+                "Revenue",
+                assertion="Revenue was $2 million.",
+            ),
+        ),
+    )
+    draft.context_evidence.append(
+        reference(
+            context_chunk.chunk_id,
+            cropped_context,
+            "Revenue",
+            assertion=cropped_context,
+        )
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunks(observations_chunk, context_chunk)).verify_claim(
+        draft
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert compose_authoritative_answer([verified], 1, "v_0000000000000009") is None
+    context_evidence = next(
+        evidence for evidence in verified.evidence if evidence.chunk_id == context_chunk.chunk_id
+    )
+    assert not context_evidence.assertion_found
+    assert context_evidence.binding_failure_reason == "evidence_context_boundaries_not_preserved"
+
+
+@pytest.mark.parametrize(
+    "followup",
+    ["This was a forecast.", "That amount was a target.", "It was only an estimate."],
+)
+def test_role_changing_chunk_followup_cannot_be_cropped_from_quote(followup):
+    quote = "Revenue was $2 million."
+    chunk_text = f"{quote} {followup}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 926),
+        document_id="doc_cropped_quote_followup",
+        document_name="Cropped quote followup fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="3" * 64,
+        token_estimate=10,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
+
+
+@given(
+    subject=st.sampled_from(
+        ["This", "That", "This value", "That amount", "It", "The figure", "The number"]
+    ),
+    copula=st.sampled_from(["is", "was", "remains"]),
+    qualifier=st.from_regex(r"[A-Za-z]{2,18}(?: [A-Za-z]{2,18}){0,3}", fullmatch=True),
+    assertion_terminal=st.sampled_from(["", "."]),
+)
+def test_nonnumeric_anaphoric_followup_cannot_be_cropped(
+    subject,
+    copula,
+    qualifier,
+    assertion_terminal,
+):
+    quote = f"Revenue was $2 million. {subject} {copula} {qualifier}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 909),
+        document_id="doc_anaphoric_context_property",
+        document_name="Anaphoric context property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="4" * 64,
+        token_estimate=12,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion=f"Revenue was $2 million{assertion_terminal}",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
+@given(year=st.integers(min_value=1900, max_value=2100))
+def test_temporal_digits_cannot_disguise_cropped_anaphoric_role_context(year):
+    quote = f"Revenue was $2 million. This was a forecast for {year}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 911),
+        document_id="doc_anaphoric_year_property",
+        document_name="Anaphoric year property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="6" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
+def test_following_numeric_observation_does_not_reclassify_prior_assertion():
+    quote = "Revenue was $2 million. It was $3 million in 2025."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 908),
+        document_id="doc_numeric_followup",
+        document_name="Numeric followup fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="2" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_modified_quote_is_rejected(corpus):
+    quote = "Fee-related earnings were $346 million."
     evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
-    claim = DraftClaim(
-        metric="fee-related earnings",
-        status="supported",
-        values=[ReportedValue(value="$346 million", evidence=[evidence])],
-        evidence=[evidence],
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim("Fee-related earnings", observation("$346 million", evidence))
     )
-    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-    assert result.status == ClaimStatus.UNVERIFIED
-    assert not result.evidence[0].quote_found
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].quote_found
+    assert any("exact quotations" in note for note in verified.verification_notes)
 
 
-def test_whitespace_only_evidence_quote_is_not_reported_as_found(corpus):
-    evidence = reference(MEMO_CHUNK, " \t\n ", "Fee-related earnings")
-    claim = DraftClaim(
-        metric="fee-related earnings",
-        status="supported",
-        values=[ReportedValue(value="$345 million", evidence=[evidence])],
-        evidence=[evidence],
-    )
-
-    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-
-    assert result.status == ClaimStatus.UNVERIFIED
-    assert not result.evidence[0].quote_found
-
-
-def test_missing_chunk_reference_makes_entire_claim_non_authoritative(corpus):
-    quote = (
-        "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
-        "improving to 50 percent from 48 percent."
-    )
+def test_any_evidence_reference_from_another_corpus_version_rejects_claim(corpus):
+    quote = "Fee-related earnings were $345 million."
     valid = reference(MEMO_CHUNK, quote, "Fee-related earnings")
-    missing = reference(chunk_id_from_uint64(999999), quote, "Fee-related earnings")
-    claim = DraftClaim(
-        metric="fee-related earnings",
-        status="supported",
-        values=[ReportedValue(value="$345 million", evidence=[valid])],
-        evidence=[valid, missing],
-    )
-
-    result = EvidenceVerifier(corpus).verify_claims([claim], completed_searches=1)
-
-    assert result.claims[0].status == ClaimStatus.UNVERIFIED
-    assert not result.all_claims_authoritative
-    assert any("chk_00000000000f423f" in note for note in result.claims[0].verification_notes)
-
-
-def test_differing_aum_dates_are_date_variants(corpus):
-    first = reference(
-        MEMO_CHUNK,
-        "Assets under management were $146.1 billion as of 31 December 2025.",
-        "Assets under management",
-    )
-    second = reference(
-        MEMO_CHUNK,
-        "Assets under management were $146.1 billion as of 31 December 2025. By the fiscal year end on 31 March 2026 the figure was $142 billion, which is up about $4 billion or 3 percent against the prior year even though it is down against December.",
-        "Assets under management",
-    )
-    claim = DraftClaim(
-        metric="assets under management",
-        status="date_variant",
-        values=[
-            ReportedValue(
-                value="$146.1 billion",
-                temporal_anchor="31 December 2025",
-                evidence=[first],
-            ),
-            ReportedValue(
-                value="$142 billion",
-                temporal_anchor="31 March 2026",
-                evidence=[second],
-            ),
-        ],
-        evidence=[first, second],
-    )
-    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-    assert result.status == ClaimStatus.DATE_VARIANT
-
-
-def test_fee_earning_aum_values_are_preserved_as_conflict(corpus):
-    first = reference(
-        MEMO_CHUNK,
-        "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
-        "Fee-earning AUM",
-    )
-    second = reference(
-        MEMO_CONTINUATION_CHUNK,
-        "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
-        "fee-earning AUM",
-        EvidenceRelation.SUPPORTS,
-    )
-    claim = DraftClaim(
-        metric="fee-earning AUM",
-        status="conflict",
-        values=[
-            ReportedValue(
-                value="$82 billion",
-                temporal_anchor="ended the year",
-                evidence=[first],
-            ),
-            ReportedValue(
-                value="$8.2 billion",
-                temporal_anchor="February call",
-                evidence=[second],
-            ),
-        ],
-        evidence=[first, second],
-    )
-    result = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=2)
-    assert result.status == ClaimStatus.CONFLICT
-    assert all(item.quote_found and item.value_found for item in result.evidence)
-
-
-def test_not_found_requires_four_searches_and_names_corpus_version(corpus):
-    claim = DraftClaim(
-        metric="total headcount",
-        status="not_found",
-    )
-    verifier = EvidenceVerifier(corpus)
-    searches = [
-        {
-            "query": f"total headcount wording {index}",
-            "metric": "total headcount",
-            "signature": f"headcount-{index}",
-        }
-        for index in range(4)
-    ]
-    assert (
-        verifier.verify_claim(
-            claim,
-            completed_searches=3,
-            completed_search_records=searches[:3],
-        ).status
-        == ClaimStatus.UNVERIFIED
-    )
-    verified = verifier.verify_claim(
-        claim,
-        completed_searches=4,
-        completed_search_records=searches,
-    )
-    assert verified.status == ClaimStatus.NOT_FOUND
-    answer = compose_authoritative_answer([verified], 4, corpus.corpus_version)
-    assert (
-        f"after 4 metric-targeted searches across corpus version {corpus.corpus_version}" in answer
-    )
+    missing = reference(chunk_id_from_uint64(999_999), quote, "Fee-related earnings")
+    draft = claim("Fee-related earnings", observation("$345 million", valid))
+    draft.context_evidence.append(missing)
+    verified = EvidenceVerifier(corpus).verify_claim(draft)
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert any("do not resolve" in note for note in verified.verification_notes)
 
 
 def test_right_number_attached_to_wrong_metric_is_rejected(corpus):
+    quote = "Fee-related earnings were $345 million."
+    evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim("Revenue", observation("$345 million", evidence))
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].metric_value_bound
+    assert any("metric anchors" in note for note in verified.verification_notes)
+
+
+def test_shared_reference_is_bound_independently_for_each_observation(corpus):
     quote = (
         "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
         "improving to 50 percent from 48 percent."
     )
-    evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings")
-    claim = DraftClaim(
-        metric="revenue",
-        status="supported",
-        values=[ReportedValue(value="$345 million", evidence=[evidence])],
-        evidence=[evidence],
-    )
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-    assert verified.status == ClaimStatus.UNVERIFIED
-    assert any("canonical metric" in note for note in verified.verification_notes)
-
-
-def test_value_cooccurring_with_another_metric_is_rejected(corpus):
-    quote = corpus.get_chunks([MEMO_CHUNK])[0].text
-    evidence = reference(MEMO_CHUNK, quote, "Assets under management")
-    claim = DraftClaim(
-        metric="assets under management",
-        status="supported",
-        values=[ReportedValue(value="$905 billion", evidence=[evidence])],
-        evidence=[evidence],
-    )
-
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-
-    assert verified.status == ClaimStatus.UNVERIFIED
-    assert not verified.evidence[0].value_found
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "Revenue was flat while operating expenses were $2 million.",
-        "Revenue was flat whereas operating expenses were $2 million.",
-        "Revenue was flat; operating expenses were $2 million.",
-        "Revenue was flat, but operating expenses were $2 million.",
-        "Revenue was flat and operating expenses were $2 million.",
-    ],
-)
-def test_value_after_intervening_metric_clause_is_not_linked_to_first_metric(quote):
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_value_in_metric_clause_remains_linked_before_contrasting_clause():
-    quote = "Revenue was $2 million while operating expenses were flat."
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_em_dash_competing_clause_does_not_transfer_metric_value():
-    quote = "Revenue was flat — operating expenses were $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_em_dash_keeps_value_before_competing_clause_and_anaphoric_continuation():
-    assert reported_value_linked_to_metric(
-        "$1 million",
-        "Revenue",
-        "Revenue was $1 million — operating expenses were $2 million.",
-    )
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue was flat — it reached $2 million.",
-    )
-
-
-@pytest.mark.parametrize(
-    "continuation",
-    ["it reached $2 million", "then reached $2 million"],
-)
-def test_semicolon_keeps_anaphoric_or_elided_metric_continuation(continuation):
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        f"Revenue was flat; {continuation}.",
-    )
-
-
-def test_elided_subject_remains_linked_across_contrasting_predicate():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue declined but still reached $2 million.",
-    )
-
-
-def test_coordinated_metric_modifier_remains_linked():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue from products and services was $2 million.",
-    )
-
-
-@pytest.mark.parametrize("predicate", ["reached", "totaled", "amounted to"])
-def test_coordinated_metric_modifier_supports_non_copular_predicates(predicate):
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        f"Revenue from products and services {predicate} $2 million.",
-    )
-
-
-def test_multiword_coordinated_metric_modifiers_remain_linked():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue from product sales and service fees was $2 million.",
-    )
-
-
-def test_plural_metric_agreement_preserves_coordinated_modifier():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Assets",
-        "Assets from products and services were $2 million.",
-    )
-
-
-def test_coordinated_metric_subjects_share_predicate_and_value():
-    quote = "Revenue and operating income each reached $2 million."
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating income", quote)
-
-
-@pytest.mark.parametrize(
-    ("quote", "competing_metric"),
-    [
-        ("Revenue from products and expenses were $2 million.", "expenses"),
-        ("Revenue across regions and operating costs reached $2 million.", "operating costs"),
-    ],
-)
-def test_coordinated_modifier_cannot_hide_competing_metric(quote, competing_metric):
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", competing_metric, quote)
-
-
-def test_participial_continuation_remains_linked():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue increased year over year, reaching $2 million.",
-    )
-
-
-def test_participial_competing_subject_is_not_linked_to_prior_metric():
-    quote = "Revenue was flat, increasing expenses reached $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "increasing expenses", quote)
-
-
-def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
-    metric = "Research and development expenses"
-
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        metric,
-        "Research and development expenses were $2 million.",
-    )
-    assert not reported_value_linked_to_metric(
-        "$2 million",
-        metric,
-        "Research and development expenses were flat and sales expenses were $2 million.",
-    )
-
-
-@pytest.mark.parametrize("separator", [",", ":"])
-@pytest.mark.parametrize("value", ["stable", "$2 million"])
-def test_punctuation_delimited_predicate_does_not_leak_to_prior_metric(separator, value):
-    quote = f"Revenue was flat{separator} operating expenses were {value}."
-
-    assert not reported_value_linked_to_metric(value, "Revenue", quote)
-    assert reported_value_linked_to_metric(value, "operating expenses", quote)
-
-
-def test_non_predicate_punctuation_remains_inside_metric_clause():
-    assert reported_value_linked_to_metric("stable", "Revenue", "Revenue: stable.")
-    assert reported_value_linked_to_metric(
-        "stable",
-        "Revenue",
-        "Revenue, excluding discontinued operations, was stable.",
-    )
-
-
-@pytest.mark.parametrize(
-    "modifier",
-    ["on an adjusted basis", "according to management"],
-)
-def test_ordinary_comma_paired_modifier_retains_metric_subject(modifier):
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        f"Revenue, {modifier}, was $2 million.",
-    )
-
-
-@pytest.mark.parametrize("separator", [",", ":"])
-@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
-def test_unlisted_predicate_verbs_do_not_leak_numeric_value_to_prior_metric(separator, predicate):
-    quote = f"Revenue was flat{separator} operating expenses {predicate} $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_punctuation_continuation_can_retain_original_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue, excluding discontinued operations, declined to $2 million.",
-    )
-
-
-def test_compound_parenthetical_modifier_retains_original_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue, excluding discontinued operations and foreign exchange effects, was $2 million.",
-    )
-
-
-def test_relative_clause_modifier_retains_original_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$905 billion",
-        "Assets under advisement",
-        "Assets under advisement, which include several mandates and sit across "
-        "markets, reached $905 billion.",
-    )
-
-
-def test_parenthesized_modifier_retains_original_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue (excluding discontinued operations and foreign exchange effects) was $2 million.",
-    )
-
-
-def test_value_inside_competing_parenthetical_is_not_linked_to_outer_metric():
-    assert not reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue (excluding operating expenses which were $2 million) was $3 million.",
-    )
-
-
-def test_unrecognized_comma_pair_cannot_hide_competing_metric_subject():
-    assert not reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue, operating expenses remained stable, was compared with $2 million.",
-    )
-
-
-def test_metric_name_starting_with_continuation_word_still_introduces_new_subject():
-    quote = "Revenue was flat, increased costs were $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "increased costs", quote)
-
-
-@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
-def test_and_delimited_predicate_does_not_leak_to_prior_metric(predicate):
-    quote = f"Revenue was flat and operating expenses {predicate} $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_and_can_continue_original_metric_with_anaphora():
-    quote = "Fee-earning AUM drives revenue and it ended the year at $82 billion."
-
-    assert reported_value_linked_to_metric("$82 billion", "Fee-earning AUM", quote)
-
-
-def test_anaphora_continues_nearest_explicit_metric_subject():
-    quote = (
-        "Revenue was flat and operating expenses were $2 million, "
-        "and this was down from $3 billion."
-    )
-
-    assert not reported_value_linked_to_metric("$3 billion", "Revenue", quote)
-    assert reported_value_linked_to_metric("$3 billion", "operating expenses", quote)
-
-
-def test_cross_sentence_anaphora_requires_metric_in_immediately_prior_sentence():
-    quote = "Revenue was flat. Operating expenses remained stable. It was $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "Although revenue declined, operating income remained stable. It was $2 million.",
-        "Revenue declined while operating income remained stable. It was $2 million.",
-    ],
-)
-def test_cross_sentence_anaphora_uses_final_metric_subject(quote):
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "Operating income", quote)
-
-
-@pytest.mark.parametrize(
-    "following",
-    [
-        "At $2 million, operating expenses were stable.",
-        "At $2 million operating expenses were stable.",
-    ],
-)
-def test_value_first_continuation_rejects_competing_subject_after_value(following):
-    quote = f"Revenue was flat. {following}"
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_value_first_continuation_rejects_competing_subject_before_value():
-    quote = "Revenue was flat. At year end operating expenses were $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_anaphoric_determiner_does_not_hide_competing_subject():
-    quote = "Revenue was flat. At $2 million, operating expenses for this quarter were stable."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-@pytest.mark.parametrize(
-    "following",
-    [
-        "At $2 million, it remained stable.",
-        "It was $2 million, which was unchanged.",
-        "At $2 million, up from the prior year.",
-    ],
-)
-def test_value_first_continuation_preserves_anaphora_and_context(following):
-    quote = f"Revenue was flat. {following}"
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_value_first_comparison_tail_preserves_later_anaphora():
-    quote = "Revenue was flat. At $2 million, up from $1 million, it was unchanged."
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_value_first_continuation_allows_repeated_metric_subject():
-    quote = "Revenue was flat. At $2 million, Revenue was stable."
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_value_first_competing_subject_cannot_borrow_mentioned_metric():
-    quote = (
-        "Revenue was flat. At $2 million, operating expenses attributable to revenue were stable."
-    )
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-@pytest.mark.parametrize(
-    "predicate",
-    ["equaled", "accounted for", "constituted", "will be"],
-)
-def test_value_first_competing_subject_does_not_depend_on_predicate_whitelist(predicate):
-    quote = (
-        f"Revenue was flat. At $2 million, operating expenses {predicate} the prior-year amount."
-    )
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-@pytest.mark.parametrize("predicate", ["equaled", "accounted for", "constituted", "will be"])
-def test_competing_subject_before_value_does_not_depend_on_predicate_whitelist(predicate):
-    quote = f"Revenue was flat. At year end operating expenses {predicate} $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
-    quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
-
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_compound_value_first_continuation_checks_tail_after_complete_value():
-    quote = "Revenue was flat. At $2 million and 50 percent, it was unchanged."
-
-    assert reported_value_linked_to_metric("$2 million and 50 percent", "Revenue", quote)
-
-
-def test_repeated_unit_compound_value_matches_ordered_prefix():
-    assert reported_value_linked_to_metric(
-        "$2 million and $3 million",
-        "Revenue",
-        "Revenue was $2 million and $3 million.",
-    )
-    assert not reported_value_linked_to_metric(
-        "$3 million",
-        "Revenue",
-        "Revenue was $2 million and $3 million.",
-    )
-    assert not reported_value_linked_to_metric(
-        "$2 million and $3 million",
-        "Revenue",
-        "Revenue was $3 million and $2 million.",
-    )
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "Revenue, up from $1 million, was $2 million.",
-        "Revenue (up from $1 million) was $2 million.",
-    ],
-)
-def test_comparison_amount_before_reported_value_does_not_block_match(quote):
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
-
-
-def test_comparison_skip_cannot_cross_competing_subject():
-    quote = "Revenue increased (up from $1 million) after operating expenses reached $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
-
-
-def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
-    quote = "Revenue was flat because operating expenses rose. It was $2 million."
-
-    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
-    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
-
-
-def test_explanatory_causal_clause_retains_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue declined because of restructuring, settling at $2 million.",
-    )
-
-
-def test_temporal_since_modifier_retains_metric_subject():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue has increased since the acquisition, reaching $2 million.",
-    )
-
-
-def test_temporal_since_modifier_preserves_comma_inside_date():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue has increased since January 1, 2024, reaching $2 million.",
-    )
-
-
-def test_since_clause_with_competing_subject_does_not_transfer_value():
-    assert not reported_value_linked_to_metric(
-        "$2 million",
-        "Revenue",
-        "Revenue was flat since operating expenses rose, reaching $2 million.",
-    )
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [
-        "Coffee sales fell to $2 million this quarter. Fee income remained flat.",
-        "Fees collected were $2 million this quarter. Fee income remained flat.",
-    ],
-)
-def test_metric_anchor_does_not_match_inside_larger_word(quote):
-    assert not reported_value_linked_to_metric("$2 million", "fee", quote)
-
-
-def test_metric_anchor_can_end_at_hyphen_boundary():
-    assert reported_value_linked_to_metric(
-        "$2 million",
-        "fee",
-        "Fee-related income was $2 million.",
-    )
-
-
-def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):
-    first = reference(
+    shared = reference(
         MEMO_CHUNK,
-        "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
-        "Fee-earning AUM",
+        quote,
+        "Fee-related earnings",
+        assertion="Fee-related earnings were $345 million",
     )
-    second = reference(
-        MEMO_CONTINUATION_CHUNK,
-        "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
-        "fee-earning AUM",
-    )
-    claim = DraftClaim(
-        metric="fee-earning AUM",
-        status="supported",
-        values=[
-            ReportedValue(value="$82 billion", evidence=[first]),
-            ReportedValue(value="$8.2 billion", evidence=[second]),
-        ],
-        evidence=[first, second],
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim(
+            "Fee-related earnings",
+            observation("$999 million", shared),
+            observation("$345 million", shared),
+        )
     )
 
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=2)
-
-    assert verified.status == ClaimStatus.CONFLICT
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert [item.value_text for item in verified.evidence] == [
+        "$999 million",
+        "$345 million",
+    ]
+    assert not verified.evidence[0].metric_value_bound
+    assert verified.evidence[1].metric_value_bound
 
 
 @pytest.mark.parametrize(
     "relation",
     [EvidenceRelation.CONTEXTUALIZES, EvidenceRelation.CONTRADICTS],
 )
-def test_non_supporting_evidence_cannot_authorize_claim(corpus, relation):
+def test_non_supporting_evidence_cannot_authorize_observation(corpus, relation):
+    quote = "Fee-related earnings were $345 million."
+    evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings", relation=relation)
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim("Fee-related earnings", observation("$345 million", evidence))
+    )
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Revenue was flat, increasing expenses by $2 million.",
+        "Revenue was flat, unexpectedly increasing expenses by $2 million.",
+        "Revenue was flat so operating expenses were $2 million.",
+        "Revenue, including $2 million from services, was $10 million.",
+        "Revenue, excluding $2 million of pass-through costs, was $10 million.",
+        "Revenue was not $2 million.",
+        "Revenue was expected to reach $2 million.",
+        "Revenue could reach $2 million.",
+        "Revenue targeted $2 million.",
+        "Revenue was below $2 million.",
+        "Revenue was more than $2 million.",
+        "Revenue increased by $2 million.",
+        "Revenue was flat after operating expenses reached $2 million.",
+        "Revenue was flat or operating expenses reached $2 million.",
+        "Revenue: $2 million forecast.",
+        "Revenue: $2 million target.",
+        "Revenue was $2 million expected.",
+        "Revenue was $2 million projected.",
+        "Revenue was $2 million maximum.",
+        "Revenue was $2 million, forecast.",
+        "Revenue was $2 million, not the reported actual.",
+        "No revenue was $2 million.",
+        "Forecast revenue was $2 million.",
+        "Target revenue was $2 million.",
+        "Projected revenue was $2 million.",
+        "Adjusted revenue was $2 million.",
+        "Non-GAAP revenue was $2 million.",
+        "Company revenue was $2 million.",
+    ],
+)
+def test_unknown_negated_modal_component_delta_and_competing_subject_forms_fail_closed(quote):
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote) is None
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Revenue was $2 million.",
+        "Revenue reached $2 million.",
+        "Revenue stood at $2 million.",
+        "Revenue ended the year at $2 million.",
+        "The Revenue was $2 million.",
+        "Revenue was stable. It remained at $2 million.",
+    ],
+)
+def test_closed_positive_level_profiles_are_accepted(quote):
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote) is not None
+
+
+def test_trailing_temporal_anchor_is_part_of_the_same_atomic_binding():
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            "Revenue was $2 million as of 31 December 2025.",
+            temporal_anchor="31 December 2025",
+        )
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    ("quote", "temporal_anchor"),
+    [
+        ("At year end, Revenue was $2 million.", "year end"),
+        ("February call has Revenue at $2 million.", "February call"),
+    ],
+)
+def test_bound_leading_temporal_anchor_may_precede_complete_metric(quote, temporal_anchor):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            quote,
+            temporal_anchor=temporal_anchor,
+        )
+        is not None
+    )
+
+
+@given(
+    prefix=st.from_regex(r"[A-Za-z]{1,24}", fullmatch=True).filter(
+        lambda value: value.casefold() != "the"
+    )
+)
+def test_unknown_pre_metric_prefix_always_fails_closed(prefix):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            f"{prefix} Revenue was $2 million.",
+        )
+        is None
+    )
+
+
+@given(suffix=st.from_regex(r"[A-Za-z]{1,24}", fullmatch=True))
+def test_unknown_post_value_suffix_always_fails_closed(suffix):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            f"Revenue was $2 million {suffix}.",
+        )
+        is None
+    )
+
+
+def test_compound_metric_anchor_is_not_split_at_and():
+    metric = "Research and development expenses"
+    quote = f"{metric} were $2 million."
+    assert reported_value_linked_to_metric("$2 million", metric, quote) is not None
+    assert reported_value_linked_to_metric("$2 million", "Research", quote) is None
+
+
+@pytest.mark.parametrize("terminator", [".", "?", "!", ";", ":", ","])
+def test_metric_phrase_cannot_cross_clause_or_sentence_terminator(terminator):
+    assertion = f"Revenue{terminator} Growth was 10%."
+
+    assert word_phrase_spans("Revenue Growth", assertion) == []
+    assert reported_value_linked_to_metric("10%", "Revenue Growth", assertion) is None
+
+
+@pytest.mark.parametrize("separator", [" ", "\n", "-", "–", "/", " & ", " ( "])
+def test_metric_phrase_accepts_only_named_intra_phrase_formatting(separator):
+    assertion = f"Fee{separator}related earnings were $2 million."
+
+    assert word_phrase_spans("Fee related earnings", assertion)
+
+
+def test_metric_phrase_normalizes_compact_and_dotted_initialisms():
+    assertion = "U.S. revenue was $2 million."
+
+    assert canonical_metric_key("US revenue") == canonical_metric_key("U.S. revenue")
+    assert word_phrase_spans("US revenue", assertion)
+    assert reported_value_linked_to_metric("$2 million", "US revenue", assertion) is not None
+
+
+@given(
+    initialism=st.text(
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+    )
+)
+def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism):
+    dotted = ".".join(initialism) + "."
+    compact_metric = f"{initialism} revenue"
+    dotted_metric = f"{dotted} revenue"
+
+    assert canonical_metric_key(compact_metric) == canonical_metric_key(dotted_metric)
+    assert word_phrase_spans(compact_metric, f"{dotted_metric} was $2 million.")
+    assert word_phrase_spans(dotted_metric, f"{compact_metric} was $2 million.")
+
+
+def test_initialism_normalization_does_not_cross_spaces_or_sentence_boundaries():
+    assert canonical_metric_key("U. S. revenue") != canonical_metric_key("US revenue")
+    assert word_phrase_spans("US revenue", "U. S. revenue was $2 million.") == []
+    assert word_phrase_spans("US revenue", "US. Revenue was $2 million.") == []
+
+
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("Revenue was not reported and it was $5.", "$5"),
+        ("Revenue was $2 million forecast. It was $5 million.", "$5 million"),
+        (
+            "Revenue was stable. In the next paragraph, operating income was discussed. It was $2 million.",
+            "$2 million",
+        ),
+    ],
+)
+def test_anaphoric_binding_requires_immediate_positive_antecedent(quote, value):
+    assert reported_value_linked_to_metric(value, "Revenue", quote) is None
+
+
+@pytest.mark.parametrize("boundary", ["?", "!"])
+def test_interrogative_or_exclamatory_antecedent_cannot_authorize_anaphora(boundary):
+    quote = f"Revenue was $100{boundary} It ended the year at $5."
+
+    assert reported_value_linked_to_metric("$5", "Revenue", quote) is None
+
+
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("Revenue was reported and it was $5.", "$5"),
+        ("Revenue was stable. It remained at $2 million.", "$2 million"),
+    ],
+)
+def test_anaphoric_binding_accepts_closed_positive_profiles(quote, value):
+    assert reported_value_linked_to_metric(value, "Revenue", quote) is not None
+
+
+@pytest.mark.parametrize(
+    ("quote", "value", "expected"),
+    [
+        ("Revenue was $2 million. It was $2 million.", "$2 million", True),
+        ("Revenue was $2.0 million. It was $2 million.", "$2 million", True),
+        ("Revenue was $2 million. It was $3 million.", "$3 million", False),
+        ("Revenue was $2 million. It was 2 million euros.", "2 million euros", False),
+    ],
+)
+def test_numeric_anaphora_requires_the_same_canonical_value(quote, value, expected):
+    match = reported_value_linked_to_metric(value, "Revenue", quote)
+    assert bool(match) is expected
+
+
+def test_new_bound_period_allows_a_distinct_anaphoric_value():
+    match = reported_value_linked_to_metric(
+        "$3 million",
+        "Revenue",
+        "Revenue was $2 million in 2024. In 2025 it was $3 million.",
+        temporal_anchor="2025",
+    )
+    assert match is not None
+    assert match.temporal_span is not None
+
+
+def test_next_sentence_temporal_lead_cannot_hide_competing_subject():
     quote = (
-        "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
-        "improving to 50 percent from 48 percent."
+        "Revenue was $2 million as of 2024. "
+        "In 2025 operating income was discussed, and it was $5 million."
     )
-    evidence = reference(MEMO_CHUNK, quote, "Fee-related earnings", relation)
-    claim = DraftClaim(
-        metric="fee-related earnings",
-        status="supported",
-        values=[ReportedValue(value="$345 million", evidence=[evidence])],
-        evidence=[evidence],
+
+    assert (
+        reported_value_linked_to_metric(
+            "$5 million",
+            "Revenue",
+            quote,
+            temporal_anchor="2025",
+        )
+        is None
     )
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
+
+
+@pytest.mark.parametrize(
+    "quote,temporal_anchor",
+    [
+        ("Forecast Revenue was $2 million.", "Forecast"),
+        ("Revenue was $2 million forecast.", "forecast"),
+        ("Revenue was $2 million target.", "target"),
+        ("Forecast 2025 Revenue was $2 million.", "Forecast 2025"),
+        ("Revenue was $2 million in a 2025 forecast.", "2025 forecast"),
+        ("February target Revenue was $2 million.", "February target"),
+    ],
+)
+def test_role_qualifiers_cannot_masquerade_as_temporal_anchors(quote, temporal_anchor):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            quote,
+            temporal_anchor=temporal_anchor,
+        )
+        is None
+    )
+    assert not _temporal_anchor_is_valid(temporal_anchor)
+
+
+@pytest.mark.parametrize(
+    "temporal_anchor",
+    [
+        "2025",
+        "FY 2025",
+        "Q1 2026",
+        "as of 31 December 2025",
+        "for the fiscal year ended March 31, 2026",
+        "ended the year",
+        "February call",
+    ],
+)
+def test_closed_temporal_anchor_profiles_remain_authorized(temporal_anchor):
+    assert _temporal_anchor_is_valid(temporal_anchor)
+
+
+@given(
+    intervening_words=st.lists(
+        st.from_regex(r"[A-Za-z]{2,12}", fullmatch=True),
+        min_size=1,
+        max_size=8,
+    )
+)
+def test_any_intervening_sentence_breaks_next_sentence_anaphora(intervening_words):
+    intervening = " ".join(intervening_words)
+    quote = f"Revenue was stable. {intervening}. It was $2 million."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote) is None
+
+
+@pytest.mark.parametrize("separator", [",", ":"])
+def test_qualitative_predicate_does_not_leak_across_metrics(separator):
+    quote = f"Revenue was flat{separator} operating expenses were stable."
+    assert reported_value_linked_to_metric("stable", "Revenue", quote) is None
+    assert reported_value_linked_to_metric("stable", "operating expenses", quote) is None
+    assert (
+        reported_value_linked_to_metric(
+            "stable",
+            "operating expenses",
+            "operating expenses were stable.",
+        )
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    ("quote", "value"),
+    [
+        ("Credit rating was not available.", "not available"),
+        ("Credit rating was not available.", "available"),
+        ("Credit rating was never stable.", "never stable"),
+        ("Credit rating is no longer stable.", "no longer stable"),
+        ("Credit rating was temporarily not available.", "temporarily not available"),
+    ],
+)
+def test_explicit_qualitative_negation_never_authorizes_a_positive_observation(quote, value):
+    assert reported_value_linked_to_metric(value, "Credit rating", quote) is None
+
+
+@pytest.mark.parametrize("value", ["available", "stable", "unchanged"])
+def test_positive_qualitative_copula_profiles_remain_authorized(value):
+    quote = f"Credit rating was {value}."
+    assert reported_value_linked_to_metric(value, "Credit rating", quote) is not None
+
+
+def test_negated_qualitative_observation_is_unverified_by_public_verifier():
+    quote = "Credit rating was not available."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 926),
+        document_id="doc_negated_qualitative",
+        document_name="Negated qualitative fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="3" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Credit rating")
+
+    verified = (
+        EvidenceVerifier(corpus_with_chunk(chunk))
+        .verify_claims([claim("Credit rating", observation("not available", evidence))])
+        .claims[0]
+    )
+
     assert verified.status == ClaimStatus.UNVERIFIED
-    assert any("cannot independently authorize" in note for note in verified.verification_notes)
+    assert verified.evidence[0].binding_failure_reason == "negated_qualitative_value"
 
 
-def test_temporal_anchor_must_exist_in_same_quote(corpus):
-    quote = "Assets under management were $146.1 billion as of 31 December 2025."
-    evidence = reference(MEMO_CHUNK, quote, "Assets under management")
-    claim = DraftClaim(
-        metric="assets under management",
-        status="supported",
-        values=[
-            ReportedValue(
-                value="$146.1 billion",
-                temporal_anchor="31 March 2099",
-                evidence=[evidence],
-            )
-        ],
-        evidence=[evidence],
+def test_compound_numeric_value_is_rejected_as_ambiguous():
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million and $3 million",
+            "Revenue",
+            "Revenue was $2 million and $3 million.",
+        )
+        is None
     )
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-    assert verified.status == ClaimStatus.UNVERIFIED
-    assert any("temporal anchor" in note for note in verified.verification_notes)
 
 
-def test_temporal_anchor_must_be_bound_to_its_reported_value(corpus):
+def test_repeated_identical_values_cannot_exchange_temporal_anchors():
+    quote = "Revenue was $2 million in 2024. Operating expenses were $2 million in 2025."
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            quote,
+            temporal_anchor="2025",
+        )
+        is None
+    )
+
+
+def test_seeded_aum_values_are_date_variants(corpus):
     quote = (
-        "Starting with scale. Assets under management were $146.1 billion as of 31 "
-        "December 2025. By the fiscal year end on 31 March 2026 the figure was $142 "
-        "billion, which is up about $4 billion or 3 percent against the prior year even "
-        "though it is down against December."
+        "Assets under management were $146.1 billion as of 31 December 2025. "
+        "By the fiscal year end on 31 March 2026 the figure was $142 billion, which is "
+        "up about $4 billion or 3 percent against the prior year even though it is down "
+        "against December."
     )
-    evidence = reference(MEMO_CHUNK, quote, "Assets under management")
-    claim = DraftClaim(
-        metric="assets under management",
-        status="supported",
-        values=[
-            ReportedValue(
-                value="$146.1 billion",
-                temporal_anchor="31 March 2026",
-                evidence=[evidence],
-            )
-        ],
-        evidence=[evidence],
-    )
-
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=1)
-
-    assert verified.status == ClaimStatus.UNVERIFIED
-    assert verified.evidence[0].quote_found
-    assert not verified.evidence[0].temporal_anchors_found
-
-
-def test_nonnumeric_reported_value_requires_a_complete_phrase(corpus):
-    assert not reported_value_found("high", "Fees were highlighted in the report.")
-    assert reported_value_found("high", "Fees were high in the report.")
-
-
-def test_freeform_multi_proposition_statement_is_not_in_draft_contract():
-    assert "statement" not in DraftClaim.model_json_schema()["properties"]
-
-
-def test_possible_conflict_is_excluded_from_authoritative_answer(corpus):
     first = reference(
         MEMO_CHUNK,
-        "Fee-earning AUM is the number that actually matters for revenue and it ended the year at $82 billion, up $9 billion or 13 percent.",
+        quote,
+        "Assets under management",
+        assertion="Assets under management were $146.1 billion as of 31 December 2025.",
+    )
+    second = reference(
+        MEMO_CHUNK,
+        quote,
+        "Assets under management",
+        assertion=(
+            "Assets under management were $146.1 billion as of 31 December 2025. "
+            "By the fiscal year end on 31 March 2026 the figure was $142 billion"
+        ),
+    )
+    repeated = observation("$146.1 billion", first, temporal_anchor="31 December 2025")
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim(
+            "Assets under management",
+            repeated,
+            repeated.model_copy(deep=True),
+            observation("$142 billion", second, temporal_anchor="31 March 2026"),
+        )
+    )
+    assert verified.status == ClaimStatus.DATE_VARIANT
+    assert verified.statement.count("$146.1 billion") == 1
+
+
+@given(repetitions=st.integers(min_value=1, max_value=8))
+def test_duplicate_observations_cannot_change_temporal_classification(repetitions):
+    quote = (
+        "Assets under management were $146.1 billion as of 31 December 2025. "
+        "By the fiscal year end on 31 March 2026 the figure was $142 billion."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 910),
+        document_id="doc_duplicate_observation_property",
+        document_name="Duplicate observation property fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=18,
+    )
+    first_assertion = "Assets under management were $146.1 billion as of 31 December 2025."
+    second_assertion = (
+        "Assets under management were $146.1 billion as of 31 December 2025. "
+        "By the fiscal year end on 31 March 2026 the figure was $142 billion."
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Assets under management",
+        assertion=first_assertion,
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Assets under management",
+        assertion=second_assertion,
+    )
+    repeated = observation("$146.1 billion", first, temporal_anchor="31 December 2025")
+    observations = [repeated.model_copy(deep=True) for _ in range(repetitions)]
+    observations.append(observation("$142 billion", second, temporal_anchor="31 March 2026"))
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Assets under management", *observations)
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+    assert verified.statement.count("$146.1 billion") == 1
+
+
+def test_seeded_fee_aum_source_characterization_is_conflict(corpus):
+    first_quote = (
+        "Fee-earning AUM is the number that actually matters for revenue and it ended "
+        "the year at $82 billion, up $9 billion or 13 percent."
+    )
+    second_quote = (
+        "First, my note from the February call has fee-earning AUM at $8.2 billion, "
+        "which cannot be right alongside the $82 billion figure above, and I have not "
+        "been able to work out which of my two sources introduced the error."
+    )
+    first = reference(
+        MEMO_CHUNK,
+        first_quote,
         "Fee-earning AUM",
+        assertion=(
+            "Fee-earning AUM is the number that actually matters for revenue and it ended "
+            "the year at $82 billion"
+        ),
     )
     second = reference(
         MEMO_CONTINUATION_CHUNK,
-        "First, my note from the February call has fee-earning AUM at $8.2 billion, which cannot be right alongside the $82 billion figure above, and I have not been able to work out which of my two sources introduced the error.",
+        second_quote,
         "fee-earning AUM",
-        EvidenceRelation.CONTEXTUALIZES,
+        assertion="February call has fee-earning AUM at $8.2 billion",
     )
-    claim = DraftClaim(
-        metric="fee-earning AUM",
-        status="possible_conflict",
-        values=[
-            ReportedValue(value="$82 billion", evidence=[first]),
-            ReportedValue(value="$8.2 billion", evidence=[second]),
-        ],
-        evidence=[first, second],
+    verified = EvidenceVerifier(corpus).verify_claim(
+        claim(
+            "Fee-earning AUM",
+            observation("$82 billion", first, temporal_anchor="ended the year"),
+            observation("$8.2 billion", second, temporal_anchor="February call"),
+        )
     )
-    verified = EvidenceVerifier(corpus).verify_claim(claim, completed_searches=2)
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+@pytest.mark.parametrize("relation", list(EvidenceRelation))
+def test_explicit_conflict_evidence_blocks_single_value_authorization(corpus, relation):
+    value_quote = (
+        "Fee-earning AUM is the number that actually matters for revenue and it ended "
+        "the year at $82 billion, up $9 billion or 13 percent."
+    )
+    conflict_quote = (
+        "First, my note from the February call has fee-earning AUM at $8.2 billion, "
+        "which cannot be right alongside the $82 billion figure above, and I have not "
+        "been able to work out which of my two sources introduced the error."
+    )
+    value_evidence = reference(
+        MEMO_CHUNK,
+        value_quote,
+        "Fee-earning AUM",
+        assertion=(
+            "Fee-earning AUM is the number that actually matters for revenue and it ended "
+            "the year at $82 billion"
+        ),
+    )
+    conflict_evidence = reference(
+        MEMO_CONTINUATION_CHUNK,
+        conflict_quote,
+        "fee-earning AUM",
+        assertion="February call has fee-earning AUM at $8.2 billion",
+        relation=relation,
+    )
+    draft = claim(
+        "Fee-earning AUM",
+        observation("$82 billion", value_evidence, temporal_anchor="ended the year"),
+    )
+    draft.context_evidence.append(conflict_evidence)
+
+    verified = EvidenceVerifier(corpus).verify_claim(draft)
+
     assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
     assert compose_authoritative_answer([verified], 2, corpus.corpus_version) is None
+    assert any("conflict evidence" in note for note in verified.verification_notes)
 
 
-def test_equivalent_date_formats_have_one_temporal_signature():
-    assert _temporal_signature("31 December 2025") == _temporal_signature("December 31, 2025")
-    assert _temporal_signature("on 31 March 2026") == _temporal_signature("2026-03-31")
+@pytest.mark.parametrize(
+    "quote",
+    [
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025. "
+            "Our systems are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "while our systems are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "while teams have an unresolved conflict."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "because dependencies introduced the error."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "although interfaces are conflicting."
+        ),
+    ],
+)
+def test_unrelated_incompatible_systems_do_not_turn_date_variants_into_conflict(quote):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 901),
+        document_id="doc_conflict_locality",
+        document_name="Conflict locality fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=16,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in 2025",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor="2024"),
+            observation("$3 million", second, temporal_anchor="2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
 
 
-def test_free_text_is_not_a_temporal_signature():
-    assert _temporal_signature("first figure") is None
-    assert _temporal_signature("February call") is None
-    assert _temporal_signature("FY 2026") == "fiscal-year:2026"
-    assert _temporal_signature("Q2 2026") == "quarter:2026-q2"
+@pytest.mark.parametrize("separator", [", and ", "; "])
+def test_typed_conflict_characterization_binds_local_distinct_values(separator):
+    quote = (
+        f"Revenue was $2 million{separator}Revenue was $3 million; the figures are incompatible."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 903),
+        document_id="doc_typed_conflict",
+        document_name="Typed conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="7" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first),
+            observation("$3 million", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
 
 
-def test_duplicate_numeric_formatting_is_not_a_distinct_value():
-    quote = "Fee-earning AUM ended the year at $82 billion."
-    evidence = reference(MEMO_CHUNK, quote, "Fee-earning AUM")
+def test_qualitative_conflict_characterization_binds_local_distinct_values():
+    quote = "Credit rating was stable; Credit rating was negative; the values are conflicting."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 924),
+        document_id="doc_qualitative_conflict",
+        document_name="Qualitative conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was negative",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Credit rating",
+            observation("stable", first),
+            observation("negative", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+def test_qualitative_conflict_does_not_borrow_a_competing_metrics_value():
+    chunk_text = (
+        "Credit rating was stable. Credit rating was negative. "
+        "Credit rating was stable; Market outlook was negative; the values are conflicting."
+    )
+    first_quote = "Credit rating was stable."
+    second_quote = "Credit rating was negative."
+    conflict_quote = (
+        "Credit rating was stable; Market outlook was negative; the values are conflicting."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 925),
+        document_id="doc_qualitative_conflict_decoy",
+        document_name="Qualitative conflict decoy fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="4" * 64,
+        token_estimate=22,
+    )
+    first = reference(chunk.chunk_id, first_quote, "Credit rating")
+    second = reference(chunk.chunk_id, second_quote, "Credit rating")
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Credit rating",
+        observation("stable", first),
+        observation("negative", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+@pytest.mark.parametrize(
+    ("conflicting_value", "expected"),
+    [
+        ("negative", ClaimStatus.POSSIBLE_CONFLICT),
+        ("very negative", ClaimStatus.POSSIBLE_CONFLICT),
+        ("stable", ClaimStatus.VERIFIED),
+        ("Market outlook was negative", ClaimStatus.VERIFIED),
+    ],
+)
+def test_unmodeled_qualitative_bridge_operand_blocks_only_a_distinct_single_value(
+    conflicting_value,
+    expected,
+):
+    quote = f"Credit rating was stable, which cannot be right alongside {conflicting_value}."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 929),
+        document_id="doc_unmodeled_qualitative_bridge",
+        document_name="Unmodeled qualitative bridge fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="a" * 64,
+        token_estimate=11,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Credit rating", observation("stable", evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == expected
+
+
+def test_unmodeled_qualitative_bridge_requires_left_operand_metric_ownership():
+    value_quote = "Credit rating was stable."
+    conflict_quote = (
+        "Credit rating was discussed, while Market outlook was stable, "
+        "which cannot be right alongside negative."
+    )
+    chunk_text = f"{value_quote} {conflict_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 930),
+        document_id="doc_unmodeled_qualitative_bridge_scope",
+        document_name="Unmodeled qualitative bridge scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="b" * 64,
+        token_estimate=18,
+    )
+    evidence = reference(chunk.chunk_id, value_quote, "Credit rating")
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Credit rating",
+        assertion="Credit rating was discussed",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Credit rating", observation("stable", evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_year_is_not_mistaken_for_second_unitless_conflict_value():
+    quote = "Headcount was 100 in 2024; the figures are incompatible."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 904),
+        document_id="doc_unitless_conflict",
+        document_name="Unitless conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="6" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Headcount",
+        assertion="Headcount was 100 in 2024",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Headcount", observation("100", evidence, temporal_anchor="2024"))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025; "
+            "operating expense figures are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025; "
+            "the reports are incompatible with our software."
+        ),
+    ],
+)
+def test_collective_conflict_profile_rejects_competing_subjects_and_tails(quote):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 905),
+        document_id="doc_collective_conflict_scope",
+        document_name="Collective conflict scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=16,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in 2025",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor="2024"),
+            observation("$3 million", second, temporal_anchor="2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+
+
+def test_conflict_bridge_cannot_borrow_competing_metric_value():
+    quote = (
+        "Revenue was $2 million, which cannot be right alongside operating expenses of $3 million."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 906),
+        document_id="doc_bridge_conflict_scope",
+        document_name="Bridge conflict scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="4" * 64,
+        token_estimate=14,
+    )
+    value_evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Revenue", observation("$2 million", value_evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_conflict_bridge_requires_both_disputed_authorized_values():
+    quote = (
+        "Revenue was $1 million. Revenue was $2 million. "
+        "Revenue was $1 million, which cannot be right alongside $3 million."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 907),
+        document_id="doc_bridge_decoy_value",
+        document_name="Conflict bridge decoy fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="3" * 64,
+        token_estimate=18,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+def test_conflict_bridge_requires_left_value_to_be_locally_owned_by_claim_metric():
+    values_quote = "Revenue was $1 million in 2024. Revenue was $2 million in 2025."
+    conflict_quote = (
+        "Revenue was discussed, while operating expenses were $1 million, "
+        "which cannot be right alongside $2 million."
+    )
+    chunk_text = f"{values_quote} {conflict_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 927),
+        document_id="doc_bridge_left_ownership",
+        document_name="Bridge ownership fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="2" * 64,
+        token_estimate=25,
+    )
+    first = reference(
+        chunk.chunk_id,
+        values_quote,
+        "Revenue",
+        assertion="Revenue was $1 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        values_quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2025.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Revenue",
+        assertion="Revenue was discussed",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first, temporal_anchor="2024"),
+        observation("$2 million", second, temporal_anchor="2025"),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+
+
+@pytest.mark.parametrize(
+    "context_quote",
+    [
+        "Revenue was $1 million, operating expenses were $2 million; the figures are conflicting.",
+        "Revenue was $1 million, headcount costs were $2 million; the values are incompatible.",
+    ],
+)
+def test_collective_conflict_requires_each_measurement_to_belong_to_metric(context_quote):
+    quote = f"Revenue was $1 million. Revenue was $2 million. {context_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 912),
+        document_id="doc_collective_metric_ownership",
+        document_name="Collective metric ownership fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="7" * 64,
+        token_estimate=24,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        context_quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+def test_collective_conflict_accepts_two_locally_bound_same_metric_measurements():
+    support_quote = "Revenue was $1 million. Revenue was $2 million."
+    context_quote = "Revenue was $1 million, Revenue was $2 million; the figures are conflicting."
+    quote = f"{support_quote} {context_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 913),
+        document_id="doc_collective_same_metric",
+        document_name="Collective same-metric fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="8" * 64,
+        token_estimate=21,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $1 million.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        context_quote,
+        "Revenue",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first),
+        observation("$2 million", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+@given(
+    competing_metric=st.from_regex(
+        r"[A-Za-z]{3,14}(?: [A-Za-z]{3,14}){0,2}",
+        fullmatch=True,
+    ).filter(lambda value: "revenue" not in value.casefold())
+)
+def test_competing_metric_mutations_never_own_collective_revenue_value(competing_metric):
+    sentence = (
+        f"Revenue was $1 million, {competing_metric} was $2 million; the figures are conflicting."
+    )
+    one = canonical_numeric_signature(numeric_signature_sequence("$1 million")[0])
+    two = canonical_numeric_signature(numeric_signature_sequence("$2 million")[0])
+    measurements = _compatible_measurements(sentence, {one, two})
+
+    owned = _measurements_bound_to_metric(
+        sentence,
+        "Revenue",
+        measurements,
+        {
+            one: {ObservationKind.REPORTED_LEVEL},
+            two: {ObservationKind.REPORTED_LEVEL},
+        },
+    )
+
+    assert {signature for signature, _span in owned} == {one}
+
+
+def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
+    quote = "Revenue was $2 million in Q1 2025. Revenue was $3 million in first quarter 2025."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 902),
+        document_id="doc_temporal_equivalence",
+        document_name="Temporal equivalence fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="8" * 64,
+        token_estimate=14,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in Q1 2025.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in first quarter 2025.",
+    )
+
+    repeated = observation("$2 million", first, temporal_anchor="Q1 2025")
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            repeated,
+            repeated.model_copy(deep=True),
+            observation("$3 million", second, temporal_anchor="first quarter 2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+    assert verified.statement.count("$2 million") == 1
+
+
+@pytest.mark.parametrize(
+    ("left_period", "right_period", "expected"),
+    [
+        ("Q1", "Q1 2025", ClaimStatus.POSSIBLE_CONFLICT),
+        ("Q1", "Q2", ClaimStatus.DATE_VARIANT),
+        ("Q1 2024", "Q1 2025", ClaimStatus.DATE_VARIANT),
+        ("January", "January 2025", ClaimStatus.POSSIBLE_CONFLICT),
+        ("31 December 2024", "31 December 2025", ClaimStatus.DATE_VARIANT),
+    ],
+)
+def test_date_variants_require_pairwise_provably_disjoint_periods(
+    left_period,
+    right_period,
+    expected,
+):
+    first_quote = f"Revenue was $2 million in {left_period}."
+    second_quote = f"Revenue was $3 million in {right_period}."
+    chunk_text = f"{first_quote} {second_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 928),
+        document_id="doc_temporal_disjointness",
+        document_name="Temporal disjointness fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="1" * 64,
+        token_estimate=16,
+    )
+    first = reference(chunk.chunk_id, first_quote, "Revenue")
+    second = reference(chunk.chunk_id, second_quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor=left_period),
+            observation("$3 million", second, temporal_anchor=right_period),
+        )
+    )
+
+    assert verified.status == expected
+
+
+@given(
+    quarter=st.integers(min_value=1, max_value=4),
+    year=st.integers(min_value=1900, max_value=2099),
+)
+def test_unspecified_quarter_always_overlaps_its_dated_shape(quarter, year):
+    unspecified = _temporal_signature(f"Q{quarter}")
+    specified = _temporal_signature(f"Q{quarter} {year}")
+
+    assert unspecified is not None
+    assert specified is not None
+    assert not _temporal_signatures_provably_distinct(unspecified, specified)
+
+
+@given(
+    left=st.integers(min_value=1, max_value=4),
+    right=st.integers(min_value=1, max_value=4),
+    year=st.integers(min_value=1900, max_value=2099),
+)
+def test_distinct_quarter_members_are_provably_disjoint(left, right, year):
+    if left == right:
+        return
+    left_signature = _temporal_signature(f"Q{left} {year}")
+    right_signature = _temporal_signature(f"Q{right} {year}")
+
+    assert left_signature is not None
+    assert right_signature is not None
+    assert _temporal_signatures_provably_distinct(left_signature, right_signature)
+
+
+def test_unresolved_distinct_values_do_not_enter_authoritative_answer(corpus):
+    unresolved = VerifiedClaim(
+        statement="Fee-earning AUM has unresolved reported values: $82 billion and $8.2 billion",
+        metric="Fee-earning AUM",
+        status=ClaimStatus.POSSIBLE_CONFLICT,
+    )
+    assert compose_authoritative_answer([unresolved], 2, corpus.corpus_version) is None
+
+
+def test_impossible_dates_are_not_temporal_signatures():
+    assert _temporal_signature("31 February 2025") is None
+    assert _temporal_signature("2025-13-01") is None
+    assert not _temporal_anchor_is_valid("31 February 2025")
+    assert not _temporal_anchor_is_valid("2025-13-01")
+
+
+def test_equivalent_date_formats_have_one_signature():
+    assert _temporal_signature("31 December 2025") == _temporal_signature("2025-12-31")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Q1 2025", "first quarter 2025"),
+        ("Q2 2025", "second quarter 2025"),
+        ("Q3 2025", "third quarter 2025"),
+        ("Q4 2025", "fourth quarter 2025"),
+        ("Q1", "first quarter"),
+        ("2025", "calendar year 2025"),
+        ("2025", "year 2025"),
+        ("FY2025", "fiscal year 2025"),
+        ("FY", "fiscal year"),
+        ("year", "calendar year"),
+        ("February 2025", "February 2025 month"),
+        ("February 2025", "in February 2025"),
+        ("at year end", "year end"),
+        ("during the fiscal quarter", "the fiscal quarter"),
+    ],
+)
+def test_equivalent_named_periods_have_one_signature(left, right):
+    assert _temporal_signature(left) == _temporal_signature(right)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Q1 2025", "Q2 2025"),
+        ("FY2025", "calendar year 2025"),
+        ("February 2025", "March 2025"),
+        ("February call", "February 2025"),
+    ],
+)
+def test_semantically_distinct_period_shapes_remain_distinct(left, right):
+    assert _temporal_signature(left) != _temporal_signature(right)
+
+
+def test_decimal_digit_canonicalization_is_context_independent():
+    original = getcontext().copy()
+    try:
+        setcontext(Context(prec=2))
+        assert canonical_decimal_digits("00012345678901234567890.000") == "12345678901234567890"
+    finally:
+        setcontext(original)
+
+
+def test_two_hundred_digit_adjacent_integers_never_collapse():
+    integer = 10**199
+    assert canonical_decimal_digits(str(integer)) != canonical_decimal_digits(str(integer + 1))
+
+
+@given(integer=st.integers(min_value=10**199, max_value=10**200 - 2))
+def test_adjacent_200_digit_integers_never_collapse(integer):
+    padded = f"000{integer}.000"
+    adjacent = f"000{integer + 1}.000"
+    assert canonical_decimal_digits(padded) != canonical_decimal_digits(adjacent)
+
+
+@given(
+    integer=st.integers(min_value=0, max_value=10**100),
+    zeros=st.integers(min_value=1, max_value=8),
+)
+def test_leading_and_fractional_zero_forms_canonicalize_equally(integer, zeros):
+    plain = str(integer)
+    padded = f"{'0' * zeros}{integer}.{'0' * zeros}"
+    assert canonical_decimal_digits(plain) == canonical_decimal_digits(padded)
+
+
+def test_distinct_value_grouping_uses_source_digits_without_decimal_context():
+    evidence = reference(MEMO_CHUNK, "Revenue was $1 million.", "Revenue")
+    first = observation("123456789012345678901234567890 million", evidence)
+    second = observation("123456789012345678901234567891 million", evidence)
+    assert len(_distinct_values([first, second])) == 2
+
+
+def test_rate_and_percentage_are_not_silently_rescaled():
+    evidence = reference(MEMO_CHUNK, "Fee rate was 67 basis points.", "Fee rate")
     values = [
-        ReportedValue(value="$82 billion", evidence=[evidence]),
-        ReportedValue(value="$82.0 billion", evidence=[evidence]),
+        observation("67 basis points", evidence, kind=ObservationKind.REPORTED_RATE),
+        observation("0.67 percent", evidence, kind=ObservationKind.REPORTED_RATE),
     ]
+    assert len(_distinct_values(values)) == 2
+
+
+@given(suffix=st.text(alphabet=".,!?;:", min_size=1, max_size=8))
+def test_qualitative_value_identity_ignores_binder_equivalent_terminal_punctuation(suffix):
+    evidence = reference(MEMO_CHUNK, "Revenue was stable.", "Revenue")
+    values = [observation("stable", evidence), observation(f"stable{suffix}", evidence)]
+
     assert len(_distinct_values(values)) == 1
+
+
+def test_distinct_qualitative_words_remain_distinct():
+    evidence = reference(MEMO_CHUNK, "Revenue was stable.", "Revenue")
+    values = [observation("stable", evidence), observation("unstable", evidence)]
+
+    assert len(_distinct_values(values)) == 2
+
+
+def test_equivalent_qualitative_formatting_cannot_create_false_conflict():
+    quote = "Revenue was stable."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 921),
+        document_id="doc_qualitative_identity",
+        document_name="Qualitative identity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("stable", evidence),
+            observation("stable.", evidence),
+        )
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.statement == "Revenue: stable"
+
+
+def test_model_contract_has_observations_but_no_publishable_answer_or_status():
+    claim_properties = DraftClaim.model_json_schema()["properties"]
+    assert "observations" in claim_properties
+    assert "status" not in claim_properties
+    assert "statement" not in claim_properties
 
 
 def test_document_instructions_are_explicitly_untrusted():

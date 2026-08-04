@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from ipaddress import ip_network
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ReasoningEffortSetting = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+OPENAI_CLIENT_MAX_RETRIES = 0
+TOOL_EXECUTION_CONCURRENCY = 1
 
 
 class Settings(BaseSettings):
@@ -16,13 +21,13 @@ class Settings(BaseSettings):
     )
 
     model: str = "gpt-5.6-terra"
-    reasoning_effort: str = "medium"
+    reasoning_effort: ReasoningEffortSetting = "medium"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 768
     data_dir: Path = Path("data")
     corpus_source: Path = Path("data/corpus-source.json")
-    top_k: int = 8
-    max_top_k: int = 20
+    top_k: int = Field(default=8, ge=1, le=20)
+    max_top_k: int = Field(default=20, ge=8, le=20)
     max_turns: int = 6
     max_tool_calls: int = 12
     max_searches: int = 4
@@ -62,6 +67,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Model-token reservation per run cannot exceed the hourly or daily budget"
             )
+        if self.top_k > self.max_top_k:
+            raise ValueError("Default top_k cannot exceed max_top_k")
         try:
             for cidr in self.trusted_proxy_cidrs:
                 ip_network(cidr, strict=False)

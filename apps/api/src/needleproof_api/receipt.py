@@ -3,22 +3,71 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import os
+import re
 import subprocess
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
-from .config import Settings
+from .absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
+from .binding import BINDING_CONTRACT_SHA256, NUMERIC_CONTRACT_SHA256
+from .config import OPENAI_CLIENT_MAX_RETRIES, TOOL_EXECUTION_CONCURRENCY, Settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
+from .legacy import (
+    LegacyReceiptEventV12,
+    LegacyReceiptOpenAICallV12,
+    LegacyReceiptRehearsalV12,
+    LegacyVerifiedClaimV12,
+)
 from .models import LedgerEvent, RunEnvelope, VerifiedClaim
 from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, utc_now_iso
 
 
+@dataclass(frozen=True, slots=True)
+class SealedReceiptSnapshot:
+    """One exact serialized receipt view and its validated canonical digest."""
+
+    path: Path
+    serialized_text: str
+    receipt_sha256: str
+
+    def decode(self) -> dict[str, Any]:
+        payload = json.loads(self.serialized_text)
+        if not isinstance(payload, dict):
+            raise TypeError("Sealed receipt root must be an object")
+        return payload
+
+
+def _snapshot_from_text(path: Path, serialized_text: str) -> SealedReceiptSnapshot:
+    payload = json.loads(serialized_text)
+    if not isinstance(payload, dict):
+        raise TypeError("Sealed receipt root must be an object")
+    errors = validate_receipt(payload)
+    if errors:
+        raise ValueError("; ".join(errors))
+    receipt_sha256 = payload.get("receipt_sha256")
+    if not isinstance(receipt_sha256, str) or not receipt_sha256:
+        raise ValueError("Sealed receipt is missing its canonical digest")
+    return SealedReceiptSnapshot(path, serialized_text, receipt_sha256)
+
+
+def load_sealed_receipt_snapshot(path: Path) -> SealedReceiptSnapshot:
+    """Read and validate one immutable-in-memory view of a sealed receipt."""
+
+    return _snapshot_from_text(path, path.read_text(encoding="utf-8"))
+
+
 def _git_sha() -> str | None:
+    if configured := os.getenv("NEEDLEPROOF_GIT_SHA"):
+        return configured
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -29,6 +78,50 @@ def _git_sha() -> str | None:
     except FileNotFoundError:
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _optional_env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value if value else None
+
+
+_SHA256_PATTERN = re.compile(r"[a-f0-9]{64}")
+Sha256Digest: TypeAlias = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+
+_FEATURED_MIGRATION_SOURCE_SHA256 = (
+    "547f8cc77017f9df449b8a2a0fb6df0a29dbc5f98c47f09a353f76512ace0526"
+)
+_FEATURED_MIGRATION_TARGET_SHA256 = (
+    "59b0fe4d9e9e7fc34981c82d902d4d544b2b77ac9c050c7bf33b939dff6c0ed8"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedMigrationRecord:
+    """Code-owned source and complete canonical target for one contract migration."""
+
+    source_path: Path
+    target_receipt_sha256: str
+
+
+TRUSTED_MIGRATION_RECORDS: Mapping[str, TrustedMigrationRecord] = MappingProxyType(
+    {
+        _FEATURED_MIGRATION_SOURCE_SHA256: TrustedMigrationRecord(
+            source_path=Path(__file__).with_name("migration_sources")
+            / f"{_FEATURED_MIGRATION_SOURCE_SHA256}.json",
+            target_receipt_sha256=_FEATURED_MIGRATION_TARGET_SHA256,
+        ),
+    }
+)
+
+
+def _optional_sha256_env(name: str) -> str | None:
+    value = _optional_env(name)
+    if value is None:
+        return None
+    if _SHA256_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    return value
 
 
 class ReceiptConfiguration(BaseModel):
@@ -44,23 +137,90 @@ class ReceiptConfiguration(BaseModel):
     retrieval_modes: list[str]
     parallel_tool_calls: bool
     max_turns: int
+    max_tool_calls: int
+    max_searches: int
+    max_top_k: int
+    max_opened_chunks: int
+    max_opened_tokens: int
+    max_document_inspections: int
+    max_inspection_pages: int
+    max_inspection_characters: int
+    soft_timeout_seconds: float
+    hard_timeout_seconds: float
     max_model_output_tokens_per_call: int = 8_000
     model_token_reservation_per_run: int = 100_000
     trace_include_sensitive_data: bool
+    openai_client_max_retries: int
+    tool_execution_concurrency: int
 
 
-class ReceiptProvenance(BaseModel):
+class _ReceiptProvenanceBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     application_version: str
     git_commit_sha: str | None
-    dependency_lock_digests: dict[str, str]
+    dependency_lock_digests: dict[str, Sha256Digest]
+    agent_instruction_hash: str
+    tool_schema_hash: str
+    verifier_version: str
+    binding_contract_sha256: Sha256Digest
+    numeric_contract_sha256: Sha256Digest
+    absence_protocol_version: str
+    absence_protocol_sha256: Sha256Digest
+    image_revision: str | None
+    trace_id: str | None
+    sealed_at: str
+    event_chain_head: Sha256Digest
+
+
+class LiveReceiptProvenance(_ReceiptProvenanceBase):
+    receipt_derivation: Literal["live"]
+    source_receipt_sha256: None
+    source_verifier_version: None
+
+
+class MigratedReceiptProvenance(_ReceiptProvenanceBase):
+    receipt_derivation: Literal["contract_migration"]
+    source_receipt_sha256: Sha256Digest
+    source_verifier_version: str = Field(min_length=1)
+
+
+ReceiptProvenance: TypeAlias = Annotated[
+    LiveReceiptProvenance | MigratedReceiptProvenance,
+    Field(discriminator="receipt_derivation"),
+]
+
+
+class LegacyReceiptConfigurationV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    reasoning_effort: str
+    embedding_model: str
+    embedding_dimensions: int
+    embedding_l2_normalized: bool
+    turbovec_version: str
+    turbovec_bit_width: int
+    retrieval_modes: list[str]
+    parallel_tool_calls: bool
+    max_turns: int
+    max_model_output_tokens_per_call: int | None = None
+    model_token_reservation_per_run: int | None = None
+    trace_include_sensitive_data: bool
+
+
+class LegacyReceiptProvenanceV12(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_version: str
+    git_commit_sha: str | None
+    dependency_lock_digests: dict[str, Sha256Digest]
     agent_instruction_hash: str
     tool_schema_hash: str
     verifier_version: str
     trace_id: str | None
     sealed_at: str
-    event_chain_head: str = Field(pattern=r"^[a-f0-9]{64}$")
+    event_chain_head: Sha256Digest
 
 
 class ReceiptRehearsal(BaseModel):
@@ -105,7 +265,7 @@ class ReceiptOpenAICall(BaseModel):
 class ReceiptContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.2"]
+    schema_version: Literal["1.4"]
     run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
     status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
     question: str
@@ -121,6 +281,29 @@ class ReceiptContract(BaseModel):
     error: dict[str, Any] | None
     rehearsal: ReceiptRehearsal | None
     receipt_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class LegacyReceiptContractV12(BaseModel):
+    """Exact read-only contract for receipts retained from the previous release."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.2"]
+    run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
+    status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
+    question: str
+    answer: str | None
+    corpus_id: str
+    corpus_version: str = Field(pattern=r"^v_[0-9a-f]{16}$")
+    corpus_manifest_sha256: Sha256Digest
+    claims: list[LegacyVerifiedClaimV12]
+    events: list[LegacyReceiptEventV12]
+    openai_calls: list[LegacyReceiptOpenAICallV12]
+    configuration: LegacyReceiptConfigurationV12
+    provenance: LegacyReceiptProvenanceV12
+    error: dict[str, Any] | None
+    rehearsal: LegacyReceiptRehearsalV12 | None
+    receipt_sha256: Sha256Digest
 
 
 def receipt_contract_schema() -> dict[str, Any]:
@@ -212,16 +395,22 @@ class RunLedger:
         trace_id: str | None,
         error: dict[str, Any] | None = None,
         rehearsal: dict[str, Any] | None = None,
-    ) -> Path:
+    ) -> SealedReceiptSnapshot:
         events = await self.database.list_events(self.run_id)
         openai_calls = await self.database.list_openai_calls(self.run_id)
         corpus_manifest = self._corpus_manifest or load_current_manifest(self.settings)
         lock_digests = {}
+        injected_locks = {
+            "uv.lock": _optional_sha256_env("NEEDLEPROOF_UV_LOCK_SHA256"),
+            "pnpm-lock.yaml": _optional_sha256_env("NEEDLEPROOF_PNPM_LOCK_SHA256"),
+        }
         for lock_path in (Path("uv.lock"), Path("pnpm-lock.yaml")):
             if lock_path.exists():
                 lock_digests[lock_path.name] = sha256_file(lock_path)
+            elif digest := injected_locks[lock_path.name]:
+                lock_digests[lock_path.name] = digest
         receipt: dict[str, Any] = {
-            "schema_version": "1.2",
+            "schema_version": "1.4",
             "run_id": envelope.run_id,
             "status": envelope.status.value,
             "question": envelope.question,
@@ -243,9 +432,21 @@ class RunLedger:
                 "retrieval_modes": corpus_manifest["retrieval"],
                 "parallel_tool_calls": False,
                 "max_turns": self.settings.max_turns,
+                "max_tool_calls": self.settings.max_tool_calls,
+                "max_searches": self.settings.max_searches,
+                "max_top_k": self.settings.max_top_k,
+                "max_opened_chunks": self.settings.max_opened_chunks,
+                "max_opened_tokens": self.settings.max_opened_tokens,
+                "max_document_inspections": self.settings.max_document_inspections,
+                "max_inspection_pages": self.settings.max_inspection_pages,
+                "max_inspection_characters": self.settings.max_inspection_characters,
+                "soft_timeout_seconds": self.settings.soft_timeout_seconds,
+                "hard_timeout_seconds": self.settings.hard_timeout_seconds,
                 "max_model_output_tokens_per_call": self.settings.max_model_output_tokens_per_call,
                 "model_token_reservation_per_run": self.settings.model_token_reservation_per_run,
                 "trace_include_sensitive_data": self.settings.trace_include_sensitive_data,
+                "openai_client_max_retries": OPENAI_CLIENT_MAX_RETRIES,
+                "tool_execution_concurrency": TOOL_EXECUTION_CONCURRENCY,
             },
             "provenance": {
                 "application_version": __version__,
@@ -254,6 +455,14 @@ class RunLedger:
                 "agent_instruction_hash": instruction_hash,
                 "tool_schema_hash": tool_schema_hash,
                 "verifier_version": verifier_version,
+                "binding_contract_sha256": BINDING_CONTRACT_SHA256,
+                "numeric_contract_sha256": NUMERIC_CONTRACT_SHA256,
+                "absence_protocol_version": ABSENCE_PROTOCOL_VERSION,
+                "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
+                "receipt_derivation": "live",
+                "source_receipt_sha256": None,
+                "source_verifier_version": None,
+                "image_revision": _optional_env("NEEDLEPROOF_IMAGE_REVISION"),
                 "trace_id": trace_id,
                 "sealed_at": utc_now_iso(),
                 "event_chain_head": events[-1]["event_hash"] if events else "0" * 64,
@@ -266,8 +475,10 @@ class RunLedger:
         path = self.settings.receipts_dir / f"{self.run_id}.json"
         if path.exists():
             raise RuntimeError(f"Receipt {self.run_id} is already sealed")
-        atomic_write_text(path, json.dumps(receipt, indent=2, ensure_ascii=False) + "\n")
-        return path
+        serialized_text = json.dumps(receipt, indent=2, ensure_ascii=False) + "\n"
+        snapshot = _snapshot_from_text(path, serialized_text)
+        atomic_write_text(path, serialized_text)
+        return snapshot
 
 
 def receipt_html(receipt: dict[str, Any]) -> str:
@@ -290,33 +501,122 @@ def receipt_html(receipt: dict[str, Any]) -> str:
         f"<li><code>{escaped(event.get('sequence'))}</code> {escaped(event.get('type'))}</li>"
         for event in receipt.get("events", [])
     )
+    answer_heading = (
+        "Authoritative answer" if receipt.get("status") == "completed" else "Verified findings"
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>NeedleProof receipt {escaped(receipt.get("run_id"))}</title>
 <style>body{{font:16px/1.55 system-ui;max-width:920px;margin:3rem auto;padding:0 1.25rem;background:#f4f0e8;color:#171714}}article,blockquote{{border:1px solid #b9b2a5;padding:1rem;margin:1rem 0;background:#fffdf8}}code,.status{{font:12px ui-monospace;color:#0b6b50}}h1{{font-family:Georgia,serif}}dt{{font-weight:700}}dd{{margin:0 0 1rem}}</style>
 </head><body><p>NeedleProof / sealed evidence receipt</p><h1>{escaped(receipt.get("question"))}</h1>
 <dl><dt>Run</dt><dd>{escaped(receipt.get("run_id"))}</dd><dt>Corpus digest</dt><dd><code>{escaped(receipt.get("corpus_manifest_sha256"))}</code></dd><dt>Receipt digest</dt><dd><code>{escaped(receipt.get("receipt_sha256"))}</code></dd></dl>
-<h2>Authoritative answer</h2><p>{escaped(receipt.get("answer"))}</p>{"".join(claim_cards)}
+<h2>{answer_heading}</h2><p>{escaped(receipt.get("answer"))}</p>{"".join(claim_cards)}
 <h2>Execution ledger</h2><ol>{events}</ol></body></html>"""
 
 
-def validate_receipt(receipt: dict[str, Any]) -> list[str]:
+def _validate_migration_lineage(
+    receipt: dict[Any, Any],
+    trusted_migrations: Mapping[str, TrustedMigrationRecord],
+) -> list[str]:
+    """Bind a migrated receipt to operator-trusted canonical source and target artifacts."""
+
+    provenance = receipt.get("provenance")
+    if (
+        not isinstance(provenance, dict)
+        or provenance.get("receipt_derivation") != "contract_migration"
+    ):
+        return []
+    source_digest = provenance.get("source_receipt_sha256")
+    if not isinstance(source_digest, str) or _SHA256_PATTERN.fullmatch(source_digest) is None:
+        return []  # The receipt contract reports the malformed digest.
+    migration = trusted_migrations.get(source_digest)
+    if migration is None:
+        return ["Migrated receipt source is not present in the trusted source registry."]
     errors: list[str] = []
+    if receipt.get("receipt_sha256") != migration.target_receipt_sha256:
+        errors.append("Migrated receipt content does not match its trusted target digest.")
     try:
-        ReceiptContract.model_validate(receipt)
+        source = json.loads(migration.source_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return [*errors, "Migrated receipt source artifact is unavailable or unreadable."]
+    if not isinstance(source, dict):
+        return [*errors, "Migrated receipt source artifact must be an object."]
+
+    embedded_digest = source.get("receipt_sha256")
+    source_unsigned = {key: value for key, value in source.items() if key != "receipt_sha256"}
+    canonical_digest = sha256_text(canonical_json(source_unsigned))
+    if embedded_digest != source_digest or canonical_digest != source_digest:
+        errors.append("Migrated receipt source artifact does not match its trusted digest.")
+
+    for field in (
+        "run_id",
+        "status",
+        "question",
+        "corpus_id",
+        "corpus_version",
+        "corpus_manifest_sha256",
+    ):
+        if source.get(field) != receipt.get(field):
+            errors.append(f"Migrated receipt source identity differs at {field}.")
+
+    source_provenance = source.get("provenance")
+    source_verifier = (
+        source_provenance.get("verifier_version") if isinstance(source_provenance, dict) else None
+    )
+    if source_verifier != provenance.get("source_verifier_version"):
+        errors.append("Migrated receipt source verifier identity does not match provenance.")
+    return errors
+
+
+def validate_receipt(
+    receipt: object,
+    *,
+    trusted_migrations: Mapping[str, TrustedMigrationRecord] | None = None,
+) -> list[str]:
+    """Validate arbitrary decoded JSON without leaking shape exceptions."""
+
+    if not isinstance(receipt, dict):
+        return ["Receipt contract violation at root: input must be an object."]
+    if trusted_migrations is None:
+        trusted_migrations = TRUSTED_MIGRATION_RECORDS
+
+    errors: list[str] = []
+    schema_version = receipt.get("schema_version")
+    contract: type[BaseModel]
+    if schema_version == "1.4":
+        contract = ReceiptContract
+    elif schema_version == "1.2":
+        contract = LegacyReceiptContractV12
+    else:
+        return [f"Receipt schema version {schema_version!r} is unsupported."]
+    try:
+        contract.model_validate(receipt)
     except ValidationError as exc:
         errors.extend(
             f"Receipt contract violation at {'.'.join(map(str, item['loc']))}: {item['msg']}"
             for item in exc.errors()
         )
+    if schema_version == "1.4":
+        errors.extend(_validate_migration_lineage(receipt, trusted_migrations))
     expected_digest = receipt.get("receipt_sha256")
     unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     actual_digest = sha256_text(canonical_json(unsigned))
     if expected_digest != actual_digest:
         errors.append("Receipt digest does not match canonical content.")
 
+    events = receipt.get("events")
+    if not isinstance(events, list):
+        errors.append("Receipt contract violation at events: input must be an array.")
+        return errors
+
     previous_hash = "0" * 64
-    for event in receipt.get("events", []):
+    for expected_sequence, event in enumerate(events, start=1):
+        if not isinstance(event, dict):
+            errors.append("Receipt contract violation at events: every event must be an object.")
+            break
+        if event.get("sequence") != expected_sequence:
+            errors.append("Receipt event sequences must be contiguous and start at 1.")
+            break
         if event.get("previous_hash") != previous_hash:
             errors.append(f"Event {event.get('sequence')} has a broken previous-hash link.")
             break
@@ -334,6 +634,62 @@ def validate_receipt(receipt: dict[str, Any]) -> list[str]:
             break
         previous_hash = event_hash
 
-    if receipt.get("provenance", {}).get("event_chain_head") != previous_hash:
+    provenance = receipt.get("provenance")
+    if not isinstance(provenance, dict):
+        errors.append("Receipt contract violation at provenance: input must be an object.")
+    elif provenance.get("event_chain_head") != previous_hash:
         errors.append("Provenance event-chain head does not match the final ledger event.")
+
+    openai_calls = receipt.get("openai_calls")
+    if isinstance(openai_calls, list) and any(
+        not isinstance(call, dict) or call.get("sequence") != sequence
+        for sequence, call in enumerate(openai_calls, start=1)
+    ):
+        errors.append("OpenAI call sequences must be contiguous and start at 1.")
+
+    status = receipt.get("status")
+    expected_terminal_events = {
+        "completed": {"run.completed"},
+        "incomplete": {"run.incomplete", "run.timeout"},
+        "cancelled": {"run.cancelled"},
+        "failed": {"run.failed"},
+        "interrupted": {"run.interrupted"},
+    }.get(status)
+    final_event = events[-1] if events else None
+    if expected_terminal_events and (
+        not isinstance(final_event, dict) or final_event.get("type") not in expected_terminal_events
+    ):
+        errors.append("Receipt status does not agree with its final terminal event.")
+    claims = receipt.get("claims")
+    if status == "completed":
+        answer = receipt.get("answer")
+        if not isinstance(answer, str) or not answer.strip():
+            errors.append("A completed receipt requires a nonempty authoritative answer.")
+        if not isinstance(claims, list) or not claims:
+            errors.append("A completed receipt requires at least one claim.")
+        elif schema_version == "1.4" and any(
+            not isinstance(claim, dict)
+            or claim.get("status") not in {"verified", "conflict", "date_variant", "not_found"}
+            for claim in claims
+        ):
+            errors.append("A completed receipt requires only authoritative claims.")
+    corpus_version = receipt.get("corpus_version")
+    if isinstance(claims, list):
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            claim_evidence = claim.get("evidence")
+            if not isinstance(claim_evidence, list):
+                continue
+            for evidence in claim_evidence:
+                if not isinstance(evidence, dict):
+                    continue
+                if not evidence.get("chunk_sha256"):
+                    errors.append("Every receipt evidence item requires a chunk digest.")
+                if (
+                    schema_version == "1.4"
+                    and corpus_version
+                    and f"/api/corpora/{corpus_version}/" not in str(evidence.get("source_url", ""))
+                ):
+                    errors.append("Every evidence source URL must bind the receipt corpus version.")
     return errors
