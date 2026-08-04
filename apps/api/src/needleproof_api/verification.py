@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from decimal import Decimal, InvalidOperation
 
 from .chunk_ids import ChunkId
@@ -27,7 +27,125 @@ _NUMERIC = re.compile(
 )
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
 _ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
+_ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
+_POST_VALUE_ANAPHORA = re.compile(r"^(?:which|who|whose|where|when|the\s+figure|it|this|that)\b")
+_POST_VALUE_CONTEXT = re.compile(
+    r"^(?:about|approximately|around|down|from|nearly|roughly|up|versus|vs\.?|"
+    r"compared\s+(?:with|to))\b"
+)
+_COMPARISON_AMOUNT_PREFIX = re.compile(
+    r"(?:\(|,)\s*(?:(?:up|down)\s+from|compared\s+(?:with|to)|versus|vs\.?)\s*$"
+)
+_VALUE_FIRST_SENTENCE = re.compile(r"^(?:by|at|as\s+of)\b")
+_VALUE_FIRST_TEMPORAL_PREFIX = re.compile(
+    r"^(?:at|as\s+of|by)\s+(?:(?:the\s+)?(?:year|quarter|month|period)\s+end|"
+    r"(?:the\s+)?end\s+of\s+(?:the\s+)?(?:year|quarter|month|period))\b\s*"
+)
+_SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
+# Candidate boundaries are filtered structurally below so an elided predicate such as
+# ``but still reached`` keeps the preceding subject.
+_PREDICATE_CLAUSE_BOUNDARY = re.compile(
+    r"\s*(?P<boundary>;|[—–]|\b(?:while|whereas|although|though|because|since|but)\b)\s*"
+)
+_VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
+_PARENTHETICAL_MODIFIER = re.compile(
+    r"^\s*(?:adjusted\s+for|after|before|despite|excluding|including|net\s+of|"
+    r"which|who|whose|where|with|without)\b"
+)
+_PARENTHETICAL_SPAN = re.compile(r"\((?P<body>[^()]*)\)")
 _WORD = re.compile(r"[^\W_]+")
+_COORDINATED_MODIFIER_PREPOSITIONS = frozenset(
+    {"across", "among", "by", "for", "from", "in", "of", "through", "with", "without"}
+)
+_SINGULAR_SUBJECT_PREDICATES = frozenset({"has", "is", "was"})
+_PLURAL_SUBJECT_PREDICATES = frozenset({"are", "have", "were"})
+_PARTICIPIAL_CONTINUATIONS = frozenset(
+    {
+        "decreasing",
+        "ending",
+        "excluding",
+        "falling",
+        "generating",
+        "including",
+        "increasing",
+        "reaching",
+        "representing",
+        "rising",
+        "settling",
+        "totaling",
+        "totalling",
+    }
+)
+_SUBJECT_CONTINUATIONS = frozenset(
+    {
+        "about",
+        "amounted",
+        "approximately",
+        "are",
+        "around",
+        "as",
+        "at",
+        "by",
+        "closed",
+        "declined",
+        "decreased",
+        "ended",
+        "fell",
+        "from",
+        "generated",
+        "grew",
+        "had",
+        "has",
+        "have",
+        "increased",
+        "is",
+        "just",
+        "nearly",
+        "now",
+        "of",
+        "only",
+        "reached",
+        "remained",
+        "reported",
+        "rose",
+        "roughly",
+        "stood",
+        "still",
+        "then",
+        "to",
+        "totaled",
+        "totalled",
+        "was",
+        "were",
+    }
+)
+_PREDICATE_VERBS = frozenset(
+    {
+        "amounted",
+        "are",
+        "closed",
+        "declined",
+        "decreased",
+        "ended",
+        "fell",
+        "generated",
+        "grew",
+        "had",
+        "has",
+        "have",
+        "increased",
+        "is",
+        "reached",
+        "remained",
+        "reported",
+        "rose",
+        "stood",
+        "totaled",
+        "totalled",
+        "was",
+        "were",
+    }
+)
 
 
 def _numeric_signature(match: re.Match[str]) -> tuple[str, str, str, str]:
@@ -47,13 +165,25 @@ def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
     return signatures
 
 
-def _word_phrase_found(needle: str, haystack: str) -> bool:
+def _numeric_signature_sequence(text: str) -> tuple[tuple[str, str, str, str], ...]:
+    return tuple(_numeric_signature(match) for match in _NUMERIC.finditer(text))
+
+
+def _word_phrase_spans(needle: str, haystack: str) -> list[tuple[int, int]]:
     expected = _WORD.findall(needle.casefold())
-    observed = _WORD.findall(haystack.casefold())
+    observed = list(_WORD.finditer(haystack.casefold()))
     if not expected:
-        return False
+        return []
     width = len(expected)
-    return any(observed[index : index + width] == expected for index in range(len(observed)))
+    return [
+        (observed[index].start(), observed[index + width - 1].end())
+        for index in range(len(observed) - width + 1)
+        if [match.group() for match in observed[index : index + width]] == expected
+    ]
+
+
+def _word_phrase_found(needle: str, haystack: str) -> bool:
+    return bool(_word_phrase_spans(needle, haystack))
 
 
 def reported_value_found(value: str, quote: str) -> bool:
@@ -68,23 +198,313 @@ def reported_value_found(value: str, quote: str) -> bool:
     return _word_phrase_found(normalized_value, normalized_quote)
 
 
-def _first_matching_measure_is_expected(
+def _first_matching_measure_spans(
     text: str,
-    expected: set[tuple[str, str, str, str]],
+    expected: Sequence[tuple[str, str, str, str]],
     *,
     start: int = 0,
-) -> bool:
+) -> list[tuple[int, int]] | None:
+    observed = [
+        (_numeric_signature(match), (match.start(), match.end()))
+        for match in _NUMERIC.finditer(text, pos=start)
+    ]
+    spans: list[tuple[int, int]] = []
+    observed_index = 0
+    comparison_end: int | None = None
     for target in expected:
-        _sign, target_currency, _number, target_unit = target
-        comparable = [
-            _numeric_signature(match)
-            for match in _NUMERIC.finditer(text, pos=start)
-            if (match.group("currency") or "") == target_currency
-            and re.sub(r"\s+", " ", (match.group("unit") or "").lower()) == target_unit
-        ]
-        if not comparable or comparable[0] != target:
+        while observed_index < len(observed):
+            signature, span = observed[observed_index]
+            observed_index += 1
+            if signature[1] != target[1] or signature[3] != target[3]:
+                continue
+            if signature == target:
+                if comparison_end is not None:
+                    continuation = text[comparison_end : span[0]].strip(" \t,:;()-")
+                    if not _continues_metric_subject(continuation):
+                        return None
+                spans.append(span)
+                comparison_end = None
+                break
+            if _COMPARISON_AMOUNT_PREFIX.search(text[: span[0]]):
+                comparison_end = span[1]
+                continue
+            return None
+        else:
+            return None
+    return spans if expected else None
+
+
+def _subject_refers_to_metric(subject: str, metric: str) -> bool:
+    for metric_start, _metric_end in _metric_occurrence_spans(subject, metric):
+        prefix_words = _WORD.findall(subject[:metric_start])
+        if not prefix_words or all(word in {"a", "an", "the"} for word in prefix_words):
+            return True
+    return any(
+        not _WORD.findall(subject[match.end() :]) for match in _SUBJECT_ANAPHORA.finditer(subject)
+    )
+
+
+def _text_introduces_competing_subject(text: str, metric: str) -> bool:
+    normalized = _VALUE_FIRST_TEMPORAL_PREFIX.sub("", text.strip(" \t,:;()-"))
+    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(normalized):
+        words = list(_WORD.finditer(clause))
+        predicate = next(
+            (
+                word
+                for index, word in enumerate(words)
+                if index > 0 and word.group() in _PREDICATE_VERBS
+            ),
+            None,
+        )
+        if predicate is None:
+            if words and not _continues_metric_subject(clause):
+                return True
+            continue
+        subject = clause[: predicate.start()].strip()
+        if _subject_refers_to_metric(subject, metric):
+            continue
+        return True
+    return False
+
+
+def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -> bool:
+    """Detect a new explicit subject after a value-first continuation."""
+
+    tail = text[value_end:].strip(" \t,:;()-")
+    tail = re.sub(r"^(?:and|but)\s+", "", tail)
+    if (
+        not tail
+        or _POST_VALUE_ANAPHORA.match(tail)
+        or _POST_VALUE_CONTEXT.match(tail)
+        or _subject_refers_to_metric(tail, metric)
+    ):
+        return False
+    # A value-first continuation has already supplied its value. Any remaining
+    # unrecognized noun phrase is therefore a new explicit subject regardless
+    # of which predicate verb follows it. Fail closed instead of maintaining an
+    # open-ended verb whitelist.
+    return bool(_WORD.findall(tail))
+
+
+def _continues_metric_subject(value: str) -> bool:
+    normalized = value.strip().casefold()
+    if _ANAPHORIC_METRIC.match(normalized):
+        return True
+    words = _WORD.findall(normalized)
+    return (
+        not words
+        or (
+            words[0] in _PARTICIPIAL_CONTINUATIONS
+            and not any(index > 1 and word in _PREDICATE_VERBS for index, word in enumerate(words))
+        )
+        or all(word in _SUBJECT_CONTINUATIONS for word in words)
+    )
+
+
+def _metric_is_grammatically_plural(metric: str) -> bool:
+    words = _WORD.findall(metric.casefold())
+    return bool(words and words[-1].endswith("s") and words[-1] not in {"business"})
+
+
+def _continues_coordinated_modifier(preceding: str, value: str, metric: str) -> bool:
+    """Accept parallel prepositional objects whose predicate agrees with the metric."""
+
+    if _continues_metric_subject(value):
+        return True
+    preceding_words = _WORD.findall(preceding.strip().casefold())
+    words = _WORD.findall(value.strip().casefold())
+    preposition_indexes = [
+        index
+        for index, word in enumerate(preceding_words)
+        if word in _COORDINATED_MODIFIER_PREPOSITIONS
+    ]
+    predicate_index = next(
+        (index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS),
+        None,
+    )
+    if not preposition_indexes or predicate_index is None:
+        return False
+    left_modifier = preceding_words[preposition_indexes[-1] + 1 :]
+    right_modifier = words[:predicate_index]
+    if not left_modifier or len(left_modifier) != len(right_modifier):
+        return False
+    predicate = words[predicate_index]
+    metric_is_plural = _metric_is_grammatically_plural(metric)
+    if predicate in _SINGULAR_SUBJECT_PREDICATES:
+        return not metric_is_plural
+    if predicate in _PLURAL_SUBJECT_PREDICATES:
+        return metric_is_plural
+    return True
+
+
+def _is_coordinated_subject_with_shared_predicate(value: str) -> bool:
+    words = _WORD.findall(value.strip().casefold())
+    predicate_indexes = [
+        index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS
+    ]
+    return len(predicate_indexes) == 1 and predicate_indexes[0] >= 2
+
+
+def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
+    boundaries: list[re.Match[str]] = []
+    for boundary in _PREDICATE_CLAUSE_BOUNDARY.finditer(sentence):
+        following = sentence[boundary.end() :]
+        if boundary.group("boundary") in {"because", "since"} and re.match(
+            r"^(?:of|due\s+to|as\s+a\s+result\s+of)\b",
+            following,
+        ):
+            continue
+        if boundary.group("boundary") == "since" and "," in following:
+            temporal_modifier, continuation = following.rsplit(",", 1)
+            modifier_words = _WORD.findall(temporal_modifier.casefold())
+            if not any(
+                word in _PREDICATE_VERBS for word in modifier_words
+            ) and _continues_metric_subject(continuation):
+                continue
+        numeric = _NUMERIC.search(following)
+        continuation_prefix = following[: numeric.start()] if numeric else following
+        if boundary.group("boundary") in {";", "—", "–"}:
+            if not _continues_metric_subject(continuation_prefix):
+                boundaries.append(boundary)
+            continue
+        if not _continues_metric_subject(continuation_prefix):
+            boundaries.append(boundary)
+    return boundaries
+
+
+def _value_retains_metric_subject(
+    text: str,
+    metric_end: int,
+    value_start: int,
+    metric: str,
+) -> bool:
+    """Fail closed when punctuation introduces a different metric before a value.
+
+    Separator-delimited text may continue the original metric only with a trusted
+    predicate, modifier, or anaphoric reference. Once an explicit competing subject
+    appears, later anaphora continues that newer subject and cannot restore the
+    original metric.
+    """
+
+    between = text[metric_end:value_start]
+    if between.count("(") > between.count(")"):
+        # The value is inside an intervening parenthetical rather than in the
+        # outer metric's predicate. Fail closed instead of crossing that scope.
+        return False
+    separators = list(_VALUE_ASSOCIATION_SEPARATOR.finditer(between))
+    if not separators:
+        return True
+
+    ignored_parenthetical_separators: set[int] = set()
+    for parenthetical in _PARENTHETICAL_SPAN.finditer(between):
+        if not _PARENTHETICAL_MODIFIER.match(parenthetical.group("body")):
+            continue
+        ignored_parenthetical_separators.update(
+            index
+            for index, separator in enumerate(separators)
+            if parenthetical.start() < separator.start() < parenthetical.end()
+        )
+    for opening_index, opening in enumerate(separators):
+        if opening.group() != "," or opening_index in ignored_parenthetical_separators:
+            continue
+        for closing_index in range(opening_index + 1, len(separators)):
+            closing = separators[closing_index]
+            if closing.group() != ",":
+                continue
+            modifier = between[opening.end() : closing.start()]
+            following_end = (
+                separators[closing_index + 1].start()
+                if closing_index + 1 < len(separators)
+                else len(between)
+            )
+            following = between[closing.end() : following_end]
+            modifier_words = _WORD.findall(modifier.casefold())
+            contains_explicit_predicate = any(
+                index > 0 and word in _PREDICATE_VERBS for index, word in enumerate(modifier_words)
+            )
+            if (
+                _PARENTHETICAL_MODIFIER.match(modifier) or not contains_explicit_predicate
+            ) and _continues_metric_subject(following):
+                # A recognized comma-paired modifier can contain separators of
+                # its own without transferring the sentence to another metric.
+                ignored_parenthetical_separators.update(range(opening_index, closing_index + 1))
+                break
+
+    for index, separator in enumerate(separators):
+        if index in ignored_parenthetical_separators:
+            continue
+        previous_end = separators[index - 1].end() if index > 0 else 0
+        next_start = separators[index + 1].start() if index + 1 < len(separators) else len(between)
+        preceding = between[previous_end : separator.start()]
+        segment = between[separator.end() : next_start]
+        preceding_words = set(_WORD.findall(preceding.casefold()))
+        coordinated_subject = (
+            separator.group() == "and"
+            and not preceding_words
+            and _is_coordinated_subject_with_shared_predicate(segment)
+        )
+        if coordinated_subject or (
+            separator.group() == "and"
+            and preceding_words & _COORDINATED_MODIFIER_PREPOSITIONS
+            and not preceding_words & _PREDICATE_VERBS
+            and _continues_coordinated_modifier(preceding, segment, metric)
+        ):
+            continue
+        if not _continues_metric_subject(segment):
             return False
-    return bool(expected)
+    return True
+
+
+def _metric_occurrence_spans(sentence: str, metric: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    search_from = 0
+    while (metric_start := sentence.find(metric, search_from)) >= 0:
+        metric_end = metric_start + len(metric)
+        starts_inside_word = metric_start > 0 and bool(_WORD.fullmatch(sentence[metric_start - 1]))
+        ends_inside_word = metric_end < len(sentence) and bool(
+            _WORD.fullmatch(sentence[metric_end])
+        )
+        if not starts_inside_word and not ends_inside_word:
+            spans.append((metric_start, metric_end))
+        search_from = metric_start + 1
+    return spans
+
+
+def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:
+    """Return predicate clauses containing the complete metric anchor.
+
+    A boundary inside the anchor itself is ignored, so compound names such as
+    ``research and development expenses`` remain intact. Boundaries before or
+    after the complete anchor still isolate competing predicates.
+    """
+
+    boundaries = _predicate_clause_boundaries(sentence)
+    clauses: list[tuple[str, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for metric_start, metric_end in _metric_occurrence_spans(sentence, metric):
+        clause_start = max(
+            (boundary.end() for boundary in boundaries if boundary.end() <= metric_start),
+            default=0,
+        )
+        clause_end = min(
+            (boundary.start() for boundary in boundaries if boundary.start() >= metric_end),
+            default=len(sentence),
+        )
+        span = (clause_start, clause_end)
+        if span not in seen:
+            clause = sentence[clause_start:clause_end]
+            clauses.append((clause, metric_start - clause_start))
+            seen.add(span)
+    return clauses
+
+
+def _metric_is_final_subject(sentence: str, metric: str) -> bool:
+    boundaries = _predicate_clause_boundaries(sentence)
+    return any(
+        not any(boundary.start() >= metric_end for boundary in boundaries)
+        and _value_retains_metric_subject(sentence, metric_end, len(sentence), metric)
+        for _metric_start, metric_end in _metric_occurrence_spans(sentence, metric)
+    )
 
 
 def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) -> bool:
@@ -94,32 +514,80 @@ def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) 
     if not normalized_value or not normalized_metric:
         return False
 
-    expected = numeric_signatures(normalized_value)
+    expected = _numeric_signature_sequence(normalized_value)
     sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
     for index, sentence in enumerate(sentences):
-        metric_position = sentence.find(normalized_metric)
-        if metric_position < 0:
-            continue
-        if expected and _first_matching_measure_is_expected(
-            sentence,
-            expected,
-            start=metric_position + len(normalized_metric),
-        ):
-            return True
-        if not expected:
-            clauses = re.split(r"[,;:]\s+", sentence)
-            if any(
-                _word_phrase_found(normalized_metric, clause)
-                and _word_phrase_found(normalized_value, clause)
-                for clause in clauses
+        metric_clauses = _metric_predicate_clauses(sentence, normalized_metric)
+        for clause, metric_position in metric_clauses:
+            metric_end = metric_position + len(normalized_metric)
+            measure_spans = (
+                _first_matching_measure_spans(
+                    clause,
+                    expected,
+                    start=metric_end,
+                )
+                if expected
+                else None
+            )
+            if measure_spans and all(
+                _value_retains_metric_subject(clause, metric_end, start, normalized_metric)
+                for start, _end in measure_spans
             ):
                 return True
-        if index + 1 < len(sentences):
+            phrase_positions = (
+                _word_phrase_spans(normalized_value, clause[metric_end:]) if not expected else []
+            )
+            if any(
+                _value_retains_metric_subject(
+                    clause,
+                    metric_end,
+                    metric_end + position,
+                    normalized_metric,
+                )
+                for position, _ in phrase_positions
+            ):
+                return True
+        if _metric_is_final_subject(sentence, normalized_metric) and index + 1 < len(sentences):
             following = sentences[index + 1].strip()
+            following_spans = (
+                _first_matching_measure_spans(following, expected) if expected else None
+            )
+            first_value_start = (
+                min(start for start, _end in following_spans) if following_spans else None
+            )
+            subject_precedes_value = bool(
+                first_value_start is not None
+                and any(
+                    match.start() < first_value_start
+                    for match in _SUBJECT_ANAPHORA.finditer(following)
+                )
+            )
+            needs_value_first_tail_guard = bool(
+                first_value_start is not None
+                and _VALUE_FIRST_SENTENCE.match(following)
+                and not subject_precedes_value
+            )
             if (
                 expected
                 and _ANAPHORIC_SENTENCE.match(following)
-                and _first_matching_measure_is_expected(following, expected)
+                and following_spans
+                and first_value_start is not None
+                and not _text_introduces_competing_subject(
+                    following[:first_value_start],
+                    normalized_metric,
+                )
+                and all(
+                    _value_retains_metric_subject(following, 0, start, normalized_metric)
+                    for start, _end in following_spans
+                )
+                and (
+                    not needs_value_first_tail_guard
+                    or not _tail_introduces_competing_subject(
+                        following,
+                        max(end for _start, end in following_spans),
+                        normalized_metric,
+                    )
+                )
             ):
                 return True
     return False

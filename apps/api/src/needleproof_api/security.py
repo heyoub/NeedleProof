@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address, ip_network
+from typing import TypeGuard
 
 from .config import Settings
 from .db import AppDatabase
@@ -25,7 +26,7 @@ def session_digest(token: str) -> str:
     return sha256_text(token)
 
 
-def valid_browser_session(token: str | None) -> bool:
+def valid_browser_session(token: str | None) -> TypeGuard[str]:
     return bool(token and _SESSION_TOKEN.fullmatch(token))
 
 

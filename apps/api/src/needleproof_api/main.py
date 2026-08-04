@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal, assert_never
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -34,6 +35,7 @@ from .security import (
 from .service import (
     TERMINAL_EVENT_TYPES,
     InvestigationService,
+    ReceiptRecoveryOutcome,
     RunCapacityError,
     SessionLiveRunError,
 )
@@ -53,6 +55,8 @@ TERMINAL_EVENTS_BY_STATUS = {
     RunStatus.FAILED: {"run.failed"},
     RunStatus.INTERRUPTED: {"run.interrupted"},
 }
+ReceiptReconciliationState = Literal["ready", "pending", "retryable", "invalid"]
+TerminalDeliveryState = Literal["uncommitted", "receipt_backed", "receiptless_interruption"]
 
 
 def document_media_type(path: Path) -> str:
@@ -232,8 +236,21 @@ async def create_run(request: Request, body: RunCreateRequest) -> RunCreateRespo
 
 @app.get("/api/runs/{run_id}")
 async def get_run(request: Request, run_id: str):
-    database, _, _ = _services(request)
-    await _owned_run_row(request, run_id)
+    database, _, service = _services(request)
+    row = await _owned_run_row(request, run_id)
+    if row.get("status") == RunStatus.INTERRUPTED.value and row.get("receipt_path"):
+        for attempt in range(4):
+            outcome = await service.reconcile_pending_receipt(run_id)
+            if outcome != ReceiptRecoveryOutcome.RETRYABLE:
+                break
+            if attempt < 3:
+                await asyncio.sleep(0.1 * (2**attempt))
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail="Receipt recovery is temporarily unavailable",
+                headers={"Retry-After": "1"},
+            )
     envelope = await database.get_envelope(run_id)
     if not envelope:
         raise HTTPException(status_code=404, detail="Investigation run not found")
@@ -256,16 +273,32 @@ async def run_events(
     last_event_id_header: str | None = Header(default=None, alias="Last-Event-ID"),
     last_event_id_query: int | None = Query(default=None, alias="lastEventId"),
 ) -> StreamingResponse:
-    database, _, _ = _services(request)
+    database, _, service = _services(request)
     await _owned_run_row(request, run_id)
     try:
-        after = last_event_id_query or int(last_event_id_header or 0)
+        after = (
+            last_event_id_query
+            if last_event_id_query is not None
+            else int(last_event_id_header or 0)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid Last-Event-ID") from exc
 
     async def stream() -> AsyncIterator[str]:
         cursor = after
         quiet_polls = 0
+        reconciliation_failures = 0
+        next_reconciliation_at = 0.0
+
+        def defer_reconciliation(now: float) -> None:
+            nonlocal reconciliation_failures, next_reconciliation_at
+            reconciliation_failures = min(reconciliation_failures + 1, 6)
+            retry_delay = min(
+                0.1 * (2 ** (reconciliation_failures - 1)),
+                2.0,
+            )
+            next_reconciliation_at = now + retry_delay
+
         while True:
             if await request.is_disconnected():
                 break
@@ -277,13 +310,43 @@ async def run_events(
                     if event["type"] in TERMINAL_EVENT_TYPES:
                         row = await database.get_run_row(run_id)
                         row_status = RunStatus(str(row["status"])) if row else None
-                        committed = bool(
-                            row and row_status in TERMINAL_STATUSES and row.get("receipt_path")
-                        )
-                        if not committed:
+                        delivery_state = _terminal_delivery_state(row)
+                        if delivery_state == "uncommitted":
                             # Keep the cursor before this event so reconnect/replay
                             # cannot observe completion ahead of durable state.
                             break
+                        assert row is not None and row_status is not None
+                        if delivery_state == "receipt_backed":
+                            now = asyncio.get_running_loop().time()
+                            if now < next_reconciliation_at:
+                                break
+                            receipt_state = _receipt_reconciliation_state(row)
+                            if receipt_state == "retryable":
+                                defer_reconciliation(now)
+                                break
+                            if receipt_state == "pending":
+                                # A valid receipt with a mismatched status can still be
+                                # reconciled without losing the intended terminal event.
+                                outcome = await service.reconcile_pending_receipt(run_id)
+                                match outcome:
+                                    case ReceiptRecoveryOutcome.UNRECOVERABLE:
+                                        return
+                                    case ReceiptRecoveryOutcome.RETRYABLE:
+                                        defer_reconciliation(now)
+                                    case (
+                                        ReceiptRecoveryOutcome.RECOVERED
+                                        | ReceiptRecoveryOutcome.NOT_PENDING
+                                    ):
+                                        reconciliation_failures = 0
+                                        next_reconciliation_at = 0.0
+                                    case _ as unreachable:
+                                        assert_never(unreachable)
+                                break
+                            if receipt_state == "invalid":
+                                # Permanent receipt corruption is not startup-recoverable
+                                # for an already terminal row. Close instead of polling the
+                                # same ledger event forever at 10 Hz.
+                                return
                         if event["type"] not in TERMINAL_EVENTS_BY_STATUS[row_status]:
                             # A failed terminal commit can leave an earlier intended
                             # event in the append-only ledger. Skip it in favor of the
@@ -301,13 +364,14 @@ async def run_events(
                     quiet_polls = 0
                     yield ": heartbeat\n\n"
             row = await database.get_run_row(run_id)
-            if (
-                row
-                and RunStatus(str(row["status"])) in TERMINAL_STATUSES
-                and row.get("receipt_path")
-                and not events
-            ):
-                break
+            if not events:
+                delivery_state = _terminal_delivery_state(row)
+                if delivery_state == "receiptless_interruption":
+                    break
+                if delivery_state == "receipt_backed" and row is not None:
+                    terminal_receipt_state = _receipt_reconciliation_state(row)
+                    if terminal_receipt_state in {"ready", "invalid"}:
+                        break
             await asyncio.sleep(0.1)
 
     return StreamingResponse(
@@ -321,7 +385,7 @@ async def run_events(
     )
 
 
-def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
+def _integrity_checked_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
     value = row.get("receipt_path")
     if not value:
         raise HTTPException(status_code=409, detail="Receipt has not been sealed")
@@ -329,12 +393,53 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
     if not path.exists():
         raise HTTPException(status_code=404, detail="Receipt file is unavailable")
     receipt = json.loads(path.read_text(encoding="utf-8"))
-    errors = validate_receipt(receipt)
+    if not isinstance(receipt, dict):
+        raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
+    try:
+        errors = validate_receipt(receipt)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Receipt integrity validation failed",
+        ) from exc
     if errors:
         raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
     if receipt.get("receipt_sha256") != row.get("receipt_sha256"):
         raise HTTPException(status_code=409, detail="Receipt database digest does not match")
     return path, receipt
+
+
+def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
+    path, receipt = _integrity_checked_receipt(row)
+    if receipt.get("status") != row.get("status"):
+        raise HTTPException(
+            status_code=409,
+            detail="Receipt is awaiting terminal-state reconciliation",
+        )
+    return path, receipt
+
+
+def _receipt_reconciliation_state(row: dict[str, object]) -> ReceiptReconciliationState:
+    try:
+        _, receipt = _integrity_checked_receipt(row)
+    except OSError:
+        return "retryable"
+    except (HTTPException, UnicodeError, json.JSONDecodeError):
+        return "invalid"
+    return "ready" if receipt.get("status") == row.get("status") else "pending"
+
+
+def _terminal_delivery_state(row: dict[str, object] | None) -> TerminalDeliveryState:
+    if not row:
+        return "uncommitted"
+    status = RunStatus(str(row["status"]))
+    if status not in TERMINAL_STATUSES:
+        return "uncommitted"
+    if row.get("receipt_path"):
+        return "receipt_backed"
+    if status == RunStatus.INTERRUPTED:
+        return "receiptless_interruption"
+    return "uncommitted"
 
 
 @app.get("/api/runs/{run_id}/receipt.json")

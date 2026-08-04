@@ -17,6 +17,7 @@ from needleproof_api.verification import (
     _distinct_values,
     _temporal_signature,
     reported_value_found,
+    reported_value_linked_to_metric,
 )
 
 MEMO_CHUNK = chunk_id_from_uint64(2565635019366042796)
@@ -266,6 +267,472 @@ def test_value_cooccurring_with_another_metric_is_rejected(corpus):
 
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].value_found
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Revenue was flat while operating expenses were $2 million.",
+        "Revenue was flat whereas operating expenses were $2 million.",
+        "Revenue was flat; operating expenses were $2 million.",
+        "Revenue was flat, but operating expenses were $2 million.",
+        "Revenue was flat and operating expenses were $2 million.",
+    ],
+)
+def test_value_after_intervening_metric_clause_is_not_linked_to_first_metric(quote):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_value_in_metric_clause_remains_linked_before_contrasting_clause():
+    quote = "Revenue was $2 million while operating expenses were flat."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_em_dash_competing_clause_does_not_transfer_metric_value():
+    quote = "Revenue was flat — operating expenses were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_em_dash_keeps_value_before_competing_clause_and_anaphoric_continuation():
+    assert reported_value_linked_to_metric(
+        "$1 million",
+        "Revenue",
+        "Revenue was $1 million — operating expenses were $2 million.",
+    )
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue was flat — it reached $2 million.",
+    )
+
+
+@pytest.mark.parametrize(
+    "continuation",
+    ["it reached $2 million", "then reached $2 million"],
+)
+def test_semicolon_keeps_anaphoric_or_elided_metric_continuation(continuation):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue was flat; {continuation}.",
+    )
+
+
+def test_elided_subject_remains_linked_across_contrasting_predicate():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue declined but still reached $2 million.",
+    )
+
+
+def test_coordinated_metric_modifier_remains_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue from products and services was $2 million.",
+    )
+
+
+@pytest.mark.parametrize("predicate", ["reached", "totaled", "amounted to"])
+def test_coordinated_metric_modifier_supports_non_copular_predicates(predicate):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue from products and services {predicate} $2 million.",
+    )
+
+
+def test_multiword_coordinated_metric_modifiers_remain_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue from product sales and service fees was $2 million.",
+    )
+
+
+def test_plural_metric_agreement_preserves_coordinated_modifier():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Assets",
+        "Assets from products and services were $2 million.",
+    )
+
+
+def test_coordinated_metric_subjects_share_predicate_and_value():
+    quote = "Revenue and operating income each reached $2 million."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating income", quote)
+
+
+@pytest.mark.parametrize(
+    ("quote", "competing_metric"),
+    [
+        ("Revenue from products and expenses were $2 million.", "expenses"),
+        ("Revenue across regions and operating costs reached $2 million.", "operating costs"),
+    ],
+)
+def test_coordinated_modifier_cannot_hide_competing_metric(quote, competing_metric):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", competing_metric, quote)
+
+
+def test_participial_continuation_remains_linked():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue increased year over year, reaching $2 million.",
+    )
+
+
+def test_participial_competing_subject_is_not_linked_to_prior_metric():
+    quote = "Revenue was flat, increasing expenses reached $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "increasing expenses", quote)
+
+
+def test_and_inside_compound_metric_anchor_does_not_split_its_predicate():
+    metric = "Research and development expenses"
+
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        metric,
+        "Research and development expenses were $2 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        metric,
+        "Research and development expenses were flat and sales expenses were $2 million.",
+    )
+
+
+@pytest.mark.parametrize("separator", [",", ":"])
+@pytest.mark.parametrize("value", ["stable", "$2 million"])
+def test_punctuation_delimited_predicate_does_not_leak_to_prior_metric(separator, value):
+    quote = f"Revenue was flat{separator} operating expenses were {value}."
+
+    assert not reported_value_linked_to_metric(value, "Revenue", quote)
+    assert reported_value_linked_to_metric(value, "operating expenses", quote)
+
+
+def test_non_predicate_punctuation_remains_inside_metric_clause():
+    assert reported_value_linked_to_metric("stable", "Revenue", "Revenue: stable.")
+    assert reported_value_linked_to_metric(
+        "stable",
+        "Revenue",
+        "Revenue, excluding discontinued operations, was stable.",
+    )
+
+
+@pytest.mark.parametrize(
+    "modifier",
+    ["on an adjusted basis", "according to management"],
+)
+def test_ordinary_comma_paired_modifier_retains_metric_subject(modifier):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue, {modifier}, was $2 million.",
+    )
+
+
+@pytest.mark.parametrize("separator", [",", ":"])
+@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
+def test_unlisted_predicate_verbs_do_not_leak_numeric_value_to_prior_metric(separator, predicate):
+    quote = f"Revenue was flat{separator} operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_punctuation_continuation_can_retain_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, excluding discontinued operations, declined to $2 million.",
+    )
+
+
+def test_compound_parenthetical_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, excluding discontinued operations and foreign exchange effects, was $2 million.",
+    )
+
+
+def test_relative_clause_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$905 billion",
+        "Assets under advisement",
+        "Assets under advisement, which include several mandates and sit across "
+        "markets, reached $905 billion.",
+    )
+
+
+def test_parenthesized_modifier_retains_original_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue (excluding discontinued operations and foreign exchange effects) was $2 million.",
+    )
+
+
+def test_value_inside_competing_parenthetical_is_not_linked_to_outer_metric():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue (excluding operating expenses which were $2 million) was $3 million.",
+    )
+
+
+def test_unrecognized_comma_pair_cannot_hide_competing_metric_subject():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue, operating expenses remained stable, was compared with $2 million.",
+    )
+
+
+def test_metric_name_starting_with_continuation_word_still_introduces_new_subject():
+    quote = "Revenue was flat, increased costs were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "increased costs", quote)
+
+
+@pytest.mark.parametrize("predicate", ["declined to", "increased to", "remained at"])
+def test_and_delimited_predicate_does_not_leak_to_prior_metric(predicate):
+    quote = f"Revenue was flat and operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_and_can_continue_original_metric_with_anaphora():
+    quote = "Fee-earning AUM drives revenue and it ended the year at $82 billion."
+
+    assert reported_value_linked_to_metric("$82 billion", "Fee-earning AUM", quote)
+
+
+def test_anaphora_continues_nearest_explicit_metric_subject():
+    quote = (
+        "Revenue was flat and operating expenses were $2 million, "
+        "and this was down from $3 billion."
+    )
+
+    assert not reported_value_linked_to_metric("$3 billion", "Revenue", quote)
+    assert reported_value_linked_to_metric("$3 billion", "operating expenses", quote)
+
+
+def test_cross_sentence_anaphora_requires_metric_in_immediately_prior_sentence():
+    quote = "Revenue was flat. Operating expenses remained stable. It was $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Although revenue declined, operating income remained stable. It was $2 million.",
+        "Revenue declined while operating income remained stable. It was $2 million.",
+    ],
+)
+def test_cross_sentence_anaphora_uses_final_metric_subject(quote):
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating income", quote)
+
+
+@pytest.mark.parametrize(
+    "following",
+    [
+        "At $2 million, operating expenses were stable.",
+        "At $2 million operating expenses were stable.",
+    ],
+)
+def test_value_first_continuation_rejects_competing_subject_after_value(following):
+    quote = f"Revenue was flat. {following}"
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_continuation_rejects_competing_subject_before_value():
+    quote = "Revenue was flat. At year end operating expenses were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_anaphoric_determiner_does_not_hide_competing_subject():
+    quote = "Revenue was flat. At $2 million, operating expenses for this quarter were stable."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize(
+    "following",
+    [
+        "At $2 million, it remained stable.",
+        "It was $2 million, which was unchanged.",
+        "At $2 million, up from the prior year.",
+    ],
+)
+def test_value_first_continuation_preserves_anaphora_and_context(following):
+    quote = f"Revenue was flat. {following}"
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_comparison_tail_preserves_later_anaphora():
+    quote = "Revenue was flat. At $2 million, up from $1 million, it was unchanged."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_continuation_allows_repeated_metric_subject():
+    quote = "Revenue was flat. At $2 million, Revenue was stable."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_value_first_competing_subject_cannot_borrow_mentioned_metric():
+    quote = (
+        "Revenue was flat. At $2 million, operating expenses attributable to revenue were stable."
+    )
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    ["equaled", "accounted for", "constituted", "will be"],
+)
+def test_value_first_competing_subject_does_not_depend_on_predicate_whitelist(predicate):
+    quote = (
+        f"Revenue was flat. At $2 million, operating expenses {predicate} the prior-year amount."
+    )
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize("predicate", ["equaled", "accounted for", "constituted", "will be"])
+def test_competing_subject_before_value_does_not_depend_on_predicate_whitelist(predicate):
+    quote = f"Revenue was flat. At year end operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_subject_first_anaphora_keeps_value_before_later_independent_clause():
+    quote = "Revenue was flat. It was $2 million, and operating expenses were stable."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_compound_value_first_continuation_checks_tail_after_complete_value():
+    quote = "Revenue was flat. At $2 million and 50 percent, it was unchanged."
+
+    assert reported_value_linked_to_metric("$2 million and 50 percent", "Revenue", quote)
+
+
+def test_repeated_unit_compound_value_matches_ordered_prefix():
+    assert reported_value_linked_to_metric(
+        "$2 million and $3 million",
+        "Revenue",
+        "Revenue was $2 million and $3 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$3 million",
+        "Revenue",
+        "Revenue was $2 million and $3 million.",
+    )
+    assert not reported_value_linked_to_metric(
+        "$2 million and $3 million",
+        "Revenue",
+        "Revenue was $3 million and $2 million.",
+    )
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Revenue, up from $1 million, was $2 million.",
+        "Revenue (up from $1 million) was $2 million.",
+    ],
+)
+def test_comparison_amount_before_reported_value_does_not_block_match(quote):
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+def test_comparison_skip_cannot_cross_competing_subject():
+    quote = "Revenue increased (up from $1 million) after operating expenses reached $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
+    quote = "Revenue was flat because operating expenses rose. It was $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "Operating expenses", quote)
+
+
+def test_explanatory_causal_clause_retains_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue declined because of restructuring, settling at $2 million.",
+    )
+
+
+def test_temporal_since_modifier_retains_metric_subject():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue has increased since the acquisition, reaching $2 million.",
+    )
+
+
+def test_temporal_since_modifier_preserves_comma_inside_date():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue has increased since January 1, 2024, reaching $2 million.",
+    )
+
+
+def test_since_clause_with_competing_subject_does_not_transfer_value():
+    assert not reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue was flat since operating expenses rose, reaching $2 million.",
+    )
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        "Coffee sales fell to $2 million this quarter. Fee income remained flat.",
+        "Fees collected were $2 million this quarter. Fee income remained flat.",
+    ],
+)
+def test_metric_anchor_does_not_match_inside_larger_word(quote):
+    assert not reported_value_linked_to_metric("$2 million", "fee", quote)
+
+
+def test_metric_anchor_can_end_at_hyphen_boundary():
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "fee",
+        "Fee-related income was $2 million.",
+    )
 
 
 def test_supported_draft_with_distinct_values_is_still_classified_as_conflict(corpus):

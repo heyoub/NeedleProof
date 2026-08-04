@@ -5,15 +5,17 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import needleproof_api.main as main_module
 import pytest
+from fastapi import HTTPException
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
-from needleproof_api.main import run_events
+from needleproof_api.main import get_run, receipt_json, receipt_page, run_events
 from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter
-from needleproof_api.service import InvestigationService
+from needleproof_api.service import InvestigationService, ReceiptRecoveryOutcome
 from needleproof_api.util import new_run_id, utc_now_iso
 
 
@@ -276,6 +278,34 @@ async def test_terminal_sse_waits_for_terminal_database_commit(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_explicit_zero_sse_cursor_overrides_nonzero_header(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Replay the complete event history", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, "999", 0)
+    streamed = "".join([chunk async for chunk in response.body_iterator])
+
+    assert "id: 1\n" in streamed
+    assert "run.started" in streamed
+    assert "run.completed" in streamed
+
+
+@pytest.mark.asyncio
 async def test_startup_reconciles_abandoned_running_run(tmp_path):
     service, database, _settings = lifecycle_service(tmp_path)
     await database.initialize()
@@ -318,16 +348,16 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
     service, database, settings = lifecycle_service(tmp_path)
     await database.initialize()
     original_commit = service._commit_terminal
-    failed_once = False
+    commit_attempts = 0
 
-    async def fail_once(envelope, receipt_path, error):
-        nonlocal failed_once
-        if not failed_once:
-            failed_once = True
+    async def fail_twice(envelope, receipt_path, error):
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts <= 2:
             raise RuntimeError("injected terminal database failure")
         await original_commit(envelope, receipt_path, error)
 
-    monkeypatch.setattr(service, "_commit_terminal", fail_once)
+    monkeypatch.setattr(service, "_commit_terminal", fail_twice)
     created = await service.create_run(
         RunCreateRequest(question="Recover committed receipt", rehearsal=True),
         session_id="alice",
@@ -354,15 +384,271 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
         is_disconnected=connected,
     )
     response = await run_events(request, created.run_id, None, None)
-    streamed = "".join([chunk async for chunk in response.body_iterator])
-    assert "run.interrupted" in streamed
-    assert "run.completed" not in streamed
+    iterator = response.body_iterator
+    first_terminal_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"].startswith("run.") and event["type"] != "run.started"
+    )
+    for _event in events[:first_terminal_index]:
+        chunk = await anext(iterator)
+        assert "run.completed" not in chunk
+        assert "run.interrupted" not in chunk
 
-    await service.reconcile_abandoned_runs()
+    for route in (receipt_json, receipt_page):
+        with pytest.raises(HTTPException, match="awaiting terminal-state reconciliation") as raised:
+            await route(request, created.run_id)
+        assert raised.value.status_code == 409
+
+    restored = await get_run(request, created.run_id)
+    assert restored.status == RunStatus.COMPLETED
+    assert commit_attempts == 3
+
+    terminal_chunk = asyncio.create_task(anext(iterator))
+    chunk = await asyncio.wait_for(terminal_chunk, timeout=1)
+    assert "run.completed" in chunk
+    assert "run.interrupted" not in chunk
     recovered = await database.get_run_row(created.run_id)
     assert recovered is not None
     assert recovered["status"] == RunStatus.COMPLETED.value
     assert recovered["receipt_path"]
+    assert (await receipt_json(request, created.run_id)).status_code == 200
+    assert (await receipt_page(request, created.run_id)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_get_run_returns_retryable_error_while_receipt_recovery_is_unavailable(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Keep retryable recovery nonterminal", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    await database.update_run(created.run_id, status=RunStatus.INTERRUPTED)
+
+    async def unavailable_commit(_envelope, _receipt_path, _error):
+        raise OSError("injected persistent recovery failure")
+
+    monkeypatch.setattr(service, "_commit_terminal", unavailable_commit)
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+
+    with pytest.raises(HTTPException, match="temporarily unavailable") as raised:
+        await get_run(request, created.run_id)
+
+    assert raised.value.status_code == 503
+    assert raised.value.headers == {"Retry-After": "1"}
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.INTERRUPTED.value
+
+
+@pytest.mark.asyncio
+async def test_terminal_sse_retries_transient_receipt_reconciliation_on_same_connection(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    original_commit = service._commit_terminal
+    commit_attempts = 0
+
+    async def fail_twice_then_recover(envelope, receipt_path, error):
+        nonlocal commit_attempts
+        commit_attempts += 1
+        if commit_attempts <= 2:
+            raise OSError("injected transient terminal persistence failure")
+        await original_commit(envelope, receipt_path, error)
+
+    monkeypatch.setattr(service, "_commit_terminal", fail_twice_then_recover)
+    created = await service.create_run(
+        RunCreateRequest(question="Retry recovery without reconnecting", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    interrupted = await database.get_run_row(created.run_id)
+    assert interrupted is not None
+    assert interrupted["status"] == RunStatus.INTERRUPTED.value
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+
+    async def read_terminal_event() -> str:
+        async for chunk in response.body_iterator:
+            if "run.completed" in chunk:
+                return chunk
+        raise AssertionError("SSE stream closed before terminal recovery")
+
+    terminal_chunk = await asyncio.wait_for(read_terminal_event(), timeout=2)
+
+    assert "run.interrupted" not in terminal_chunk
+    assert commit_attempts == 3
+    recovered = await database.get_run_row(created.run_id)
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_terminal_sse_retries_transient_receipt_read_on_same_connection(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    original_commit = service._commit_terminal
+    failed_commit = False
+
+    async def fail_initial_commit(envelope, receipt_path, error):
+        nonlocal failed_commit
+        if not failed_commit:
+            failed_commit = True
+            raise OSError("injected initial terminal persistence failure")
+        await original_commit(envelope, receipt_path, error)
+
+    monkeypatch.setattr(service, "_commit_terminal", fail_initial_commit)
+    created = await service.create_run(
+        RunCreateRequest(question="Retry transient receipt reads", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    interrupted = await database.get_run_row(created.run_id)
+    assert interrupted is not None
+    assert interrupted["status"] == RunStatus.INTERRUPTED.value
+
+    original_integrity_check = main_module._integrity_checked_receipt
+    integrity_attempts = 0
+
+    def fail_first_integrity_read(row):
+        nonlocal integrity_attempts
+        integrity_attempts += 1
+        if integrity_attempts == 1:
+            raise OSError("injected transient receipt read failure")
+        return original_integrity_check(row)
+
+    monkeypatch.setattr(main_module, "_integrity_checked_receipt", fail_first_integrity_read)
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+
+    async def read_terminal_event() -> str:
+        async for chunk in response.body_iterator:
+            if "run.completed" in chunk:
+                return chunk
+        raise AssertionError("SSE stream closed after a transient receipt read failure")
+
+    terminal_chunk = await asyncio.wait_for(read_terminal_event(), timeout=2)
+
+    assert "run.interrupted" not in terminal_chunk
+    assert integrity_attempts >= 2
+    recovered = await database.get_run_row(created.run_id)
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_receipt_recovery_rejects_receipt_from_another_run(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    first = await service.create_run(
+        RunCreateRequest(question="First sealed result", rehearsal=True),
+        session_id="alice",
+    )
+    second = await service.create_run(
+        RunCreateRequest(question="Second sealed result", rehearsal=True),
+        session_id="bob",
+    )
+    await asyncio.gather(service._tasks[first.run_id], service._tasks[second.run_id])
+    first_row = await database.get_run_row(first.run_id)
+    second_row = await database.get_run_row(second.run_id)
+    assert first_row is not None
+    assert second_row is not None
+    first_receipt = Path(str(first_row["receipt_path"]))
+    second_receipt = Path(str(second_row["receipt_path"]))
+    await database.update_run(
+        first.run_id,
+        status=RunStatus.INTERRUPTED,
+        answer=None,
+        result_json=None,
+        receipt_sha256=None,
+    )
+    first_receipt.write_bytes(second_receipt.read_bytes())
+
+    outcome = await service.reconcile_pending_receipt(first.run_id)
+
+    assert outcome == ReceiptRecoveryOutcome.UNRECOVERABLE
+    rejected = await database.get_run_row(first.run_id)
+    assert rejected is not None
+    assert rejected["status"] == RunStatus.INTERRUPTED.value
+    assert rejected["answer"] is None
+    assert rejected["result_json"] is None
+    assert not first_receipt.exists()
+    assert second_receipt.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("corrupt_receipt", ["{not valid json", "null", '{"events": null}'])
+async def test_terminal_sse_closes_for_unrecoverable_receipt_corruption(tmp_path, corrupt_receipt):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Detect corrupt terminal receipt", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    receipt_path = Path(str(row["receipt_path"]))
+    receipt_path.write_text(corrupt_receipt, encoding="utf-8")
+    events = await database.list_events(created.run_id)
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+    iterator = response.body_iterator
+    first_terminal_index = next(
+        index for index, event in enumerate(events) if event["type"] == "run.completed"
+    )
+    for _event in events[:first_terminal_index]:
+        await anext(iterator)
+
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(iterator), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -459,6 +745,27 @@ async def test_receipt_write_failure_becomes_recoverable_interruption(tmp_path, 
     assert row is not None
     assert row["status"] == RunStatus.INTERRUPTED.value
     assert row["receipt_path"] is None
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+
+    async def read_interruption() -> str:
+        async for chunk in response.body_iterator:
+            if "run.interrupted" in chunk:
+                return chunk
+        raise AssertionError("SSE stream closed without the receiptless interruption")
+
+    terminal_chunk = await asyncio.wait_for(read_interruption(), timeout=1)
+    assert "run.completed" not in terminal_chunk
 
     monkeypatch.setattr(RunLedger, "seal", original_seal)
     await service.reconcile_abandoned_runs()

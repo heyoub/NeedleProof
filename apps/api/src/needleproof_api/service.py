@@ -5,6 +5,7 @@ import json
 import logging
 from contextlib import suppress
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from .db import AppDatabase
 from .models import (
     ClaimStatus,
     DraftClaim,
+    DraftStatus,
     EvidenceReference,
     ReportedValue,
     RunCreateRequest,
@@ -53,6 +55,13 @@ class TerminalState:
     error: dict[str, Any] | None = None
     trace_id: str | None = None
     rehearsal_metadata: dict[str, Any] | None = None
+
+
+class ReceiptRecoveryOutcome(StrEnum):
+    RECOVERED = "recovered"
+    RETRYABLE = "retryable"
+    UNRECOVERABLE = "unrecoverable"
+    NOT_PENDING = "not_pending"
 
 
 class RunCapacityError(RuntimeError):
@@ -117,6 +126,7 @@ class InvestigationService:
         self.verifier = EvidenceVerifier(corpus)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_runs)
         self._admission_lock = asyncio.Lock()
+        self._reconciliation_lock = asyncio.Lock()
         self._admitted_run_ids: set[str] = set()
         self._live_session_by_run: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -208,47 +218,75 @@ class InvestigationService:
                 lambda completed: completed.exception() if not completed.cancelled() else None
             )
 
+    async def _recover_sealed_receipt(self, row: dict[str, object]) -> ReceiptRecoveryOutcome:
+        run_id = str(row["run_id"])
+        receipt_path = self.settings.receipts_dir / f"{run_id}.json"
+        if not receipt_path.exists():
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
+        try:
+            receipt_text = receipt_path.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("Could not read sealed receipt for run %s", run_id)
+            return ReceiptRecoveryOutcome.RETRYABLE
+        try:
+            receipt = json.loads(receipt_text)
+            errors = validate_receipt(receipt)
+            if errors:
+                raise ValueError("; ".join(errors))
+            expected_identity = {
+                "run_id": run_id,
+                "corpus_id": str(row["corpus_id"]),
+                "corpus_version": str(row["corpus_version"]),
+                "corpus_manifest_sha256": str(row["corpus_manifest_sha256"]),
+            }
+            if any(receipt.get(key) != value for key, value in expected_identity.items()):
+                raise ValueError("Sealed receipt does not belong to this persisted run")
+            expected_receipt_sha256 = row.get("receipt_sha256")
+            if (
+                expected_receipt_sha256 is not None
+                and receipt.get("receipt_sha256") != expected_receipt_sha256
+            ):
+                raise ValueError("Sealed receipt digest does not match the persisted receipt")
+            envelope = RunEnvelope(
+                run_id=run_id,
+                status=RunStatus(receipt["status"]),
+                question=receipt["question"],
+                answer=receipt.get("answer"),
+                corpus_id=receipt["corpus_id"],
+                corpus_version=receipt["corpus_version"],
+                corpus_manifest_sha256=receipt["corpus_manifest_sha256"],
+                claims=[VerifiedClaim.model_validate(claim) for claim in receipt.get("claims", [])],
+                receipt_url=f"/api/runs/{run_id}/receipt",
+                receipt_json_url=f"/api/runs/{run_id}/receipt.json",
+            )
+        except (AttributeError, KeyError, TypeError, ValueError):
+            receipt_path.unlink(missing_ok=True)
+            return ReceiptRecoveryOutcome.UNRECOVERABLE
+        try:
+            await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
+        except Exception:
+            logger.exception("Could not persist validated receipt recovery for run %s", run_id)
+            return ReceiptRecoveryOutcome.RETRYABLE
+        return ReceiptRecoveryOutcome.RECOVERED
+
+    async def reconcile_pending_receipt(self, run_id: str) -> ReceiptRecoveryOutcome:
+        async with self._reconciliation_lock:
+            row = await self.database.get_run_row(run_id)
+            if not row:
+                return ReceiptRecoveryOutcome.UNRECOVERABLE
+            if row.get("status") != RunStatus.INTERRUPTED.value:
+                return ReceiptRecoveryOutcome.NOT_PENDING
+            return await self._recover_sealed_receipt(row)
+
     async def reconcile_abandoned_runs(self) -> None:
         for row in await self.database.list_recoverable_runs():
             run_id = str(row["run_id"])
-            receipt_path = self.settings.receipts_dir / f"{run_id}.json"
-            if receipt_path.exists():
-                try:
-                    receipt_text = receipt_path.read_text(encoding="utf-8")
-                except OSError:
-                    logger.exception("Could not read sealed receipt for run %s", run_id)
-                    continue
-                try:
-                    receipt = json.loads(receipt_text)
-                    errors = validate_receipt(receipt)
-                    if errors:
-                        raise ValueError("; ".join(errors))
-                    envelope = RunEnvelope(
-                        run_id=run_id,
-                        status=RunStatus(receipt["status"]),
-                        question=receipt["question"],
-                        answer=receipt.get("answer"),
-                        corpus_id=receipt["corpus_id"],
-                        corpus_version=receipt["corpus_version"],
-                        corpus_manifest_sha256=receipt["corpus_manifest_sha256"],
-                        claims=[
-                            VerifiedClaim.model_validate(claim)
-                            for claim in receipt.get("claims", [])
-                        ],
-                        receipt_url=f"/api/runs/{run_id}/receipt",
-                        receipt_json_url=f"/api/runs/{run_id}/receipt.json",
-                    )
-                except (AttributeError, KeyError, TypeError, ValueError):
-                    receipt_path.unlink(missing_ok=True)
-                else:
-                    try:
-                        await self._commit_terminal(envelope, receipt_path, receipt.get("error"))
-                    except Exception:
-                        logger.exception(
-                            "Could not persist validated receipt recovery for run %s", run_id
-                        )
-                        continue
-                    continue
+            receipt_recovery = await self._recover_sealed_receipt(row)
+            if receipt_recovery in {
+                ReceiptRecoveryOutcome.RECOVERED,
+                ReceiptRecoveryOutcome.RETRYABLE,
+            }:
+                continue
 
             bound_corpus = (
                 self.corpus
@@ -482,7 +520,7 @@ class InvestigationService:
 
         draft_claims: list[DraftClaim] = []
         source_statuses: list[str] = []
-        status_map = {
+        status_map: dict[str, DraftStatus] = {
             ClaimStatus.VERIFIED.value: "supported",
             ClaimStatus.CONFLICT.value: "conflict",
             ClaimStatus.DATE_VARIANT.value: "date_variant",
