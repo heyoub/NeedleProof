@@ -78,12 +78,16 @@ def claim(metric: str, *observations: DraftObservation) -> DraftClaim:
 
 
 def corpus_with_chunk(chunk: ChunkRecord):
+    return corpus_with_chunks(chunk)
+
+
+def corpus_with_chunks(*chunks: ChunkRecord):
     class Corpus:
         corpus_version = "v_0000000000000009"
 
         def get_chunks(self, chunk_ids, neighbor_radius=0):
             del neighbor_radius
-            return [chunk] if chunk.chunk_id in chunk_ids else []
+            return [chunk for chunk in chunks if chunk.chunk_id in chunk_ids]
 
     return Corpus()
 
@@ -225,6 +229,11 @@ def test_quote_may_begin_after_a_real_chunk_sentence_boundary():
             "as of 2025 Revenue was $2 million.",
             "assertion_not_bound_to_quote_context",
         ),
+        (
+            "Forecast in the report for 2025 Revenue was $2 million.",
+            "2025 Revenue was $2 million.",
+            "assertion_not_bound_to_quote_context",
+        ),
     ],
 )
 def test_temporal_led_binding_cannot_crop_role_prefix_from_quote(
@@ -282,6 +291,7 @@ def test_temporal_led_quote_cannot_crop_role_prefix_from_chunk():
     [
         "2025 Revenue was $2 million.",
         "The forecast was withdrawn. 2025 Revenue was $2 million.",
+        "The report for 2025 Revenue was $2 million.",
     ],
 )
 def test_temporal_led_binding_preserves_real_source_boundaries(chunk_text):
@@ -304,6 +314,77 @@ def test_temporal_led_binding_preserves_real_source_boundaries(chunk_text):
     )
 
     assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_temporal_led_context_evidence_cannot_crop_forecast_prefix():
+    observations_text = "Revenue was $1 million. Revenue was $2 million."
+    observations_chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 934),
+        document_id="doc_temporal_context_observations",
+        document_name="Temporal context observations fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=observations_text,
+        normalized_text=observations_text,
+        sha256="f" * 64,
+        token_estimate=10,
+    )
+    context_text = (
+        "Forecast 2025 Revenue was $1 million, which cannot be right alongside $2 million."
+    )
+    cropped_context = "2025 Revenue was $1 million, which cannot be right alongside $2 million."
+    context_chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 935),
+        document_id="doc_temporal_context_forecast",
+        document_name="Temporal context forecast fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=context_text,
+        normalized_text=context_text,
+        sha256="0" * 64,
+        token_estimate=13,
+    )
+    draft = claim(
+        "Revenue",
+        observation(
+            "$1 million",
+            reference(
+                observations_chunk.chunk_id,
+                observations_text,
+                "Revenue",
+                assertion="Revenue was $1 million.",
+            ),
+        ),
+        observation(
+            "$2 million",
+            reference(
+                observations_chunk.chunk_id,
+                observations_text,
+                "Revenue",
+                assertion="Revenue was $2 million.",
+            ),
+        ),
+    )
+    draft.context_evidence.append(
+        reference(
+            context_chunk.chunk_id,
+            cropped_context,
+            "Revenue",
+            assertion=cropped_context,
+        )
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunks(observations_chunk, context_chunk)).verify_claim(
+        draft
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert compose_authoritative_answer([verified], 1, "v_0000000000000009") is None
+    context_evidence = next(
+        evidence for evidence in verified.evidence if evidence.chunk_id == context_chunk.chunk_id
+    )
+    assert not context_evidence.assertion_found
+    assert context_evidence.binding_failure_reason == "evidence_context_boundaries_not_preserved"
 
 
 @pytest.mark.parametrize(

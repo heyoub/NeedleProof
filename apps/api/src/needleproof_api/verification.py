@@ -92,8 +92,10 @@ _DIRECT_ASSERTION_QUOTE_BOUNDARY = re.compile(
     re.IGNORECASE,
 )
 _TEMPORAL_ATTRIBUTION_PREFIX = re.compile(
-    r"\b(?:note|report|filing|memo|source|statement|record)\s+"
-    r"(?:from|for|on|during|at)\s+(?:the)?\s*$",
+    r"(?:(?:first|second|third|finally),\s*)?"
+    r"(?:(?:my|our|the|a|an)\s+)?"
+    r"(?:note|report|filing|memo|source|statement|record)\s+"
+    r"(?:from|for|on|during|at)(?:\s+the)?\s*$",
     re.IGNORECASE,
 )
 _COMMA_ASSERTION_COMMENTARY = re.compile(
@@ -198,7 +200,7 @@ def _occurrence_respects_context_boundaries(
     if prefix and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None:
         if direct_metric_subject:
             return False
-        if requires_atomic_prefix and _TEMPORAL_ATTRIBUTION_PREFIX.search(prefix) is None:
+        if requires_atomic_prefix and _TEMPORAL_ATTRIBUTION_PREFIX.fullmatch(prefix) is None:
             return False
     if (
         suffix
@@ -751,7 +753,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v26-atomic-temporal-boundaries"
+    version = "deterministic-verifier-v27-complete-temporal-prefixes"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -876,12 +878,14 @@ class EvidenceVerifier:
                         reference.exact_assertion,
                         reference.exact_quote,
                         metric_span,
+                        requires_atomic_prefix=True,
                     )
                     and _quote_respects_chunk_boundaries(
                         reference.exact_assertion,
                         reference.exact_quote,
                         chunk.normalized_text,
                         metric_span,
+                        requires_atomic_prefix=True,
                     )
                     for metric_span in metric_spans
                 )

@@ -91,10 +91,26 @@ Sha256Digest: TypeAlias = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 _FEATURED_MIGRATION_SOURCE_SHA256 = (
     "547f8cc77017f9df449b8a2a0fb6df0a29dbc5f98c47f09a353f76512ace0526"
 )
-TRUSTED_MIGRATION_SOURCE_FILES: Mapping[str, Path] = MappingProxyType(
+_FEATURED_MIGRATION_TARGET_SHA256 = (
+    "59b0fe4d9e9e7fc34981c82d902d4d544b2b77ac9c050c7bf33b939dff6c0ed8"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedMigrationRecord:
+    """Code-owned source and complete canonical target for one contract migration."""
+
+    source_path: Path
+    target_receipt_sha256: str
+
+
+TRUSTED_MIGRATION_RECORDS: Mapping[str, TrustedMigrationRecord] = MappingProxyType(
     {
-        _FEATURED_MIGRATION_SOURCE_SHA256: Path(__file__).with_name("migration_sources")
-        / f"{_FEATURED_MIGRATION_SOURCE_SHA256}.json",
+        _FEATURED_MIGRATION_SOURCE_SHA256: TrustedMigrationRecord(
+            source_path=Path(__file__).with_name("migration_sources")
+            / f"{_FEATURED_MIGRATION_SOURCE_SHA256}.json",
+            target_receipt_sha256=_FEATURED_MIGRATION_TARGET_SHA256,
+        ),
     }
 )
 
@@ -500,9 +516,9 @@ def receipt_html(receipt: dict[str, Any]) -> str:
 
 def _validate_migration_lineage(
     receipt: dict[Any, Any],
-    trusted_sources: Mapping[str, Path],
+    trusted_migrations: Mapping[str, TrustedMigrationRecord],
 ) -> list[str]:
-    """Bind a migrated receipt to an operator-trusted, hash-addressed source artifact."""
+    """Bind a migrated receipt to operator-trusted canonical source and target artifacts."""
 
     provenance = receipt.get("provenance")
     if (
@@ -513,17 +529,19 @@ def _validate_migration_lineage(
     source_digest = provenance.get("source_receipt_sha256")
     if not isinstance(source_digest, str) or _SHA256_PATTERN.fullmatch(source_digest) is None:
         return []  # The receipt contract reports the malformed digest.
-    source_path = trusted_sources.get(source_digest)
-    if source_path is None:
+    migration = trusted_migrations.get(source_digest)
+    if migration is None:
         return ["Migrated receipt source is not present in the trusted source registry."]
-    try:
-        source = json.loads(source_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return ["Migrated receipt source artifact is unavailable or unreadable."]
-    if not isinstance(source, dict):
-        return ["Migrated receipt source artifact must be an object."]
-
     errors: list[str] = []
+    if receipt.get("receipt_sha256") != migration.target_receipt_sha256:
+        errors.append("Migrated receipt content does not match its trusted target digest.")
+    try:
+        source = json.loads(migration.source_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return [*errors, "Migrated receipt source artifact is unavailable or unreadable."]
+    if not isinstance(source, dict):
+        return [*errors, "Migrated receipt source artifact must be an object."]
+
     embedded_digest = source.get("receipt_sha256")
     source_unsigned = {key: value for key, value in source.items() if key != "receipt_sha256"}
     canonical_digest = sha256_text(canonical_json(source_unsigned))
@@ -553,12 +571,14 @@ def _validate_migration_lineage(
 def validate_receipt(
     receipt: object,
     *,
-    trusted_migration_sources: Mapping[str, Path] = TRUSTED_MIGRATION_SOURCE_FILES,
+    trusted_migrations: Mapping[str, TrustedMigrationRecord] | None = None,
 ) -> list[str]:
     """Validate arbitrary decoded JSON without leaking shape exceptions."""
 
     if not isinstance(receipt, dict):
         return ["Receipt contract violation at root: input must be an object."]
+    if trusted_migrations is None:
+        trusted_migrations = TRUSTED_MIGRATION_RECORDS
 
     errors: list[str] = []
     schema_version = receipt.get("schema_version")
@@ -577,7 +597,7 @@ def validate_receipt(
             for item in exc.errors()
         )
     if schema_version == "1.4":
-        errors.extend(_validate_migration_lineage(receipt, trusted_migration_sources))
+        errors.extend(_validate_migration_lineage(receipt, trusted_migrations))
     expected_digest = receipt.get("receipt_sha256")
     unsigned = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
     actual_digest = sha256_text(canonical_json(unsigned))

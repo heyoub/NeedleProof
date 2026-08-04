@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
+import needleproof_api.receipt as receipt_module
 import pytest
 from fastapi import HTTPException
 from needleproof_api.chunk_ids import chunk_id_from_uint64
@@ -40,7 +41,7 @@ def reseal_receipt(receipt):
 
 
 @pytest.mark.asyncio
-async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
+async def test_rehearsal_replays_and_seals_without_model_access(tmp_path, monkeypatch):
     shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
     (tmp_path / "rehearsal").mkdir()
     shutil.copy2(Path("data/rehearsal/featured.json"), tmp_path / "rehearsal/featured.json")
@@ -56,6 +57,18 @@ async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
     )
     reseal_receipt(source)
     rehearsal_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    source_digest = source["provenance"]["source_receipt_sha256"]
+    trusted_source = receipt_module.TRUSTED_MIGRATION_RECORDS[source_digest].source_path
+    monkeypatch.setattr(
+        receipt_module,
+        "TRUSTED_MIGRATION_RECORDS",
+        {
+            source_digest: receipt_module.TrustedMigrationRecord(
+                source_path=trusted_source,
+                target_receipt_sha256=source["receipt_sha256"],
+            )
+        },
+    )
 
     settings = Settings(data_dir=tmp_path)
     database = AppDatabase(settings.app_db_path)
@@ -90,7 +103,7 @@ async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_rehearsal_preserves_context_evidence_needed_for_conflict(tmp_path):
+async def test_rehearsal_preserves_context_evidence_needed_for_conflict(tmp_path, monkeypatch):
     shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
     (tmp_path / "rehearsal").mkdir()
     source = json.loads(Path("data/rehearsal/featured.json").read_text(encoding="utf-8"))
@@ -153,6 +166,18 @@ async def test_rehearsal_preserves_context_evidence_needed_for_conflict(tmp_path
     reseal_receipt(source)
     rehearsal_path = tmp_path / "rehearsal" / "featured.json"
     rehearsal_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    source_digest = source["provenance"]["source_receipt_sha256"]
+    trusted_source = receipt_module.TRUSTED_MIGRATION_RECORDS[source_digest].source_path
+    monkeypatch.setattr(
+        receipt_module,
+        "TRUSTED_MIGRATION_RECORDS",
+        {
+            source_digest: receipt_module.TrustedMigrationRecord(
+                source_path=trusted_source,
+                target_receipt_sha256=source["receipt_sha256"],
+            )
+        },
+    )
 
     database = AppDatabase(settings.app_db_path)
     await database.initialize()
@@ -284,7 +309,13 @@ async def test_one_active_live_run_per_browser_session(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mutation",
-    ["tampered", "wrong_corpus", "fabricated_quote", "forged_migration_source"],
+    [
+        "tampered",
+        "resealed_answer",
+        "wrong_corpus",
+        "fabricated_quote",
+        "forged_migration_source",
+    ],
 )
 async def test_rehearsal_rejects_untrusted_or_stale_source_receipts(tmp_path, mutation):
     shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
@@ -292,6 +323,9 @@ async def test_rehearsal_rejects_untrusted_or_stale_source_receipts(tmp_path, mu
     source = json.loads(Path("data/rehearsal/featured.json").read_text(encoding="utf-8"))
     if mutation == "tampered":
         source["answer"] = f"{source['answer']} tampered"
+    elif mutation == "resealed_answer":
+        source["answer"] = "Forged authoritative answer."
+        reseal_receipt(source)
     elif mutation == "wrong_corpus":
         source["corpus_manifest_sha256"] = "0" * 64
         reseal_receipt(source)
