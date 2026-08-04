@@ -137,9 +137,13 @@ _UNIT_ALIASES = {
 }
 _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
+_EXPLICIT_QUALITATIVE_NEGATION = re.compile(
+    r"(?:not|never|no\s+longer|neither|nor)\b",
+    re.IGNORECASE,
+)
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v11-canonical-word-phrases",
+    "version": "positive-bindings-v12-explicit-qualitative-negation",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -173,6 +177,8 @@ BINDING_CONTRACT_SPEC = {
         "bounded_formatting_or_multi_initial_abbreviation_never_clause_punctuation"
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
+    "explicit_qualitative_negation_pattern": _EXPLICIT_QUALITATIVE_NEGATION.pattern,
+    "explicit_qualitative_negation": "reject_before_positive_profile_matching",
     "intra_phrase_formatting_pattern": _INTRA_PHRASE_FORMATTING.pattern,
     "unresolved_predicate_detection": (
         "known positive connector after at most eight punctuation-free qualifier words "
@@ -561,6 +567,10 @@ def bind_observation(
         return BindingResult(None, False, "value_text_not_in_assertion")
     if normalized_temporal and not is_authorized_temporal_anchor(normalized_temporal):
         return BindingResult(None, True, "temporal_anchor_not_authorized")
+    if not numeric_signature_sequence(normalized_value) and _EXPLICIT_QUALITATIVE_NEGATION.search(
+        normalized_value
+    ):
+        return BindingResult(None, True, "negated_qualitative_value")
     if kind not in AUTHORIZED_OBSERVATION_KINDS or not _kind_accepts_signature(
         kind, normalized_value
     ):

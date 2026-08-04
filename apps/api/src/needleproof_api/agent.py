@@ -481,7 +481,7 @@ def _draft_verification_feedback(
     payloads: list[dict[str, Any]] = []
     pending_absence_metrics: list[str] = []
     for draft, verified in zip(claims, result.claims, strict=True):
-        if draft.request_absence_probe:
+        if draft.request_absence_probe and not draft.observations and not draft.context_evidence:
             pending_absence_metrics.append(draft.metric)
             payloads.append(
                 {

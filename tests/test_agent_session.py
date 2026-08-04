@@ -17,7 +17,11 @@ from needleproof_api.models import (
     AgentDraft,
     ClaimStatus,
     DraftClaim,
+    DraftObservation,
+    EvidenceReference,
+    EvidenceRelation,
     EvidenceVerificationResult,
+    ObservationKind,
     VerifiedClaim,
 )
 
@@ -44,6 +48,42 @@ def test_draft_verifier_defers_server_owned_absence_instead_of_rejecting_it():
     assert feedback["server_absence_probe_required"] is True
     assert feedback["all_claims_authoritative"] is False
     assert "pending_absence_probe" in AGENT_INSTRUCTIONS
+
+
+@pytest.mark.parametrize("mixed_evidence_kind", ["observation", "context"])
+def test_draft_verifier_rejects_mixed_absence_requests(mixed_evidence_kind):
+    reference = EvidenceReference(
+        chunk_id="chk_8000000000000001",
+        metric_anchor="total headcount",
+        exact_quote="Total headcount was 100.",
+        exact_assertion="Total headcount was 100.",
+        relation=EvidenceRelation.SUPPORTS,
+    )
+    draft = DraftClaim(metric="total headcount", request_absence_probe=True)
+    if mixed_evidence_kind == "observation":
+        draft.observations.append(
+            DraftObservation(
+                kind=ObservationKind.REPORTED_LEVEL,
+                value_text="100",
+                evidence=[reference],
+            )
+        )
+    else:
+        draft.context_evidence.append(reference)
+    rejected = VerifiedClaim(
+        statement="Unverified claim about total headcount",
+        metric="total headcount",
+        status=ClaimStatus.UNVERIFIED,
+    )
+
+    feedback = _draft_verification_feedback(
+        [draft],
+        EvidenceVerificationResult(claims=[rejected], all_claims_authoritative=False),
+    )
+
+    assert feedback["claims"][0]["status"] == "unverified"
+    assert feedback["pending_absence_metrics"] == []
+    assert feedback["server_absence_probe_required"] is False
 
 
 @pytest.mark.asyncio

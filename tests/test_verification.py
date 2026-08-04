@@ -32,6 +32,7 @@ from needleproof_api.verification import (
     _measurements_bound_to_metric,
     _temporal_anchor_is_valid,
     _temporal_signature,
+    _temporal_signatures_provably_distinct,
     reported_value_found,
     reported_value_linked_to_metric,
 )
@@ -159,6 +160,84 @@ def test_role_changing_quote_context_cannot_be_cropped_from_assertion(quote, ass
     assert verified.status == ClaimStatus.UNVERIFIED
     assert not verified.evidence[0].assertion_found
     assert verified.evidence[0].binding_failure_reason == "assertion_not_bound_to_quote_context"
+
+
+@pytest.mark.parametrize("qualifier", ["Forecast", "Target", "Estimated", "Adjusted"])
+def test_role_changing_chunk_context_cannot_be_cropped_from_quote(qualifier):
+    chunk_text = f"{qualifier} revenue was $2 million."
+    quote = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 922),
+        document_id="doc_cropped_quote_context",
+        document_name="Cropped quote context fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="8" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].quote_found
+    assert not verified.evidence[0].assertion_found
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
+
+
+def test_quote_may_begin_after_a_real_chunk_sentence_boundary():
+    chunk_text = "The forecast was withdrawn. Revenue was $2 million."
+    quote = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 923),
+        document_id="doc_quote_sentence_boundary",
+        document_name="Quote sentence boundary fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="7" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+@pytest.mark.parametrize(
+    "followup",
+    ["This was a forecast.", "That amount was a target.", "It was only an estimate."],
+)
+def test_role_changing_chunk_followup_cannot_be_cropped_from_quote(followup):
+    quote = "Revenue was $2 million."
+    chunk_text = f"{quote} {followup}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 926),
+        document_id="doc_cropped_quote_followup",
+        document_name="Cropped quote followup fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="3" * 64,
+        token_estimate=10,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == "quote_not_bound_to_chunk_context"
 
 
 @given(
@@ -618,6 +697,51 @@ def test_qualitative_predicate_does_not_leak_across_metrics(separator):
     )
 
 
+@pytest.mark.parametrize(
+    ("quote", "value"),
+    [
+        ("Credit rating was not available.", "not available"),
+        ("Credit rating was not available.", "available"),
+        ("Credit rating was never stable.", "never stable"),
+        ("Credit rating is no longer stable.", "no longer stable"),
+        ("Credit rating was temporarily not available.", "temporarily not available"),
+    ],
+)
+def test_explicit_qualitative_negation_never_authorizes_a_positive_observation(quote, value):
+    assert reported_value_linked_to_metric(value, "Credit rating", quote) is None
+
+
+@pytest.mark.parametrize("value", ["available", "stable", "unchanged"])
+def test_positive_qualitative_copula_profiles_remain_authorized(value):
+    quote = f"Credit rating was {value}."
+    assert reported_value_linked_to_metric(value, "Credit rating", quote) is not None
+
+
+def test_negated_qualitative_observation_is_unverified_by_public_verifier():
+    quote = "Credit rating was not available."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 926),
+        document_id="doc_negated_qualitative",
+        document_name="Negated qualitative fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="3" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Credit rating")
+
+    verified = (
+        EvidenceVerifier(corpus_with_chunk(chunk))
+        .verify_claims([claim("Credit rating", observation("not available", evidence))])
+        .claims[0]
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].binding_failure_reason == "negated_qualitative_value"
+
+
 def test_compound_numeric_value_is_rejected_as_ambiguous():
     assert (
         reported_value_linked_to_metric(
@@ -899,6 +1023,85 @@ def test_typed_conflict_characterization_binds_local_distinct_values(separator):
     assert verified.status == ClaimStatus.CONFLICT
 
 
+def test_qualitative_conflict_characterization_binds_local_distinct_values():
+    quote = "Credit rating was stable; Credit rating was negative; the values are conflicting."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 924),
+        document_id="doc_qualitative_conflict",
+        document_name="Qualitative conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was negative",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Credit rating",
+            observation("stable", first),
+            observation("negative", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+def test_qualitative_conflict_does_not_borrow_a_competing_metrics_value():
+    chunk_text = (
+        "Credit rating was stable. Credit rating was negative. "
+        "Credit rating was stable; Market outlook was negative; the values are conflicting."
+    )
+    first_quote = "Credit rating was stable."
+    second_quote = "Credit rating was negative."
+    conflict_quote = (
+        "Credit rating was stable; Market outlook was negative; the values are conflicting."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 925),
+        document_id="doc_qualitative_conflict_decoy",
+        document_name="Qualitative conflict decoy fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="4" * 64,
+        token_estimate=22,
+    )
+    first = reference(chunk.chunk_id, first_quote, "Credit rating")
+    second = reference(chunk.chunk_id, second_quote, "Credit rating")
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Credit rating",
+        assertion="Credit rating was stable",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Credit rating",
+        observation("stable", first),
+        observation("negative", second),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
 def test_year_is_not_mistaken_for_second_unitless_conflict_value():
     quote = "Headcount was 100 in 2024; the figures are incompatible."
     chunk = ChunkRecord(
@@ -1055,6 +1258,55 @@ def test_conflict_bridge_requires_both_disputed_authorized_values():
     verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
 
     assert verified.status == ClaimStatus.POSSIBLE_CONFLICT
+
+
+def test_conflict_bridge_requires_left_value_to_be_locally_owned_by_claim_metric():
+    values_quote = "Revenue was $1 million in 2024. Revenue was $2 million in 2025."
+    conflict_quote = (
+        "Revenue was discussed, while operating expenses were $1 million, "
+        "which cannot be right alongside $2 million."
+    )
+    chunk_text = f"{values_quote} {conflict_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 927),
+        document_id="doc_bridge_left_ownership",
+        document_name="Bridge ownership fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="2" * 64,
+        token_estimate=25,
+    )
+    first = reference(
+        chunk.chunk_id,
+        values_quote,
+        "Revenue",
+        assertion="Revenue was $1 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        values_quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2025.",
+    )
+    context = reference(
+        chunk.chunk_id,
+        conflict_quote,
+        "Revenue",
+        assertion="Revenue was discussed",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim(
+        "Revenue",
+        observation("$1 million", first, temporal_anchor="2024"),
+        observation("$2 million", second, temporal_anchor="2025"),
+    )
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
 
 
 @pytest.mark.parametrize(
@@ -1217,6 +1469,78 @@ def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
 
     assert verified.status == ClaimStatus.CONFLICT
     assert verified.statement.count("$2 million") == 1
+
+
+@pytest.mark.parametrize(
+    ("left_period", "right_period", "expected"),
+    [
+        ("Q1", "Q1 2025", ClaimStatus.POSSIBLE_CONFLICT),
+        ("Q1", "Q2", ClaimStatus.DATE_VARIANT),
+        ("Q1 2024", "Q1 2025", ClaimStatus.DATE_VARIANT),
+        ("January", "January 2025", ClaimStatus.POSSIBLE_CONFLICT),
+        ("31 December 2024", "31 December 2025", ClaimStatus.DATE_VARIANT),
+    ],
+)
+def test_date_variants_require_pairwise_provably_disjoint_periods(
+    left_period,
+    right_period,
+    expected,
+):
+    first_quote = f"Revenue was $2 million in {left_period}."
+    second_quote = f"Revenue was $3 million in {right_period}."
+    chunk_text = f"{first_quote} {second_quote}"
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 928),
+        document_id="doc_temporal_disjointness",
+        document_name="Temporal disjointness fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=chunk_text,
+        normalized_text=chunk_text,
+        sha256="1" * 64,
+        token_estimate=16,
+    )
+    first = reference(chunk.chunk_id, first_quote, "Revenue")
+    second = reference(chunk.chunk_id, second_quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor=left_period),
+            observation("$3 million", second, temporal_anchor=right_period),
+        )
+    )
+
+    assert verified.status == expected
+
+
+@given(
+    quarter=st.integers(min_value=1, max_value=4),
+    year=st.integers(min_value=1900, max_value=2099),
+)
+def test_unspecified_quarter_always_overlaps_its_dated_shape(quarter, year):
+    unspecified = _temporal_signature(f"Q{quarter}")
+    specified = _temporal_signature(f"Q{quarter} {year}")
+
+    assert unspecified is not None
+    assert specified is not None
+    assert not _temporal_signatures_provably_distinct(unspecified, specified)
+
+
+@given(
+    left=st.integers(min_value=1, max_value=4),
+    right=st.integers(min_value=1, max_value=4),
+    year=st.integers(min_value=1900, max_value=2099),
+)
+def test_distinct_quarter_members_are_provably_disjoint(left, right, year):
+    if left == right:
+        return
+    left_signature = _temporal_signature(f"Q{left} {year}")
+    right_signature = _temporal_signature(f"Q{right} {year}")
+
+    assert left_signature is not None
+    assert right_signature is not None
+    assert _temporal_signatures_provably_distinct(left_signature, right_signature)
 
 
 def test_unresolved_distinct_values_do_not_enter_authoritative_answer(corpus):

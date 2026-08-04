@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import calendar
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Protocol
+from typing import Protocol, TypeAlias
 
 from .absence import derive_absence_conclusion
 from .binding import (
@@ -41,6 +41,8 @@ from .models import (
 from .util import canonical_metric_key, evidence_text_contains, normalize_evidence_text
 
 _WORD = re.compile(r"[^\W_]+")
+ConflictValue: TypeAlias = NumericSignature | str
+ConflictCandidate: TypeAlias = tuple[ConflictValue, Span]
 _MONTHS = {month.casefold(): index for index, month in enumerate(calendar.month_name) if month}
 _CONFLICT_BRIDGE_TEXT = r"cannot\s+be\s+right\s+(?:when\s+)?alongside"
 _BOUND_CONFLICT_RELATION = re.compile(
@@ -133,6 +135,69 @@ def reported_value_found(value: str, quote: str) -> bool:
     return _word_phrase_found(normalized_value, normalized_quote)
 
 
+def _fragment_respects_context_boundaries(
+    fragment: str,
+    context: str,
+    metric_span: Span,
+) -> bool:
+    """Reject a clean fragment cropped out of role-changing enclosing context."""
+
+    normalized_fragment = normalize_evidence_text(fragment)[0].casefold()
+    normalized_context = normalize_evidence_text(context)[0].casefold()
+    return any(
+        _occurrence_respects_context_boundaries(
+            normalized_fragment,
+            normalized_context,
+            metric_span,
+            occurrence,
+        )
+        for occurrence in re.finditer(re.escape(normalized_fragment), normalized_context)
+    )
+
+
+def _occurrence_respects_context_boundaries(
+    normalized_fragment: str,
+    normalized_context: str,
+    metric_span: Span,
+    occurrence: re.Match[str],
+) -> bool:
+    """Check one exact fragment occurrence so nested evidence spans cannot be mixed."""
+
+    direct_metric_subject = bool(
+        re.fullmatch(r"\s*(?:the\s+)?", normalized_fragment[: metric_span[0]])
+    )
+    prefix = normalized_context[: occurrence.start()].rstrip()
+    suffix = normalized_context[occurrence.end() :]
+    if direct_metric_subject and prefix and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None:
+        return False
+    if (
+        suffix
+        and normalized_fragment.rstrip()[-1:] not in ".!?"
+        and re.match(r"\s*[.!?;]", suffix) is None
+        and _COMMA_ASSERTION_COMMENTARY.match(suffix) is None
+    ):
+        return False
+    followup_suffix = suffix
+    if normalized_fragment.rstrip()[-1:] not in ".!?":
+        omitted_boundary = re.match(r"\s*[.!?]\s*", followup_suffix)
+        if omitted_boundary:
+            followup_suffix = followup_suffix[omitted_boundary.end() :]
+    immediate_followup = _ANAPHORIC_FOLLOWUP.match(followup_suffix)
+    if immediate_followup:
+        followup_end = re.search(
+            r"[.!?]",
+            followup_suffix[immediate_followup.end() :],
+        )
+        sentence_end = (
+            immediate_followup.end() + followup_end.start()
+            if followup_end
+            else len(followup_suffix)
+        )
+        if not has_positive_anaphoric_numeric_followup(followup_suffix[:sentence_end]):
+            return False
+    return True
+
+
 def _binding_respects_quote_boundaries(
     assertion: str,
     quote: str,
@@ -140,46 +205,45 @@ def _binding_respects_quote_boundaries(
 ) -> bool:
     """Reject a clean relationship cropped out of role-changing quote context."""
 
+    return _fragment_respects_context_boundaries(assertion, quote, binding.metric_span)
+
+
+def _quote_respects_chunk_boundaries(
+    assertion: str,
+    quote: str,
+    chunk_text: str,
+    metric_span: Span,
+) -> bool:
+    """Require the enclosing quote to preserve the chunk context around the same metric."""
+
     normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
     normalized_quote = normalize_evidence_text(quote)[0].casefold()
-    direct_metric_subject = bool(
-        re.fullmatch(r"\s*(?:the\s+)?", normalized_assertion[: binding.metric_span[0]])
-    )
-    for occurrence in re.finditer(re.escape(normalized_assertion), normalized_quote):
-        prefix = normalized_quote[: occurrence.start()].rstrip()
-        suffix = normalized_quote[occurrence.end() :]
-        if (
-            direct_metric_subject
-            and prefix
-            and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None
+    normalized_chunk = normalize_evidence_text(chunk_text)[0].casefold()
+    for assertion_occurrence in re.finditer(
+        re.escape(normalized_assertion),
+        normalized_quote,
+    ):
+        if not _occurrence_respects_context_boundaries(
+            normalized_assertion,
+            normalized_quote,
+            metric_span,
+            assertion_occurrence,
         ):
             continue
-        if (
-            suffix
-            and normalized_assertion.rstrip()[-1:] not in ".!?"
-            and re.match(r"\s*[.!?;]", suffix) is None
-            and _COMMA_ASSERTION_COMMENTARY.match(suffix) is None
+        quote_metric_span = (
+            assertion_occurrence.start() + metric_span[0],
+            assertion_occurrence.start() + metric_span[1],
+        )
+        if any(
+            _occurrence_respects_context_boundaries(
+                normalized_quote,
+                normalized_chunk,
+                quote_metric_span,
+                quote_occurrence,
+            )
+            for quote_occurrence in re.finditer(re.escape(normalized_quote), normalized_chunk)
         ):
-            continue
-        followup_suffix = suffix
-        if normalized_assertion.rstrip()[-1:] not in ".!?":
-            omitted_boundary = re.match(r"\s*[.!?]\s*", followup_suffix)
-            if omitted_boundary:
-                followup_suffix = followup_suffix[omitted_boundary.end() :]
-        immediate_followup = _ANAPHORIC_FOLLOWUP.match(followup_suffix)
-        if immediate_followup:
-            followup_end = re.search(
-                r"[.!?]",
-                followup_suffix[immediate_followup.end() :],
-            )
-            sentence_end = (
-                immediate_followup.end() + followup_end.start()
-                if followup_end
-                else len(followup_suffix)
-            )
-            if not has_positive_anaphoric_numeric_followup(followup_suffix[:sentence_end]):
-                continue
-        return True
+            return True
     return False
 
 
@@ -298,6 +362,51 @@ def _temporal_signature(value: str) -> str | None:
     return None
 
 
+def _temporal_signatures_provably_distinct(left: str, right: str) -> bool:
+    """Prove that two closed temporal signatures cannot denote the same period.
+
+    Missing precision is overlap, not difference: ``Q1`` may be ``Q1 2025`` and
+    ``January`` may be ``January 2025``. Unknown or cross-kind periods therefore
+    fail closed instead of becoming date variants merely because their strings differ.
+    """
+
+    if left == right:
+        return False
+    left_kind, left_value = left.split(":", 1)
+    right_kind, right_value = right.split(":", 1)
+    if left_kind != right_kind:
+        return False
+    if left_kind == "date":
+        return True
+    if left_kind in {"year", "fiscal-year"}:
+        return "unspecified" not in {left_value, right_value}
+    if left_kind in {"quarter", "month"}:
+        left_year, left_member = left_value.split("-", 1)
+        right_year, right_member = right_value.split("-", 1)
+        if left_member != right_member:
+            return True
+        return left_year != right_year and "unspecified" not in {left_year, right_year}
+    if left_kind == "event":
+        left_event, left_period = left_value.split(":", 1)
+        right_event, right_period = right_value.split(":", 1)
+        if left_event != right_event:
+            return False
+        left_year, left_member = left_period.split("-", 1)
+        right_year, right_member = right_period.split("-", 1)
+        if left_member != right_member:
+            return True
+        return left_year != right_year and "unspecified" not in {left_year, right_year}
+    return False
+
+
+def _temporal_periods_pairwise_disjoint(periods: Sequence[str]) -> bool:
+    return all(
+        _temporal_signatures_provably_distinct(left, right)
+        for index, left in enumerate(periods)
+        for right in periods[index + 1 :]
+    )
+
+
 def _temporal_anchor_is_valid(value: str | None) -> bool:
     if not is_authorized_temporal_anchor(value):
         return False
@@ -333,11 +442,12 @@ def _compatible_measurements(
     return measurements
 
 
-def _relation_binds_distinct_measurements(
+def _relation_binds_distinct_values(
     sentence: str,
     relation: re.Match[str],
-    measurements: list[tuple[NumericSignature, Span]],
-    authorized_values: set[NumericSignature],
+    measurements: Sequence[ConflictCandidate],
+    authorized_values: set[ConflictValue],
+    locally_owned_measurements: set[ConflictCandidate],
 ) -> bool:
     if relation.group("bridge"):
         before = [item for item in measurements if item[1][1] <= relation.start()]
@@ -345,6 +455,8 @@ def _relation_binds_distinct_measurements(
         if not before or not after:
             return False
         left, right = before[-1], after[0]
+        if left not in locally_owned_measurements:
+            return False
         if not _CONFLICT_BRIDGE_LEFT_GAP.fullmatch(sentence[left[1][1] : relation.start()]):
             return False
         if not _CONFLICT_BRIDGE_RIGHT_GAP.fullmatch(sentence[relation.end() : right[1][0]]):
@@ -383,6 +495,14 @@ def _measurements_bound_to_metric(
         metric_span = preceding_metrics[-1]
         local_assertion = sentence[metric_span[0] : value_span[1]]
         value_text = sentence[value_span[0] : value_span[1]]
+        candidate_kinds = observation_kinds.get(signature)
+        if candidate_kinds is None:
+            candidate_kinds = {
+                kind
+                for authorized, kinds in observation_kinds.items()
+                if signature[1] == authorized[1] and signature[3] == authorized[3]
+                for kind in kinds
+            }
         if any(
             bind_observation(
                 metric_anchor=metric,
@@ -392,9 +512,52 @@ def _measurements_bound_to_metric(
                 assertion=local_assertion,
             ).match
             is not None
-            for kind in observation_kinds.get(signature, set())
+            for kind in candidate_kinds
         ):
             owned.append((signature, value_span))
+    return owned
+
+
+def _qualitative_conflict_candidates(
+    sentence: str,
+    authorized_texts: dict[str, set[str]],
+) -> list[tuple[str, Span]]:
+    candidates: set[tuple[str, Span]] = set()
+    for identity, value_texts in authorized_texts.items():
+        for value_text in value_texts:
+            candidates.update((identity, span) for span in word_phrase_spans(value_text, sentence))
+    return sorted(candidates, key=lambda candidate: candidate[1])
+
+
+def _qualitative_values_bound_to_metric(
+    sentence: str,
+    metric: str,
+    values: list[tuple[str, Span]],
+    observation_kinds: dict[str, set[ObservationKind]],
+) -> list[tuple[str, Span]]:
+    """Retain only qualitative values with their own local positive metric binding."""
+
+    metric_spans = word_phrase_spans(metric, sentence)
+    owned = []
+    for identity, value_span in values:
+        preceding_metrics = [span for span in metric_spans if span[1] <= value_span[0]]
+        if not preceding_metrics:
+            continue
+        metric_span = preceding_metrics[-1]
+        local_assertion = sentence[metric_span[0] : value_span[1]]
+        value_text = sentence[value_span[0] : value_span[1]]
+        if any(
+            bind_observation(
+                metric_anchor=metric,
+                value_text=value_text,
+                kind=kind,
+                temporal_anchor=None,
+                assertion=local_assertion,
+            ).match
+            is not None
+            for kind in observation_kinds.get(identity, set())
+        ):
+            owned.append((identity, value_span))
     return owned
 
 
@@ -406,12 +569,21 @@ def _has_explicit_conflict(
     """Recognize only source conflict language bound locally to disputed values."""
 
     observation_kinds: dict[NumericSignature, set[ObservationKind]] = {}
+    qualitative_kinds: dict[str, set[ObservationKind]] = {}
+    qualitative_texts: dict[str, set[str]] = {}
     for observation in observations:
-        for signature in numeric_signature_sequence(observation.value_text):
+        signatures = numeric_signature_sequence(observation.value_text)
+        for signature in signatures:
             observation_kinds.setdefault(canonical_numeric_signature(signature), set()).add(
                 observation.kind
             )
-    authorized_values = set(observation_kinds)
+        if not signatures:
+            identity = canonical_word_phrase(observation.value_text)
+            qualitative_kinds.setdefault(identity, set()).add(observation.kind)
+            qualitative_texts.setdefault(identity, set()).add(observation.value_text)
+    authorized_numeric: set[ConflictValue] = set(observation_kinds)
+    authorized_qualitative: set[ConflictValue] = set(qualitative_kinds)
+    authorized_values = authorized_numeric | authorized_qualitative
     if not authorized_values:
         return False
     for item in evidence:
@@ -426,19 +598,39 @@ def _has_explicit_conflict(
             relation = _BOUND_CONFLICT_RELATION.search(sentence)
             if not relation or not _word_phrase_found(metric, sentence):
                 continue
-            measurements = _compatible_measurements(sentence, authorized_values)
-            if not relation.group("bridge"):
-                measurements = _measurements_bound_to_metric(
+            numeric_measurements = _compatible_measurements(
+                sentence,
+                set(observation_kinds),
+            )
+            qualitative_values = _qualitative_conflict_candidates(
+                sentence,
+                qualitative_texts,
+            )
+            locally_owned_measurements: set[ConflictCandidate] = {
+                *_measurements_bound_to_metric(
                     sentence,
                     metric,
-                    measurements,
+                    numeric_measurements,
                     observation_kinds,
-                )
-            if _relation_binds_distinct_measurements(
+                ),
+                *_qualitative_values_bound_to_metric(
+                    sentence,
+                    metric,
+                    qualitative_values,
+                    qualitative_kinds,
+                ),
+            }
+            if not relation.group("bridge"):
+                measurements = list(locally_owned_measurements)
+            else:
+                measurements = [*numeric_measurements, *qualitative_values]
+            measurements.sort(key=lambda candidate: candidate[1])
+            if _relation_binds_distinct_values(
                 sentence,
                 relation,
                 measurements,
                 authorized_values,
+                locally_owned_measurements,
             ):
                 return True
     return False
@@ -498,7 +690,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v21-canonical-word-phrases"
+    version = "deterministic-verifier-v23-owned-conflicts-and-disjoint-periods"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -603,6 +795,37 @@ class EvidenceVerifier:
                     binding = None
                     assertion_found = False
                     failure_reason = "assertion_not_bound_to_quote_context"
+                elif binding and not _quote_respects_chunk_boundaries(
+                    reference.exact_assertion,
+                    reference.exact_quote,
+                    chunk.normalized_text,
+                    binding.metric_span,
+                ):
+                    binding = None
+                    assertion_found = False
+                    failure_reason = "quote_not_bound_to_chunk_context"
+            elif observation is None and metric_anchor_found:
+                normalized_assertion = normalize_evidence_text(reference.exact_assertion)[
+                    0
+                ].casefold()
+                metric_spans = word_phrase_spans(reference.metric_anchor, normalized_assertion)
+                boundary_valid = any(
+                    _fragment_respects_context_boundaries(
+                        reference.exact_assertion,
+                        reference.exact_quote,
+                        metric_span,
+                    )
+                    and _quote_respects_chunk_boundaries(
+                        reference.exact_assertion,
+                        reference.exact_quote,
+                        chunk.normalized_text,
+                        metric_span,
+                    )
+                    for metric_span in metric_spans
+                )
+                if not boundary_valid:
+                    assertion_found = False
+                    failure_reason = "evidence_context_boundaries_not_preserved"
             metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
                 claim.metric
             )
@@ -695,10 +918,16 @@ class EvidenceVerifier:
             None not in periods and len(periods) == 1 for periods in value_periods.values()
         )
         distinct_temporal = {
-            next(iter(periods))
+            period
             for periods in value_periods.values()
-            if None not in periods and len(periods) == 1
+            if len(periods) == 1
+            for period in periods
+            if period is not None
         }
+        temporal_periods_disjoint = (
+            temporal_relationship_complete
+            and _temporal_periods_pairwise_disjoint(list(distinct_temporal))
+        )
         explicit_conflict = _has_explicit_conflict(
             evidence,
             claim.metric,
@@ -771,7 +1000,7 @@ class EvidenceVerifier:
         elif len(distinct_values) >= 2:
             if explicit_conflict:
                 status = ClaimStatus.CONFLICT
-            elif temporal_relationship_complete and len(distinct_temporal) == len(distinct_values):
+            elif temporal_periods_disjoint and len(distinct_temporal) == len(distinct_values):
                 status = ClaimStatus.DATE_VARIANT
             elif temporal_relationship_complete and len(distinct_temporal) == 1:
                 status = ClaimStatus.CONFLICT

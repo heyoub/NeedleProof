@@ -21,6 +21,8 @@ An authoritative observation must prove all of these facts:
   so those terms cannot disappear from the authoritative metric;
 - the exact value occurs in the assertion;
 - one closed positive binding profile connects that metric span to that value span;
+- an explicitly negated qualitative predicate such as `not available` or `never stable` cannot
+  authorize an ordinary positive qualitative observation;
 - nonnumeric value identity uses the same normalized, case-folded word-token sequence as the
   binder, so permitted punctuation and formatting cannot manufacture distinct values;
 - the exact assertion ends at the value or its bound trailing temporal anchor, apart from terminal
@@ -44,9 +46,10 @@ Negation, modality, forecasts, targets, components, bounds, ranges, deltas, comp
 and compound values cannot become ordinary reported levels merely because the same number appears
 after a partial or ambiguous metric phrase.
 
-The selected assertion must preserve its structural boundary inside the exact quotation. A direct
-metric subject cannot be cropped out of a preceding word-level prefix, and a cropped tail must begin
-at a terminal boundary or one named comma-commentary/coordination shape. Therefore a draft cannot
+The selected assertion must preserve its structural boundary inside the exact quotation, and the
+quotation must preserve the same metric boundary inside the immutable chunk. A direct metric
+subject cannot be cropped out of a preceding word-level prefix at either layer, and a cropped tail
+must begin at a terminal boundary or one named comma-commentary/coordination shape. Therefore a draft cannot
 turn `Forecast revenue was $2 million` or `Revenue was $2 million, a forecast for next year` into a
 clean reported level by cropping the role qualifier. Authorized comparative commentary remains
 outside the atomic assertion but inside the exact quote and receipt. An immediately following
@@ -71,14 +74,18 @@ open-ended conjunction, noun, or financial-verb blacklist.
 
 The server derives `verified`, `conflict`, `date_variant`, `possible_conflict`, and `unverified`
 from the verified observation set. The model does not propose those statuses. Distinct supported
-values with distinct valid temporal signatures become date variants; equivalent quarter, year, and
-month spellings are canonicalized before comparison. Repeated canonical kind/value/period
+values become date variants only when their closed temporal signatures are pairwise provably
+disjoint; an underspecified period such as `Q1` may overlap `Q1 2025` and therefore remains
+unresolved. Equivalent quarter, year, and month spellings are canonicalized before comparison.
+Repeated canonical kind/value/period
 observations are deduplicated for classification and authoritative prose while remaining visible in
 the receipt. Values tied to one common period or explicitly
 characterized by the source as incompatible become conflicts. Explicit conflict is itself a closed
-positive profile: the canonical metric, conflict relationship, and two distinct compatible
-measurements must occur in the same local sentence. A direct bridge must sit immediately between
-the two values, and both bridged values must belong to the authorized disputed observation set; a
+positive profile: the canonical metric, conflict relationship, and two distinct compatible numeric
+or qualitative values must occur in the same local sentence. Qualitative identity uses the same
+canonical word-token representation as ordinary classification. A direct bridge must sit immediately between
+the two values, its left operand must have its own local positive binding to the claimed metric,
+and both bridged values must belong to the authorized disputed observation set; a
 collective characterization must immediately follow two authorized values and
 end the sentence. Each collective operand must also have its own local positive binding to the
 claimed metric; a competing metric cannot lend its value to the conflict. Merely finding a word
@@ -89,7 +96,9 @@ evidence relation. Unresolved relationships never enter authoritative prose.
 
 ## Bounded absence
 
-`not_found` is not inferred from model-controlled search counts. A post-run server protocol issues
+`not_found` is not inferred from model-controlled search counts. Only a pure absence request with no
+observations or context evidence can enter the pending server-probe state; mixed drafts remain
+rejected during model self-correction. A post-run server protocol issues
 four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
 complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
 same complete-word matcher used by verification. The protocol records both result sets, opens every
