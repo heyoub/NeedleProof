@@ -52,11 +52,14 @@ open-ended conjunction, noun, or financial-verb blacklist.
 
 The server derives `verified`, `conflict`, `date_variant`, `possible_conflict`, and `unverified`
 from the verified observation set. The model does not propose those statuses. Distinct supported
-values with distinct valid temporal signatures become date variants; values tied to one common
-period or explicitly characterized by the source as incompatible become conflicts. Recognized
-same-metric conflict evidence prevents a lone reported value from becoming authoritative, regardless
-of the model-supplied evidence relation. Unresolved
-relationships never enter authoritative prose.
+values with distinct valid temporal signatures become date variants; equivalent quarter, year, and
+month spellings are canonicalized before comparison. Values tied to one common period or explicitly
+characterized by the source as incompatible become conflicts. Explicit conflict is itself a closed
+positive profile: the canonical metric, conflict relationship, and two distinct compatible
+measurements must occur in the same local sentence. Merely finding a word such as `incompatible`
+elsewhere in the enclosing quotation proves nothing. Recognized same-metric conflict evidence
+prevents a lone reported value from becoming authoritative, regardless of the model-supplied
+evidence relation. Unresolved relationships never enter authoritative prose.
 
 ## Bounded absence
 
@@ -69,9 +72,12 @@ occurrence. This does not attempt sentence parsing, so punctuation inside abbrev
 “U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
-predicate requires review. A bare rubric or instruction mention does not by itself claim a value
-and therefore does not block the bounded conclusion. The conclusion remains bounded to the
-recorded probe and exact corpus version; it never claims that the corpus proves nonexistence.
+predicate requires review. Qualitative predicate detection permits at most eight punctuation-free
+qualifier words between the exact metric and a closed positive connector, so `Credit rating for the
+period was stable` cannot authorize absence. A bare rubric or instruction mention does not by
+itself claim a value and therefore does not block the bounded conclusion. The conclusion remains
+bounded to the recorded probe and exact corpus version; it never claims that the corpus proves
+nonexistence.
 
 ## Numeric integrity
 

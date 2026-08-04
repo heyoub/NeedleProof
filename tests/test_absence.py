@@ -3,8 +3,10 @@ from __future__ import annotations
 import threading
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from needleproof_api.absence import probe_metric_absence
-from needleproof_api.binding import word_phrase_spans
+from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.models import (
     AbsenceConclusion,
@@ -59,6 +61,41 @@ def test_exact_metric_scan_normalizes_pdf_linebreak_dehyphenation(corpus):
 
 def test_metric_phrase_matching_does_not_match_inside_trauma():
     assert word_phrase_spans("AUM", "trauma") == []
+
+
+@given(
+    qualifiers=st.lists(
+        st.sampled_from(
+            ["for", "the", "current", "fiscal", "reporting", "annual", "period", "year"]
+        ),
+        min_size=1,
+        max_size=8,
+    )
+)
+def test_bounded_qualifier_shape_cannot_hide_positive_qualitative_predicate(qualifiers):
+    qualifier = " ".join(qualifiers)
+    assertion = f"Credit rating {qualifier} was stable."
+
+    assert has_unresolved_metric_predicate("Credit rating", assertion)
+
+
+@pytest.mark.parametrize("boundary", [".", "?", "!", ";", ","])
+def test_qualitative_predicate_detection_does_not_cross_punctuation(boundary):
+    assertion = f"Credit rating appeared in the rubric{boundary} Revenue was stable."
+
+    assert not has_unresolved_metric_predicate("Credit rating", assertion)
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "Credit rating appears in the rubric.",
+        "Credit rating - source quote.",
+        "Question: what was Credit rating?",
+    ],
+)
+def test_bare_metric_mentions_do_not_become_qualitative_predicates(assertion):
+    assert not has_unresolved_metric_predicate("Credit rating", assertion)
 
 
 def test_claim_and_absence_probe_share_one_metric_identity_normalizer():
@@ -142,6 +179,9 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
         "Credit rating was stable.",
         "Credit rating: stable.",
         "Credit rating reached stable.",
+        "Credit rating for the period was stable.",
+        "Credit rating as of year end remained unchanged.",
+        "Credit rating during the fiscal year was reported stable.",
     ],
 )
 async def test_exact_metric_with_qualitative_predicate_requires_review(sentence):

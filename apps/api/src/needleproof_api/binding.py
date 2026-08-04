@@ -17,16 +17,24 @@ _NUMERIC = re.compile(
     re.IGNORECASE,
 )
 _WORD = re.compile(r"[^\W_]+")
-_COPULA = re.compile(r"\s*(?:is|are|was|were)\s*", re.IGNORECASE)
+_COPULA = re.compile(r"\s*(?:is|are|was|were)\b\s*", re.IGNORECASE)
 _REPORTED = re.compile(
     r"\s*(?:"
     r"at|closed\s+at|ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at|"
     r"amounted\s+to|reached|reported\s+at|rose\s+to|stood\s+at|"
     r"totaled|totalled|was\s+reported\s+at|were\s+reported\s+at"
-    r")\s*",
+    r")\b\s*",
     re.IGNORECASE,
 )
 _COLON = re.compile(r"\s*:\s*")
+_QUALITATIVE_STATE = re.compile(
+    r"\s*(?:remained(?:\s+at)?|reported|stayed(?:\s+at)?)\b\s*",
+    re.IGNORECASE,
+)
+_PREDICATE_QUALIFIER_GAP = re.compile(
+    r"\s*(?:[^\W\d_]+\s*){1,8}",
+    re.IGNORECASE,
+)
 _ANAPHOR = r"(?:it|this|that|the\s+figure)"
 _ANAPHORIC_CONNECTOR = (
     r"(?:is|was|remained\s+at|reached|stood\s+at|"
@@ -123,7 +131,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v5-positive-temporal-anchors",
+    "version": "positive-bindings-v6-bounded-predicate-qualifiers",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -147,7 +155,12 @@ BINDING_CONTRACT_SPEC = {
     "temporal_metric_prefix_pattern": _TEMPORAL_METRIC_PREFIX.pattern,
     "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
-    "unresolved_predicate_detection": "known positive connector with nonempty predicate",
+    "unresolved_predicate_detection": (
+        "known positive connector after at most eight punctuation-free qualifier words "
+        "with a nonempty predicate"
+    ),
+    "unresolved_qualitative_state_pattern": _QUALITATIVE_STATE.pattern,
+    "predicate_qualifier_gap_pattern": _PREDICATE_QUALIFIER_GAP.pattern,
     "unknown_syntax": "reject",
     "compound_numeric_observation": "reject",
 }
@@ -264,10 +277,13 @@ def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
     normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
     for _start, end in word_phrase_spans(normalized_metric, normalized_assertion):
         suffix = normalized_assertion[end:]
-        for connector in (_COPULA, _REPORTED, _COLON):
-            match = connector.match(suffix)
-            if match and _WORD.search(suffix[match.end() :]):
-                return True
+        for connector in (_COPULA, _REPORTED, _COLON, _QUALITATIVE_STATE):
+            for match in connector.finditer(suffix):
+                gap = suffix[: match.start()]
+                if gap and not _PREDICATE_QUALIFIER_GAP.fullmatch(gap):
+                    continue
+                if _WORD.search(suffix[match.end() :]):
+                    return True
     return False
 
 

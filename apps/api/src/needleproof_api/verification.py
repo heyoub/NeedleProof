@@ -15,6 +15,7 @@ from .binding import (
     is_authorized_temporal_anchor,
     numeric_signature_sequence,
     numeric_signatures,
+    numeric_value_candidates,
 )
 from .chunk_ids import ChunkId
 from .models import (
@@ -35,12 +36,21 @@ from .util import canonical_metric_key, evidence_text_contains, normalize_eviden
 
 _WORD = re.compile(r"[^\W_]+")
 _MONTHS = {month.casefold(): index for index, month in enumerate(calendar.month_name) if month}
-_EXPLICIT_CONFLICT_PHRASES = (
-    "cannot be right",
-    "incompatible",
-    "introduced the error",
-    "unresolved conflict",
+_BOUND_CONFLICT_RELATION = re.compile(
+    r"\b(?:"
+    r"(?P<bridge>cannot\s+be\s+right\s+(?:when\s+)?alongside)|"
+    r"(?P<typed>(?:values|figures|amounts|numbers|reports|sources)\s+"
+    r"(?:are|remain|seem|appear)?\s*(?:incompatible|conflicting)|"
+    r"(?:incompatible|conflicting)\s+"
+    r"(?:values|figures|amounts|numbers|reports|sources))|"
+    r"(?P<unresolved>(?:values|figures|amounts|numbers|reports|sources)\s+"
+    r"(?:form|create|represent|show)?\s*(?:an?\s+)?unresolved\s+conflict|"
+    r"unresolved\s+conflict\s+(?:between|among))"
+    r")\b",
+    re.IGNORECASE,
 )
+_TEMPORAL_LEAD = re.compile(r"^(?:as\s+of|at|by|during|for|in|on|through)\s+", re.IGNORECASE)
+_QUARTER_NUMBERS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +159,7 @@ def _valid_date(year: int, month: int, day: int) -> bool:
 
 def _temporal_signature(value: str) -> str | None:
     normalized = normalize_evidence_text(value)[0].casefold()
+    core = _TEMPORAL_LEAD.sub("", normalized, count=1)
     iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso:
         year, month, day = (int(part) for part in iso.groups())
@@ -169,13 +180,33 @@ def _temporal_signature(value: str) -> str | None:
         month_text, day_text, year_text = month_first.groups()
         year, month, day = int(year_text), _MONTHS[month_text], int(day_text)
         return f"date:{year:04d}-{month:02d}-{day:02d}" if _valid_date(year, month, day) else None
-    fiscal_period = re.search(
-        r"\b(?:fy|fiscal\s+year)\s*(\d{4})\b|\bq([1-4])\s*(\d{4})\b",
-        normalized,
+    fiscal_year = re.fullmatch(r"(?:fy|fiscal\s+year)\s*(\d{4})", core)
+    if fiscal_year:
+        return f"fiscal-year:{fiscal_year.group(1)}"
+    quarter = re.fullmatch(
+        r"(?:q([1-4])|(first|second|third|fourth)\s+quarter)\s+(\d{4})",
+        core,
     )
-    if fiscal_period:
-        fiscal_year, quarter, quarter_year = fiscal_period.groups()
-        return f"fiscal-year:{fiscal_year}" if fiscal_year else f"quarter:{quarter_year}-q{quarter}"
+    if quarter:
+        number, named, year = quarter.groups()
+        return f"quarter:{year}-q{number or _QUARTER_NUMBERS[named]}"
+    year = re.fullmatch(r"(?:(?:calendar\s+)?year\s+)?((?:19|20)\d{2})", core)
+    if year:
+        return f"year:{year.group(1)}"
+    month_period = re.fullmatch(
+        r"(" + "|".join(_MONTHS) + r")(?:\s+((?:19|20)\d{2}))?(?:\s+(?:month|period))?",
+        core,
+    )
+    if month_period:
+        month_name, year_text = month_period.groups()
+        return f"month:{year_text or 'unspecified'}-{_MONTHS[month_name]:02d}"
+    month_event = re.fullmatch(
+        r"(" + "|".join(_MONTHS) + r")(?:\s+((?:19|20)\d{2}))?\s+(call)",
+        core,
+    )
+    if month_event:
+        month_name, year_text, event = month_event.groups()
+        return f"event:{event}:{year_text or 'unspecified'}-{_MONTHS[month_name]:02d}"
     if is_authorized_temporal_anchor(value):
         return f"period:{normalized}"
     return None
@@ -207,15 +238,76 @@ def _distinct_temporal_anchors(observations: Iterable[DraftObservation]) -> set[
     }
 
 
-def _has_explicit_conflict(evidence: Iterable[VerifiedEvidence], metric: str) -> bool:
-    return any(
-        item.quote_found
-        and item.assertion_found
-        and item.metric_anchor_found
-        and _canonical_metric(item.metric_anchor) == _canonical_metric(metric)
-        and any(phrase in item.normalized_quote.casefold() for phrase in _EXPLICIT_CONFLICT_PHRASES)
-        for item in evidence
-    )
+def _compatible_measurements(
+    sentence: str,
+    authorized_values: set[tuple[str, str, str, str]],
+) -> list[tuple[tuple[str, str, str, str], tuple[int, int]]]:
+    measurements = []
+    for value_text, span in numeric_value_candidates(sentence):
+        signatures = numeric_signature_sequence(value_text)
+        if len(signatures) != 1:
+            continue
+        signature = canonical_numeric_signature(signatures[0])
+        if any(
+            signature[1] == authorized[1] and signature[3] == authorized[3]
+            for authorized in authorized_values
+        ):
+            measurements.append((signature, span))
+    return measurements
+
+
+def _relation_binds_distinct_measurements(
+    relation: re.Match[str],
+    measurements: list[tuple[tuple[str, str, str, str], tuple[int, int]]],
+    authorized_values: set[tuple[str, str, str, str]],
+) -> bool:
+    if relation.group("bridge"):
+        before = [item for item in measurements if item[1][1] <= relation.start()]
+        after = [item for item in measurements if item[1][0] >= relation.end()]
+        if not before or not after:
+            return False
+        candidates = (before[-1][0], after[0][0])
+        return len(set(candidates)) >= 2 and any(value in candidates for value in authorized_values)
+    observed_authorized = {
+        signature for signature, _span in measurements if signature in authorized_values
+    }
+    return len(observed_authorized) >= 2
+
+
+def _has_explicit_conflict(
+    evidence: Iterable[VerifiedEvidence],
+    metric: str,
+    observations: Iterable[DraftObservation],
+) -> bool:
+    """Recognize only source conflict language bound locally to disputed values."""
+
+    authorized_values = {
+        canonical_numeric_signature(signature)
+        for observation in observations
+        for signature in numeric_signature_sequence(observation.value_text)
+    }
+    if not authorized_values:
+        return False
+    for item in evidence:
+        if not (
+            item.quote_found
+            and item.assertion_found
+            and item.metric_anchor_found
+            and _canonical_metric(item.metric_anchor) == _canonical_metric(metric)
+        ):
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+", item.normalized_quote.casefold()):
+            relation = _BOUND_CONFLICT_RELATION.search(sentence)
+            if not relation or not _word_phrase_found(metric, sentence):
+                continue
+            measurements = _compatible_measurements(sentence, authorized_values)
+            if _relation_binds_distinct_measurements(
+                relation,
+                measurements,
+                authorized_values,
+            ):
+                return True
+    return False
 
 
 def _render_observation(observation: DraftObservation) -> str:
@@ -254,7 +346,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v9-positive-temporal-conflicts"
+    version = "deterministic-verifier-v10-local-conflicts-and-periods"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -433,7 +525,7 @@ class EvidenceVerifier:
         distinct_values = _distinct_values(authorized)
         distinct_temporal = _distinct_temporal_anchors(authorized)
         temporal_count = sum(bool(observation.temporal_anchor) for observation in authorized)
-        explicit_conflict = _has_explicit_conflict(evidence, claim.metric)
+        explicit_conflict = _has_explicit_conflict(evidence, claim.metric, authorized)
         unresolved_references = len(evidence) != len(references)
         missing_quotes = any(not item.quote_found for item in evidence)
         unmatched_assertions = any(not item.assertion_found for item in evidence)

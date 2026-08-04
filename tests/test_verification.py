@@ -9,6 +9,7 @@ from needleproof_api.agent import AGENT_INSTRUCTIONS
 from needleproof_api.binding import canonical_decimal_digits
 from needleproof_api.chunk_ids import ChunkId, chunk_id_from_uint64
 from needleproof_api.models import (
+    ChunkRecord,
     ClaimStatus,
     DraftClaim,
     DraftObservation,
@@ -66,6 +67,17 @@ def observation(
 
 def claim(metric: str, *observations: DraftObservation) -> DraftClaim:
     return DraftClaim(metric=metric, observations=list(observations))
+
+
+def corpus_with_chunk(chunk: ChunkRecord):
+    class Corpus:
+        corpus_version = "v_0000000000000009"
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk.chunk_id in chunk_ids else []
+
+    return Corpus()
 
 
 def test_normalization_records_pdf_linebreak_and_whitespace_operations():
@@ -543,6 +555,168 @@ def test_explicit_conflict_evidence_blocks_single_value_authorization(corpus, re
     assert any("conflict evidence" in note for note in verified.verification_notes)
 
 
+@pytest.mark.parametrize(
+    "quote",
+    [
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025. "
+            "Our systems are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "while our systems are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "while teams have an unresolved conflict."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "because dependencies introduced the error."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025, "
+            "although interfaces are conflicting."
+        ),
+    ],
+)
+def test_unrelated_incompatible_systems_do_not_turn_date_variants_into_conflict(quote):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 901),
+        document_id="doc_conflict_locality",
+        document_name="Conflict locality fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=16,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in 2025",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor="2024"),
+            observation("$3 million", second, temporal_anchor="2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+
+
+def test_typed_conflict_characterization_binds_local_distinct_values():
+    quote = "Revenue was $2 million, and Revenue was $3 million; the figures are incompatible."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 903),
+        document_id="doc_typed_conflict",
+        document_name="Typed conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="7" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first),
+            observation("$3 million", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+def test_year_is_not_mistaken_for_second_unitless_conflict_value():
+    quote = "Headcount was 100 in 2024; the figures are incompatible."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 904),
+        document_id="doc_unitless_conflict",
+        document_name="Unitless conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="6" * 64,
+        token_estimate=9,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Headcount",
+        assertion="Headcount was 100 in 2024",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Headcount", observation("100", evidence, temporal_anchor="2024"))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
+def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
+    quote = "Revenue was $2 million in Q1 2025. Revenue was $3 million in first quarter 2025."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 902),
+        document_id="doc_temporal_equivalence",
+        document_name="Temporal equivalence fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="8" * 64,
+        token_estimate=14,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in Q1 2025.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in first quarter 2025.",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor="Q1 2025"),
+            observation("$3 million", second, temporal_anchor="first quarter 2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
 def test_unresolved_distinct_values_do_not_enter_authoritative_answer(corpus):
     unresolved = VerifiedClaim(
         statement="Fee-earning AUM has unresolved reported values: $82 billion and $8.2 billion",
@@ -561,6 +735,37 @@ def test_impossible_dates_are_not_temporal_signatures():
 
 def test_equivalent_date_formats_have_one_signature():
     assert _temporal_signature("31 December 2025") == _temporal_signature("2025-12-31")
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Q1 2025", "first quarter 2025"),
+        ("Q2 2025", "second quarter 2025"),
+        ("Q3 2025", "third quarter 2025"),
+        ("Q4 2025", "fourth quarter 2025"),
+        ("2025", "calendar year 2025"),
+        ("2025", "year 2025"),
+        ("FY2025", "fiscal year 2025"),
+        ("February 2025", "February 2025 month"),
+        ("February 2025", "in February 2025"),
+    ],
+)
+def test_equivalent_named_periods_have_one_signature(left, right):
+    assert _temporal_signature(left) == _temporal_signature(right)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        ("Q1 2025", "Q2 2025"),
+        ("FY2025", "calendar year 2025"),
+        ("February 2025", "March 2025"),
+        ("February call", "February 2025"),
+    ],
+)
+def test_semantically_distinct_period_shapes_remain_distinct(left, right):
+    assert _temporal_signature(left) != _temporal_signature(right)
 
 
 def test_decimal_digit_canonicalization_is_context_independent():

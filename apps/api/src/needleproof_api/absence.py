@@ -22,7 +22,7 @@ from .models import (
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v5-normalized-metric-windows"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v6-qualified-predicate-windows"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
@@ -47,7 +47,9 @@ ABSENCE_PROTOCOL_SPEC = {
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
     "numeric_candidate_policy": "requires_review_even_without_positive_binding",
-    "qualitative_predicate_policy": "known_positive_connector_requires_review",
+    "qualitative_predicate_policy": (
+        "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
+    ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
     "metric_context_policy": "forward_window_from_complete_metric_without_sentence_parsing",
     "conclusion": "bounded_not_global",
