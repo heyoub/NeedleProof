@@ -190,19 +190,21 @@ def _temporal_signature(value: str) -> str | None:
         month_text, day_text, year_text = month_first.groups()
         year, month, day = int(year_text), _MONTHS[month_text], int(day_text)
         return f"date:{year:04d}-{month:02d}-{day:02d}" if _valid_date(year, month, day) else None
-    fiscal_year = re.fullmatch(r"(?:fy|fiscal\s+year)\s*(\d{4})", core)
+    fiscal_year = re.fullmatch(r"(?:fy|fiscal\s+year)(?:\s*(\d{4}))?", core)
     if fiscal_year:
-        return f"fiscal-year:{fiscal_year.group(1)}"
+        return f"fiscal-year:{fiscal_year.group(1) or 'unspecified'}"
     quarter = re.fullmatch(
-        r"(?:q([1-4])|(first|second|third|fourth)\s+quarter)\s+(\d{4})",
+        r"(?:q([1-4])|(first|second|third|fourth)\s+quarter)(?:\s+(\d{4}))?",
         core,
     )
     if quarter:
         number, named, year = quarter.groups()
-        return f"quarter:{year}-q{number or _QUARTER_NUMBERS[named]}"
+        return f"quarter:{year or 'unspecified'}-q{number or _QUARTER_NUMBERS[named]}"
     year = re.fullmatch(r"(?:(?:calendar\s+)?year\s+)?((?:19|20)\d{2})", core)
     if year:
         return f"year:{year.group(1)}"
+    if re.fullmatch(r"(?:calendar\s+)?year", core):
+        return "year:unspecified"
     month_period = re.fullmatch(
         r"(" + "|".join(_MONTHS) + r")(?:\s+((?:19|20)\d{2}))?(?:\s+(?:month|period))?",
         core,
@@ -368,7 +370,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v11-local-conflict-spans"
+    version = "deterministic-verifier-v12-local-conflict-spans"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
