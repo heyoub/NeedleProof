@@ -20,9 +20,9 @@ from .models import (
     SearchResult,
     ValueCandidate,
 )
-from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
+from .util import MAX_METRIC_FTS_VARIANTS, canonical_json, canonical_metric_key, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v12-open-edge-neighbors"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v13-canonical-initialisms"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -46,7 +46,9 @@ ABSENCE_PROTOCOL_SPEC = {
     "exact_metric_scan": {
         "engine": "sqlite_fts5_phrase",
         "top_k": None,
-        "post_filter": "complete_word_phrase",
+        "post_filter": "shared_complete_word_phrase_with_canonical_initialisms",
+        "initialism_variant_cap": MAX_METRIC_FTS_VARIANTS,
+        "variant_overflow": "full_sqlite_chunk_scan",
         "failure": "incomplete_probe",
     },
     "requires_all_unique_candidates_opened": True,
@@ -91,13 +93,11 @@ class AbsenceCorpus(Protocol):
 
 
 def _normalized_query(value: str) -> str:
-    normalized, _ = normalize_evidence_text(value)
-    return " ".join(normalized.casefold().split())
+    return canonical_metric_key(value)
 
 
 def _query_signature_text(value: str) -> str:
-    normalized, _ = normalize_evidence_text(value)
-    return " ".join(sorted(word.casefold() for word in re.findall(r"[^\W_]+", normalized)))
+    return " ".join(sorted(canonical_metric_key(value).split()))
 
 
 def search_signature(

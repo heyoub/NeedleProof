@@ -129,10 +129,29 @@ def test_exact_metric_scan_is_exhaustive_and_phrase_bound(haystack_store):
     assert all(word_phrase_spans("fee related earnings", chunk.normalized_text) for chunk in chunks)
 
 
+def test_exact_metric_scan_fallback_remains_exhaustive_and_phrase_bound(
+    haystack_store,
+    monkeypatch,
+):
+    expected = matching_chunk_ids(haystack_store, "The filing reports $2 million (U.S. revenue)")
+    assert expected
+    monkeypatch.setattr(retrieval_module, "metric_fts_phrase_variants", lambda _metric: None)
+
+    chunks = haystack_store.find_exact_metric_chunks("US revenue")
+    returned = {chunk.chunk_id for chunk in chunks}
+
+    assert expected <= returned
+    assert all(word_phrase_spans("US revenue", chunk.normalized_text) for chunk in chunks)
+
+
 @pytest.mark.asyncio
-async def test_real_corpus_store_parenthesized_value_first_evidence_blocks_absence(haystack_store):
-    reviewable = await probe_metric_absence(haystack_store, "U.S. revenue")
-    no_value_control = await probe_metric_absence(haystack_store, "U.S. headcount")
+@pytest.mark.parametrize("initialism", ["U.S.", "US"])
+async def test_real_corpus_store_parenthesized_value_first_evidence_blocks_absence(
+    haystack_store,
+    initialism,
+):
+    reviewable = await probe_metric_absence(haystack_store, f"{initialism} revenue")
+    no_value_control = await probe_metric_absence(haystack_store, f"{initialism} headcount")
 
     assert reviewable.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert reviewable.supporting_value_candidates

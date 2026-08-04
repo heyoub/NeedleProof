@@ -12,6 +12,7 @@ from typing import Any, Literal
 import numpy as np
 from openai import AsyncOpenAI
 
+from .binding import word_phrase_spans
 from .chunk_ids import ChunkId
 from .config import Settings
 from .corpus import (
@@ -23,7 +24,7 @@ from .corpus import (
     load_current_manifest,
 )
 from .models import ChunkRecord, SearchHit, SearchResult
-from .util import canonical_metric_key, sha256_file, utc_now_iso
+from .util import canonical_metric_key, metric_fts_phrase_variants, sha256_file, utc_now_iso
 from .vector_index import TurboVecAdapter
 
 CallRecorder = Callable[[dict[str, Any]], Awaitable[None]]
@@ -245,21 +246,33 @@ class CorpusStore:
         conclusion.
         """
 
-        phrase = canonical_metric_key(metric)
-        if not phrase:
+        metric_key = canonical_metric_key(metric)
+        phrases = metric_fts_phrase_variants(metric)
+        if phrases == ():
             return []
-        fts_phrase = f'"{phrase.replace(chr(34), chr(34) * 2)}"'
         with closing(sqlite3.connect(self.db_path)) as connection:
-            rows = connection.execute(
-                """
-                SELECT chunk_external_id
-                FROM chunks_fts
-                WHERE chunks_fts MATCH ?
-                ORDER BY rowid
-                """,
-                (fts_phrase,),
-            ).fetchall()
-        return self.get_chunks([row[0] for row in rows])
+            if phrases is None:
+                rows = connection.execute(
+                    "SELECT chunk_external_id FROM chunks ORDER BY internal_id"
+                ).fetchall()
+            else:
+                fts_query = " OR ".join(
+                    f'"{phrase.replace(chr(34), chr(34) * 2)}"' for phrase in phrases
+                )
+                rows = connection.execute(
+                    """
+                    SELECT chunk_external_id
+                    FROM chunks_fts
+                    WHERE chunks_fts MATCH ?
+                    ORDER BY rowid
+                    """,
+                    (fts_query,),
+                ).fetchall()
+        return [
+            chunk
+            for chunk in self.get_chunks([row[0] for row in rows])
+            if word_phrase_spans(metric_key, chunk.normalized_text)
+        ]
 
     async def search(
         self,

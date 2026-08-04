@@ -753,7 +753,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v27-complete-temporal-prefixes"
+    version = "deterministic-verifier-v28-canonical-metric-initialisms"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

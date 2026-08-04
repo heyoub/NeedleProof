@@ -448,6 +448,42 @@ async def test_receipt_recovers_when_terminal_database_update_initially_fails(
 
 
 @pytest.mark.asyncio
+async def test_receipt_download_serves_the_exact_validated_snapshot(tmp_path, monkeypatch):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    created = await service.create_run(
+        RunCreateRequest(question="Serve one validated receipt snapshot", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    receipt_path = Path(str(row["receipt_path"]))
+    original_serialized = receipt_path.read_text(encoding="utf-8")
+    replacement_serialized = '{"replacement":"must not be served"}'
+    original_validation = main_module._validated_receipt
+
+    def replace_file_after_validation(run_row):
+        snapshot, receipt = original_validation(run_row)
+        receipt_path.write_text(replacement_serialized, encoding="utf-8")
+        return snapshot, receipt
+
+    monkeypatch.setattr(main_module, "_validated_receipt", replace_file_after_validation)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(database=database)),
+        state=SimpleNamespace(session_id="alice"),
+    )
+    response = await receipt_json(request, created.run_id)
+
+    assert response.body.decode("utf-8") == original_serialized
+    assert response.body.decode("utf-8") != replacement_serialized
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="needleproof-{created.run_id}.json"'
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_run_returns_retryable_error_while_receipt_recovery_is_unavailable(
     tmp_path, monkeypatch
 ):

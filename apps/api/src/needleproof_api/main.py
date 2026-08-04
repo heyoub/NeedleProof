@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, assert_never
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -22,7 +22,7 @@ from .corpus import load_current_manifest
 from .db import AppDatabase
 from .models import CorpusSummary, RunCreateRequest, RunCreateResponse, RunStatus
 from .readiness import ModelAvailability
-from .receipt import receipt_html, validate_receipt
+from .receipt import SealedReceiptSnapshot, load_sealed_receipt_snapshot, receipt_html
 from .retrieval import CorpusStore
 from .security import (
     PublicUsageLimiter,
@@ -385,7 +385,9 @@ async def run_events(
     )
 
 
-def _integrity_checked_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
+def _integrity_checked_receipt(
+    row: dict[str, object],
+) -> tuple[SealedReceiptSnapshot, dict[str, object]]:
     value = row.get("receipt_path")
     if not value:
         raise HTTPException(status_code=409, detail="Receipt has not been sealed")
@@ -393,36 +395,28 @@ def _integrity_checked_receipt(row: dict[str, object]) -> tuple[Path, dict[str, 
     if not path.exists():
         raise HTTPException(status_code=404, detail="Receipt file is unavailable")
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
+        snapshot = load_sealed_receipt_snapshot(path)
+        receipt = snapshot.decode()
+    except (UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=409,
             detail="Receipt integrity validation failed",
         ) from exc
-    if not isinstance(receipt, dict):
-        raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
-    try:
-        errors = validate_receipt(receipt)
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="Receipt integrity validation failed",
-        ) from exc
-    if errors:
-        raise HTTPException(status_code=409, detail="Receipt integrity validation failed")
-    if receipt.get("receipt_sha256") != row.get("receipt_sha256"):
+    if snapshot.receipt_sha256 != row.get("receipt_sha256"):
         raise HTTPException(status_code=409, detail="Receipt database digest does not match")
-    return path, receipt
+    return snapshot, receipt
 
 
-def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]:
-    path, receipt = _integrity_checked_receipt(row)
+def _validated_receipt(
+    row: dict[str, object],
+) -> tuple[SealedReceiptSnapshot, dict[str, object]]:
+    snapshot, receipt = _integrity_checked_receipt(row)
     if receipt.get("status") != row.get("status"):
         raise HTTPException(
             status_code=409,
             detail="Receipt is awaiting terminal-state reconciliation",
         )
-    return path, receipt
+    return snapshot, receipt
 
 
 def _receipt_reconciliation_state(row: dict[str, object]) -> ReceiptReconciliationState:
@@ -449,14 +443,16 @@ def _terminal_delivery_state(row: dict[str, object] | None) -> TerminalDeliveryS
 
 
 @app.get("/api/runs/{run_id}/receipt.json")
-async def receipt_json(request: Request, run_id: str) -> FileResponse:
+async def receipt_json(request: Request, run_id: str) -> Response:
     row = await _owned_run_row(request, run_id)
-    path, _ = _validated_receipt(row)
-    return FileResponse(
-        path,
+    snapshot, _ = _validated_receipt(row)
+    return Response(
+        content=snapshot.serialized_text,
         media_type="application/json",
-        filename=f"needleproof-{run_id}.json",
-        headers={"X-Robots-Tag": "noindex, nofollow"},
+        headers={
+            "Content-Disposition": f'attachment; filename="needleproof-{run_id}.json"',
+            "X-Robots-Tag": "noindex, nofollow",
+        },
     )
 
 

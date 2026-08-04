@@ -23,7 +23,7 @@ from needleproof_api.models import (
 )
 from needleproof_api.service import _metric_key as service_metric_key
 from needleproof_api.service import compose_authoritative_answer
-from needleproof_api.util import canonical_metric_key
+from needleproof_api.util import canonical_metric_key, metric_fts_phrase_variants
 from needleproof_api.verification import EvidenceVerifier
 from needleproof_api.verification import _canonical_metric as verifier_metric_key
 
@@ -172,6 +172,24 @@ def test_claim_and_absence_probe_share_one_metric_identity_normalizer():
     assert expected == "fee earning aum 2026"
     assert service_metric_key(metric) == expected
     assert verifier_metric_key(metric) == expected
+
+
+def test_initialism_metric_identity_and_fts_variants_share_one_contract():
+    expected = canonical_metric_key("US revenue")
+
+    assert expected == "us revenue"
+    assert canonical_metric_key("U.S. revenue") == expected
+    assert service_metric_key("U.S. revenue") == expected
+    assert verifier_metric_key("U.S. revenue") == expected
+    assert metric_fts_phrase_variants("US revenue") == ("us revenue", "u s revenue")
+    assert metric_fts_phrase_variants("U.S. revenue") == ("us revenue", "u s revenue")
+    assert metric_fts_phrase_variants("us revenue") == ("us revenue",)
+
+
+def test_many_initialisms_fail_over_to_bounded_exhaustive_scan():
+    metric = " ".join(["US"] * 7)
+
+    assert metric_fts_phrase_variants(metric) is None
 
 
 def test_model_search_counts_cannot_authorize_not_found(corpus):
@@ -726,7 +744,8 @@ async def test_probe_uses_normalized_metric_and_next_sentence_binding():
 
 
 @pytest.mark.asyncio
-async def test_abbreviated_metric_survives_absence_context_scanning():
+@pytest.mark.parametrize("probe_metric", ["U.S. revenue", "US revenue"])
+async def test_abbreviated_metric_survives_absence_context_scanning(probe_metric):
     chunk_id = chunk_id_from_uint64(2**63 + 800)
     chunk = ChunkRecord(
         chunk_id=chunk_id,
@@ -761,9 +780,9 @@ async def test_abbreviated_metric_survives_absence_context_scanning():
             scanned_metrics.append(metric)
             return [chunk]
 
-    probe = await probe_metric_absence(Corpus(), "U.S. revenue")
+    probe = await probe_metric_absence(Corpus(), probe_metric)
 
     assert probe.exact_metric_occurrences
-    assert scanned_metrics == ["U.S. revenue"]
+    assert scanned_metrics == [probe_metric]
     assert probe.supporting_value_candidates
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW

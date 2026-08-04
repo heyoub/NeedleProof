@@ -29,9 +29,11 @@ Current regression families include:
 - temporal equivalence, overlap, provable distinction, and exact observation-span binding;
 - conflict locality, modeled/unmodeled operand adjacency, and cross-metric decoys;
 - bounded absence completeness, bidirectional and cross-chunk metric context, and forged-proof mutations;
+- shared metric identity and source-span tokenization, including compact/dotted initialism
+  equivalence without crossing whitespace or sentence boundaries;
 - receipt schema totality, version compatibility, event-chain consistency, provenance, and
-  single-snapshot recovery/serving integrity, including resealed lineage substitutions and
-  complete source-to-target migration identity;
+  single-snapshot recovery/serving integrity, including exact validated-byte HTTP delivery,
+  resealed lineage substitutions, and complete source-to-target migration identity;
 - run lifecycle cancellation, persistence faults, reconciliation, reconnect, and idempotence;
 - opaque identifier serialization, browser ownership isolation, and terminal-state recovery;
 - retrieval ranking, filter behavior, artifact integrity, and real SQLite batching boundaries.
@@ -41,6 +43,8 @@ Current regression families include:
 - Use static types for impossible application states and API/tool boundaries.
 - Use strict Pydantic and JSON Schema validation for decoded or persisted data.
 - Use deterministic runtime checks for evidence, hashes, numeric strings, and lifecycle state.
+- Give every logical identity one shared span-preserving normalizer; verification, retrieval,
+  absence, and receipt code must not grow independent tokenization or file-read laws.
 - Use property tests for large input families and browser tests for JavaScript/network boundaries.
 - Use fixed-point source-digit normalization for reported financial values; do not introduce binary
   floating-point arithmetic where the product requires exact source identity.

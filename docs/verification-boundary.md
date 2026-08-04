@@ -109,8 +109,12 @@ conflict, and a bridge owned by a competing metric proves nothing about the clai
 observations or context evidence can enter the pending server-probe state; mixed drafts remain
 rejected during model self-correction. A post-run server protocol issues
 four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
-complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
-same complete-word matcher used by verification. The protocol records both result sets, opens every
+complete normalized metric. Compact and dotted initialisms such as `US` and `U.S.` share one
+span-preserving token identity; the FTS narrowing query emits both SQLite token representations,
+then the exhaustive scan is filtered again by the same complete-word matcher used by verification.
+Variant generation is capped; a pathologically acronym-heavy metric falls back to a bounded-memory
+full chunk-table scan instead of allocating an exponential query. The exhaustive scan has no top-k
+cutoff. The protocol records both result sets, opens every
 unique candidate plus its source-linked immediate neighbors, and inspects a fixed 384-character
 window on both sides of every complete metric occurrence. When the local text reaches a chunk edge
 without terminal punctuation, the window continues into the loaded neighbor; a missing required
@@ -168,6 +172,9 @@ retained hash-addressed source artifact reproduces the source digest, the source
 and the complete migrated receipt reproduces the record's canonical target digest. That target
 digest covers answer, claims, evidence, events, configuration, and provenance, avoiding a
 default-open field projection. This is an application trust boundary, not a third-party signature.
+Receipt downloads are produced from the same in-memory serialized snapshot whose schema, canonical
+digest, database digest, and terminal status were checked. The HTTP route never reopens the mutable
+path after validation, so a replacement cannot swap different bytes into the response.
 
 ## Static analysis
 

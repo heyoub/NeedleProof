@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 
 from .models import BindingProfile, ObservationKind
-from .util import canonical_json, normalize_evidence_text, sha256_text
+from .util import canonical_json, metric_tokens, normalize_evidence_text, sha256_text
 
 NumericSignature = tuple[str, str, str, str]
 Span = tuple[int, int]
@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v12-explicit-qualitative-negation",
+    "version": "positive-bindings-v13-canonical-initialisms",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -174,7 +174,7 @@ BINDING_CONTRACT_SPEC = {
     "authorized_temporal_anchor_pattern": _AUTHORIZED_TEMPORAL_ANCHOR.pattern,
     "pre_metric_subject": "complete metric or bound leading temporal anchor",
     "metric_phrase_separator_policy": (
-        "bounded_formatting_or_multi_initial_abbreviation_never_clause_punctuation"
+        "shared_span_preserving_tokens_with_dotted_initialisms_and_bounded_formatting"
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
     "explicit_qualitative_negation_pattern": _EXPLICIT_QUALITATIVE_NEGATION.pattern,
@@ -265,34 +265,21 @@ def canonical_word_phrase(value: str) -> str:
 
 
 def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
-    expected = _WORD.findall(needle.casefold())
-    observed = list(_WORD.finditer(haystack.casefold()))
+    expected = metric_tokens(needle)
+    observed = metric_tokens(haystack)
     if not expected:
         return []
     width = len(expected)
     spans = []
     for index in range(len(observed) - width + 1):
         window = observed[index : index + width]
-        if [match.group() for match in window] != expected:
+        if [token.value for token in window] != [token.value for token in expected]:
             continue
-        gaps_are_contiguous = True
-        for offset, (left, right) in enumerate(pairwise(window)):
-            gap = haystack[left.end() : right.start()]
-            if _INTRA_PHRASE_FORMATTING.fullmatch(gap):
-                continue
-            continues_initialism = gap == "." and len(left.group()) == len(right.group()) == 1
-            ends_initialism = (
-                bool(re.fullmatch(r"\.\s*", gap))
-                and len(left.group()) == 1
-                and offset > 0
-                and len(window[offset - 1].group()) == 1
-                and haystack[window[offset - 1].end() : left.start()] == "."
-            )
-            if not (continues_initialism or ends_initialism):
-                gaps_are_contiguous = False
-                break
-        if gaps_are_contiguous:
-            spans.append((window[0].start(), window[-1].end()))
+        if all(
+            _INTRA_PHRASE_FORMATTING.fullmatch(haystack[left.end : right.start])
+            for left, right in pairwise(window)
+        ):
+            spans.append((window[0].start, window[-1].end))
     return spans
 
 

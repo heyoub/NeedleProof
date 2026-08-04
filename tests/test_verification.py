@@ -24,7 +24,7 @@ from needleproof_api.models import (
     VerifiedClaim,
 )
 from needleproof_api.service import compose_authoritative_answer
-from needleproof_api.util import normalize_evidence_text
+from needleproof_api.util import canonical_metric_key, normalize_evidence_text
 from needleproof_api.verification import (
     EvidenceVerifier,
     _compatible_measurements,
@@ -721,11 +721,33 @@ def test_metric_phrase_accepts_only_named_intra_phrase_formatting(separator):
     assert word_phrase_spans("Fee related earnings", assertion)
 
 
-def test_metric_phrase_preserves_multi_initial_abbreviation():
+def test_metric_phrase_normalizes_compact_and_dotted_initialisms():
     assertion = "U.S. revenue was $2 million."
 
-    assert word_phrase_spans("U S revenue", assertion)
-    assert reported_value_linked_to_metric("$2 million", "U.S. revenue", assertion) is not None
+    assert canonical_metric_key("US revenue") == canonical_metric_key("U.S. revenue")
+    assert word_phrase_spans("US revenue", assertion)
+    assert reported_value_linked_to_metric("$2 million", "US revenue", assertion) is not None
+
+
+@given(
+    initialism=st.text(
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+    )
+)
+def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism):
+    dotted = ".".join(initialism) + "."
+    compact_metric = f"{initialism} revenue"
+    dotted_metric = f"{dotted} revenue"
+
+    assert canonical_metric_key(compact_metric) == canonical_metric_key(dotted_metric)
+    assert word_phrase_spans(compact_metric, f"{dotted_metric} was $2 million.")
+    assert word_phrase_spans(dotted_metric, f"{compact_metric} was $2 million.")
+
+
+def test_initialism_normalization_does_not_cross_spaces_or_sentence_boundaries():
+    assert canonical_metric_key("U. S. revenue") != canonical_metric_key("US revenue")
+    assert word_phrase_spans("US revenue", "U. S. revenue was $2 million.") == []
+    assert word_phrase_spans("US revenue", "US. Revenue was $2 million.") == []
 
 
 @pytest.mark.parametrize(
