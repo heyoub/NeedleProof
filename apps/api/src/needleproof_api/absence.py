@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v16-fail-closed-anaphoric-chain"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v17-complete-anaphoric-chain-identity"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -304,7 +304,8 @@ def _join_source_fragments(left: str, right: str) -> str:
 
 
 _ANAPHORIC_SENTENCE_LEAD = re.compile(
-    r"\s*(?:it|this|that|the\s+(?:figure|value|amount|number))\b",
+    r"\s*(?:(?:it|they|this|that|these|those)\b|"
+    r"(?:the|these|those)\s+(?:figures?|values?|amounts?|numbers?)\b)",
     re.IGNORECASE,
 )
 
@@ -382,6 +383,22 @@ def _metric_occurrence_with_open_neighbors(
                 remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
             )
             if not anaphoric_boundaries and chunk.next_chunk_id is not None:
+                following_fragment, following_complete = _linked_following_fragment(
+                    chunk,
+                    chunks_by_id,
+                )
+                after = _join_source_fragments(after, following_fragment)
+                complete = complete and following_complete
+            elif _ANAPHORIC_SENTENCE_LEAD.match(remainder[anaphoric_boundaries[0][1] :]):
+                # One anaphoric continuation is the maximum supported proof
+                # profile. A second coreferential sentence may still own a
+                # value for the metric, so excluding it cannot prove absence.
+                complete = False
+        elif not remainder.strip() and chunk.next_chunk_id is not None:
+            following = chunks_by_id.get(chunk.next_chunk_id)
+            if following is None:
+                complete = False
+            elif _ANAPHORIC_SENTENCE_LEAD.match(following.normalized_text):
                 following_fragment, following_complete = _linked_following_fragment(
                     chunk,
                     chunks_by_id,

@@ -580,6 +580,24 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
             None,
             AbsenceConclusion.INCOMPLETE_PROBE,
         ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. They were $82 billion.",
+            None,
+            AbsenceConclusion.INCOMPLETE_PROBE,
+        ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. These figures were $82 billion.",
+            None,
+            AbsenceConclusion.INCOMPLETE_PROBE,
+        ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. Those values were $82 billion.",
+            None,
+            AbsenceConclusion.INCOMPLETE_PROBE,
+        ),
     ],
 )
 async def test_open_anaphoric_continuation_extends_into_linked_chunk(
@@ -664,6 +682,131 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk(
         absence_probe=forged,
     )
     assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "linked_text",
+    [
+        "It was $82 billion.",
+        "They were $82 billion.",
+        "These figures were $82 billion.",
+        "Those values were $82 billion.",
+    ],
+)
+async def test_metric_at_chunk_end_follows_linked_anaphoric_value(linked_text):
+    metric_id = chunk_id_from_uint64(2**63 + 43)
+    value_id = chunk_id_from_uint64(2**63 + 44)
+    metric_chunk = ChunkRecord(
+        chunk_id=metric_id,
+        document_id="doc_linked_anaphor",
+        document_name="Linked anaphor fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text="Fee-earning AUM.",
+        normalized_text="Fee-earning AUM.",
+        next_chunk_id=value_id,
+        sha256="6" * 64,
+        token_estimate=3,
+    )
+    value_chunk = ChunkRecord(
+        chunk_id=value_id,
+        document_id="doc_linked_anaphor",
+        document_name="Linked anaphor fixture",
+        physical_page_index=1,
+        chunk_position=1,
+        text=linked_text,
+        normalized_text=linked_text,
+        previous_chunk_id=metric_id,
+        sha256="7" * 64,
+        token_estimate=5,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000043"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del query, recorder, top_k
+            return SearchResult(
+                query="Fee-earning AUM",
+                mode=mode,
+                corpus_manifest_sha256="8" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            chunks = []
+            if metric_id in chunk_ids:
+                chunks.append(metric_chunk)
+            if value_id in chunk_ids or (neighbor_radius and metric_id in chunk_ids):
+                chunks.append(value_chunk)
+            return chunks
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Fee-earning AUM"
+            return exact_scan(metric_chunk)
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Fee-earning AUM")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert any(
+        candidate.value_text == "$82 billion" for candidate in probe.supporting_value_candidates
+    )
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "second_lead",
+    ["It was", "They were", "These figures were", "Those values were"],
+)
+async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
+    chunk_id = chunk_id_from_uint64(2**63 + 45)
+    text = f"Fee-earning AUM. It remained at the prior level. {second_lead} $82 billion."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_anaphoric_chain",
+        document_name="Anaphoric chain fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="9" * 64,
+        token_estimate=14,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000045"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del query, recorder, top_k
+            return SearchResult(
+                query="Fee-earning AUM",
+                mode=mode,
+                corpus_manifest_sha256="a" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Fee-earning AUM"
+            return exact_scan(chunk)
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Fee-earning AUM")
+
+    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.INCOMPLETE_PROBE
+    )
 
 
 @pytest.mark.asyncio

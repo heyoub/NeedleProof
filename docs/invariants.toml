@@ -43,6 +43,8 @@ tests = [
   "test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value",
   "test_absence_probe_handles_metric_values_split_across_chunk_edges",
   "test_open_anaphoric_continuation_extends_into_linked_chunk",
+  "test_metric_at_chunk_end_follows_linked_anaphoric_value",
+  "test_second_same_chunk_anaphor_makes_absence_incomplete",
 ]
 
 [[invariant]]
