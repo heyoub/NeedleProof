@@ -121,7 +121,10 @@ class CorpusStore:
         clock = time.perf_counter()
         try:
             if self._openai is None:
-                self._openai = AsyncOpenAI()
+                self._openai = AsyncOpenAI(
+                    max_retries=0,
+                    timeout=min(30.0, self.settings.soft_timeout_seconds),
+                )
             response = await self._openai.embeddings.create(
                 model=self.settings.embedding_model,
                 input=[query],

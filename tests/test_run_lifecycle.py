@@ -187,6 +187,32 @@ async def test_live_cancellation_releases_reserved_model_tokens(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_hard_timeout_covers_the_entire_live_pipeline(tmp_path, monkeypatch):
+    service, database, settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    settings.hard_timeout_seconds = 0.02
+
+    async def blocked_live(_run_id, _request, _session_id, _ledger):
+        # This stands in for any live phase, including the server-owned absence post-pass.
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "_run_live", blocked_live)
+    created = await service.create_run(
+        RunCreateRequest(question="Bound every live phase"),
+        session_id="alice",
+        client_ip="192.0.2.22",
+    )
+    await service._tasks[created.run_id]
+
+    row = await database.get_run_row(created.run_id)
+    assert row is not None
+    assert row["status"] == RunStatus.INCOMPLETE.value
+    assert Path(str(row["receipt_path"])).exists()
+    events = await database.list_events(created.run_id)
+    assert events[-1]["type"] == "run.timeout"
+
+
+@pytest.mark.asyncio
 async def test_run_creation_failure_releases_reservation(tmp_path, monkeypatch):
     service, database, settings = lifecycle_service(tmp_path)
     await database.initialize()

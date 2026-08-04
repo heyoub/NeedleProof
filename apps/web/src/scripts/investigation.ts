@@ -309,7 +309,10 @@ function openEvidence(evidence: Evidence, trigger: HTMLElement): void {
   el<HTMLElement>('evidence-chunk').textContent = `chunk ${evidence.chunk_id}`;
   el<HTMLElement>('evidence-quote').textContent = evidence.quote;
   el<HTMLElement>('evidence-quote-match').textContent = evidence.quote_found ? 'Verified exact match' : 'Rejected';
-  el<HTMLElement>('evidence-value-match').textContent = evidence.value_found ? 'Reported value present' : 'Rejected';
+  el<HTMLElement>('evidence-value-match').textContent =
+    evidence.value_text_found && evidence.metric_value_bound && evidence.value_role_authorized
+      ? `Bound to metric · ${evidence.binding_profile ?? 'verified profile'}`
+      : `Rejected${evidence.binding_failure_reason ? ` · ${evidence.binding_failure_reason}` : ''}`;
   el<HTMLElement>('evidence-sha').textContent = evidence.chunk_sha256;
   el<HTMLIFrameElement>('evidence-pdf').src = evidence.source_url;
   evidenceDialog.showModal();

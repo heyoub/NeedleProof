@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from needleproof_api.receipt import _git_sha, receipt_contract_schema, validate_receipt
 
 
@@ -48,6 +50,23 @@ def test_receipt_validation_is_total_for_arbitrary_json(receipt):
     errors = validate_receipt(receipt)
 
     assert errors
+    assert all(isinstance(error, str) for error in errors)
+
+
+json_scalar = st.none() | st.booleans() | st.integers() | st.text()
+json_value = st.recursive(
+    json_scalar,
+    lambda children: (
+        st.lists(children, max_size=8) | st.dictionaries(st.text(max_size=20), children, max_size=8)
+    ),
+    max_leaves=50,
+)
+
+
+@given(json_value)
+def test_receipt_validation_never_raises_for_recursive_json(value):
+    errors = validate_receipt(value)
+    assert isinstance(errors, list)
     assert all(isinstance(error, str) for error in errors)
 
 

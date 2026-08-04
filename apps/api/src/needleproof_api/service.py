@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from .absence import probe_metric_absence
 from .agent import (
     INSTRUCTION_HASH,
     TOOL_SCHEMA_HASH,
@@ -20,9 +22,7 @@ from .db import AppDatabase
 from .models import (
     ClaimStatus,
     DraftClaim,
-    DraftStatus,
-    EvidenceReference,
-    ReportedValue,
+    DraftObservation,
     RunCreateRequest,
     RunCreateResponse,
     RunEnvelope,
@@ -32,7 +32,7 @@ from .models import (
 from .receipt import RunLedger, validate_receipt
 from .retrieval import CorpusStore
 from .security import PublicUsageLimiter
-from .util import canonical_json, new_run_id, utc_now_iso
+from .util import new_run_id, utc_now_iso
 from .verification import EvidenceVerifier
 
 VERIFIER_VERSION = EvidenceVerifier.version
@@ -45,6 +45,10 @@ TERMINAL_EVENT_TYPES = {
     "run.timeout",
     "run.interrupted",
 }
+
+
+def _metric_key(value: str) -> str:
+    return " ".join(re.findall(r"[^\W_]+", value.casefold()))
 
 
 @dataclass(slots=True)
@@ -362,7 +366,8 @@ class InvestigationService:
                     state = await self._run_rehearsal(run_id, request, ledger)
                 else:
                     soft_timer = asyncio.create_task(self._soft_timeout(ledger))
-                    state = await self._run_live(run_id, request, session_id, ledger)
+                    async with asyncio.timeout(self.settings.hard_timeout_seconds):
+                        state = await self._run_live(run_id, request, session_id, ledger)
         except asyncio.CancelledError:
             error = {"type": "cancelled", "message": "The investigation was cancelled."}
             state = TerminalState(
@@ -450,19 +455,31 @@ class InvestigationService:
             ledger=ledger,
             settings=self.settings,
         )
-        outcome = await asyncio.wait_for(
-            investigate(
-                request.question,
-                context=context,
-                session_id=f"{session_id}:{run_id}",
-            ),
-            timeout=self.settings.hard_timeout_seconds,
+        outcome = await investigate(
+            request.question,
+            context=context,
+            session_id=f"{session_id}:{run_id}",
         )
         await ledger.append("verification.authoritative_started", {})
+        absence_probes = {}
+        for claim in outcome.draft.claims:
+            if not claim.request_absence_probe:
+                continue
+            await ledger.append("absence_probe.started", {"metric": claim.metric})
+            probe = await probe_metric_absence(
+                self.corpus,
+                claim.metric,
+                top_k=8,
+                recorder=ledger.record_openai_call,
+            )
+            absence_probes[_metric_key(claim.metric)] = probe
+            await ledger.append(
+                "absence_probe.completed",
+                probe.model_dump(mode="json"),
+            )
         verification = self.verifier.verify_claims(
             outcome.draft.claims,
-            completed_searches=context.searches,
-            completed_search_records=context.completed_search_records,
+            absence_probes=absence_probes,
         )
         claims = verification.claims
         for claim in claims:
@@ -485,7 +502,11 @@ class InvestigationService:
                 run_id, request.question, status=status, answer=answer, claims=claims
             ),
             event_type=("run.completed" if status == RunStatus.COMPLETED else "run.incomplete"),
-            event_payload={"status": status.value, "authoritative": bool(answer)},
+            event_payload={
+                "status": status.value,
+                "authoritative": status == RunStatus.COMPLETED,
+                "verified_partial_answer_available": bool(answer),
+            },
             trace_id=outcome.trace_id,
         )
 
@@ -501,7 +522,7 @@ class InvestigationService:
             raise ValueError(
                 "Rehearsal receipt failed integrity validation: " + "; ".join(validation_errors)
             )
-        if receipt.get("schema_version") != "1.2":
+        if receipt.get("schema_version") != "1.3":
             raise ValueError("Rehearsal receipt uses an unsupported schema version")
         if receipt.get("status") != RunStatus.COMPLETED.value:
             raise ValueError("Rehearsal source receipt must be completed")
@@ -520,48 +541,41 @@ class InvestigationService:
 
         draft_claims: list[DraftClaim] = []
         source_statuses: list[str] = []
-        status_map: dict[str, DraftStatus] = {
-            ClaimStatus.VERIFIED.value: "supported",
-            ClaimStatus.CONFLICT.value: "conflict",
-            ClaimStatus.DATE_VARIANT.value: "date_variant",
-            ClaimStatus.NOT_FOUND.value: "not_found",
+        authoritative_statuses = {
+            ClaimStatus.VERIFIED.value,
+            ClaimStatus.CONFLICT.value,
+            ClaimStatus.DATE_VARIANT.value,
+            ClaimStatus.NOT_FOUND.value,
         }
         for source_claim in receipt.get("claims", []):
             source_status = str(source_claim.get("status"))
-            if source_status not in status_map:
+            if source_status not in authoritative_statuses:
                 raise ValueError(
                     f"Rehearsal source contains non-authoritative claim {source_status!r}"
                 )
-            values = [
-                ReportedValue.model_validate(value) for value in source_claim.get("values", [])
+            source_observations = source_claim.get("observations")
+            if not isinstance(source_observations, list):
+                raise TypeError("Rehearsal source claim has no typed observations")
+            observations = [
+                DraftObservation.model_validate(observation) for observation in source_observations
             ]
-            references: list[EvidenceReference] = []
-            for value in values:
-                references.extend(value.evidence)
             draft_claims.append(
                 DraftClaim(
                     metric=source_claim["metric"],
-                    status=status_map[source_status],
-                    values=values,
-                    evidence=references,
+                    observations=observations,
+                    request_absence_probe=source_status == ClaimStatus.NOT_FOUND.value,
                 )
             )
             source_statuses.append(source_status)
 
-        completed_searches = sum(
-            event.get("type") == "tool.search.completed" for event in receipt.get("events", [])
-        )
+        absence_probes = {}
+        for claim in draft_claims:
+            if claim.request_absence_probe:
+                probe = await probe_metric_absence(self.corpus, claim.metric, top_k=8)
+                absence_probes[_metric_key(claim.metric)] = probe
         verification = self.verifier.verify_claims(
             draft_claims,
-            completed_searches=completed_searches,
-            completed_search_records=[
-                {
-                    **(event.get("payload", {}).get("arguments") or {}),
-                    "signature": canonical_json(event.get("payload", {}).get("arguments") or {}),
-                }
-                for event in receipt.get("events", [])
-                if event.get("type") == "tool.search.completed"
-            ],
+            absence_probes=absence_probes,
         )
         if not verification.all_claims_authoritative:
             raise ValueError("Rehearsal evidence failed current deterministic verification")
@@ -585,7 +599,11 @@ class InvestigationService:
                 continue
             await ledger.append(event["type"], {**event.get("payload", {}), "replayed": True})
         answer = compose_authoritative_answer(
-            verification.claims, completed_searches, self.corpus.corpus_version
+            verification.claims,
+            sum(
+                event.get("type") == "tool.search.completed" for event in receipt.get("events", [])
+            ),
+            self.corpus.corpus_version,
         )
         envelope = self._envelope(
             run_id,

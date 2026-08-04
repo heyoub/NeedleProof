@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import os
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import __version__
+from .absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
+from .binding import BINDING_CONTRACT_SHA256, NUMERIC_CONTRACT_SHA256
 from .config import Settings
 from .corpus import load_current_manifest
 from .db import AppDatabase
@@ -19,6 +22,8 @@ from .util import atomic_write_text, canonical_json, sha256_file, sha256_text, u
 
 
 def _git_sha() -> str | None:
+    if configured := os.getenv("NEEDLEPROOF_GIT_SHA"):
+        return configured
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -44,9 +49,21 @@ class ReceiptConfiguration(BaseModel):
     retrieval_modes: list[str]
     parallel_tool_calls: bool
     max_turns: int
+    max_tool_calls: int
+    max_searches: int
+    max_top_k: int
+    max_opened_chunks: int
+    max_opened_tokens: int
+    max_document_inspections: int
+    max_inspection_pages: int
+    max_inspection_characters: int
+    soft_timeout_seconds: float
+    hard_timeout_seconds: float
     max_model_output_tokens_per_call: int = 8_000
     model_token_reservation_per_run: int = 100_000
     trace_include_sensitive_data: bool
+    openai_client_max_retries: int
+    tool_execution_concurrency: int
 
 
 class ReceiptProvenance(BaseModel):
@@ -58,6 +75,11 @@ class ReceiptProvenance(BaseModel):
     agent_instruction_hash: str
     tool_schema_hash: str
     verifier_version: str
+    binding_contract_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    numeric_contract_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    absence_protocol_version: str
+    absence_protocol_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    image_revision: str | None
     trace_id: str | None
     sealed_at: str
     event_chain_head: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -105,7 +127,7 @@ class ReceiptOpenAICall(BaseModel):
 class ReceiptContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.2"]
+    schema_version: Literal["1.3"]
     run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
     status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
     question: str
@@ -217,11 +239,17 @@ class RunLedger:
         openai_calls = await self.database.list_openai_calls(self.run_id)
         corpus_manifest = self._corpus_manifest or load_current_manifest(self.settings)
         lock_digests = {}
+        injected_locks = {
+            "uv.lock": os.getenv("NEEDLEPROOF_UV_LOCK_SHA256"),
+            "pnpm-lock.yaml": os.getenv("NEEDLEPROOF_PNPM_LOCK_SHA256"),
+        }
         for lock_path in (Path("uv.lock"), Path("pnpm-lock.yaml")):
             if lock_path.exists():
                 lock_digests[lock_path.name] = sha256_file(lock_path)
+            elif injected_locks[lock_path.name]:
+                lock_digests[lock_path.name] = str(injected_locks[lock_path.name])
         receipt: dict[str, Any] = {
-            "schema_version": "1.2",
+            "schema_version": "1.3",
             "run_id": envelope.run_id,
             "status": envelope.status.value,
             "question": envelope.question,
@@ -243,9 +271,21 @@ class RunLedger:
                 "retrieval_modes": corpus_manifest["retrieval"],
                 "parallel_tool_calls": False,
                 "max_turns": self.settings.max_turns,
+                "max_tool_calls": self.settings.max_tool_calls,
+                "max_searches": self.settings.max_searches,
+                "max_top_k": self.settings.max_top_k,
+                "max_opened_chunks": self.settings.max_opened_chunks,
+                "max_opened_tokens": self.settings.max_opened_tokens,
+                "max_document_inspections": self.settings.max_document_inspections,
+                "max_inspection_pages": self.settings.max_inspection_pages,
+                "max_inspection_characters": self.settings.max_inspection_characters,
+                "soft_timeout_seconds": self.settings.soft_timeout_seconds,
+                "hard_timeout_seconds": self.settings.hard_timeout_seconds,
                 "max_model_output_tokens_per_call": self.settings.max_model_output_tokens_per_call,
                 "model_token_reservation_per_run": self.settings.model_token_reservation_per_run,
                 "trace_include_sensitive_data": self.settings.trace_include_sensitive_data,
+                "openai_client_max_retries": 0,
+                "tool_execution_concurrency": 1,
             },
             "provenance": {
                 "application_version": __version__,
@@ -254,6 +294,11 @@ class RunLedger:
                 "agent_instruction_hash": instruction_hash,
                 "tool_schema_hash": tool_schema_hash,
                 "verifier_version": verifier_version,
+                "binding_contract_sha256": BINDING_CONTRACT_SHA256,
+                "numeric_contract_sha256": NUMERIC_CONTRACT_SHA256,
+                "absence_protocol_version": ABSENCE_PROTOCOL_VERSION,
+                "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
+                "image_revision": os.getenv("NEEDLEPROOF_IMAGE_REVISION"),
                 "trace_id": trace_id,
                 "sealed_at": utc_now_iso(),
                 "event_chain_head": events[-1]["event_hash"] if events else "0" * 64,
@@ -290,13 +335,16 @@ def receipt_html(receipt: dict[str, Any]) -> str:
         f"<li><code>{escaped(event.get('sequence'))}</code> {escaped(event.get('type'))}</li>"
         for event in receipt.get("events", [])
     )
+    answer_heading = (
+        "Authoritative answer" if receipt.get("status") == "completed" else "Verified findings"
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>NeedleProof receipt {escaped(receipt.get("run_id"))}</title>
 <style>body{{font:16px/1.55 system-ui;max-width:920px;margin:3rem auto;padding:0 1.25rem;background:#f4f0e8;color:#171714}}article,blockquote{{border:1px solid #b9b2a5;padding:1rem;margin:1rem 0;background:#fffdf8}}code,.status{{font:12px ui-monospace;color:#0b6b50}}h1{{font-family:Georgia,serif}}dt{{font-weight:700}}dd{{margin:0 0 1rem}}</style>
 </head><body><p>NeedleProof / sealed evidence receipt</p><h1>{escaped(receipt.get("question"))}</h1>
 <dl><dt>Run</dt><dd>{escaped(receipt.get("run_id"))}</dd><dt>Corpus digest</dt><dd><code>{escaped(receipt.get("corpus_manifest_sha256"))}</code></dd><dt>Receipt digest</dt><dd><code>{escaped(receipt.get("receipt_sha256"))}</code></dd></dl>
-<h2>Authoritative answer</h2><p>{escaped(receipt.get("answer"))}</p>{"".join(claim_cards)}
+<h2>{answer_heading}</h2><p>{escaped(receipt.get("answer"))}</p>{"".join(claim_cards)}
 <h2>Execution ledger</h2><ol>{events}</ol></body></html>"""
 
 
@@ -326,9 +374,12 @@ def validate_receipt(receipt: object) -> list[str]:
         return errors
 
     previous_hash = "0" * 64
-    for event in events:
+    for expected_sequence, event in enumerate(events, start=1):
         if not isinstance(event, dict):
             errors.append("Receipt contract violation at events: every event must be an object.")
+            break
+        if event.get("sequence") != expected_sequence:
+            errors.append("Receipt event sequences must be contiguous and start at 1.")
             break
         if event.get("previous_hash") != previous_hash:
             errors.append(f"Event {event.get('sequence')} has a broken previous-hash link.")
@@ -352,4 +403,63 @@ def validate_receipt(receipt: object) -> list[str]:
         errors.append("Receipt contract violation at provenance: input must be an object.")
     elif provenance.get("event_chain_head") != previous_hash:
         errors.append("Provenance event-chain head does not match the final ledger event.")
+
+    openai_calls = receipt.get("openai_calls")
+    if isinstance(openai_calls, list) and any(
+        not isinstance(call, dict) or call.get("sequence") != sequence
+        for sequence, call in enumerate(openai_calls, start=1)
+    ):
+        errors.append("OpenAI call sequences must be contiguous and start at 1.")
+
+    status = receipt.get("status")
+    expected_terminal_event = {
+        "completed": "run.completed",
+        "incomplete": "run.incomplete",
+        "cancelled": "run.cancelled",
+        "failed": "run.failed",
+        "interrupted": "run.interrupted",
+    }.get(status)
+    terminal_events = [
+        event.get("type")
+        for event in events
+        if isinstance(event, dict)
+        and str(event.get("type", "")).startswith("run.")
+        and event.get("type") != "run.started"
+    ]
+    if expected_terminal_event and (
+        not terminal_events or terminal_events[-1] != expected_terminal_event
+    ):
+        errors.append("Receipt status does not agree with its final terminal event.")
+    claims = receipt.get("claims")
+    if status == "completed":
+        answer = receipt.get("answer")
+        if not isinstance(answer, str) or not answer.strip():
+            errors.append("A completed receipt requires a nonempty authoritative answer.")
+        if (
+            not isinstance(claims, list)
+            or not claims
+            or any(
+                not isinstance(claim, dict)
+                or claim.get("status") not in {"verified", "conflict", "date_variant", "not_found"}
+                for claim in claims
+            )
+        ):
+            errors.append("A completed receipt requires only authoritative claims.")
+    corpus_version = receipt.get("corpus_version")
+    if isinstance(claims, list):
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            claim_evidence = claim.get("evidence")
+            if not isinstance(claim_evidence, list):
+                continue
+            for evidence in claim_evidence:
+                if not isinstance(evidence, dict):
+                    continue
+                if not evidence.get("chunk_sha256"):
+                    errors.append("Every receipt evidence item requires a chunk digest.")
+                if corpus_version and f"/api/corpora/{corpus_version}/" not in str(
+                    evidence.get("source_url", "")
+                ):
+                    errors.append("Every evidence source URL must bind the receipt corpus version.")
     return errors

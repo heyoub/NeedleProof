@@ -80,16 +80,16 @@ The longer diagram and trust boundaries are in [docs/architecture.md](docs/archi
 
 ## Verification model
 
-The model produces structured evidence components rather than a publishable proposition. It must copy a canonical metric anchor, exact value, optional exact temporal anchor, evidence relation, and contiguous quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from those verified fields; the model's draft prose is never published. The verifier checks source integrity and a conservative lexical binding contract—not arbitrary English entailment—and leaves ambiguous syntax unverified. See [the verification boundary](docs/verification-boundary.md).
+The model produces typed observations rather than a publishable proposition or proposed verdict. It must copy a canonical metric anchor, the smallest contiguous assertion containing the relationship, exact value, observation kind, optional exact temporal anchor, evidence relation, and enclosing quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from verified observations; the model's draft prose is never published. The verifier checks source integrity and a closed positive-binding contract—not arbitrary English entailment—and leaves unknown syntax and unauthorized value roles unverified. See [the verification boundary](docs/verification-boundary.md).
 
 Verification checks include:
 
-- contiguous quote presence after Unicode normalization, whitespace folding, and PDF line-break dehyphenation
+- contiguous quote and assertion presence after Unicode NFKC, whitespace folding, PDF line-break dehyphenation, and recorded case-folded comparison
 - chunk membership in the current corpus version
-- metric-anchor identity plus currency, magnitude, percentages, basis points, units, and exact temporal anchors
+- metric-anchor identity plus an authorized direct/anaphoric binding profile, explicit value role, currency, magnitude, percentages, basis points, units, and span-bound temporal anchors
 - supporting evidence for every accepted value; contextual or contradicting evidence cannot authorize a claim by itself
 - explicit contradiction language versus legitimate differences in reporting dates
-- four successful, meaningfully distinct searches before accepting a bounded `not_found` conclusion
+- a server-owned four-probe absence protocol that opens every unique candidate and refuses `not_found` when a metric-adjacent value needs review
 
 A rejected claim is removed from the authoritative answer. A timeout, cancellation, invalid structured response, tool failure, or rate limit seals a non-authoritative partial receipt instead.
 
@@ -100,8 +100,8 @@ Every sealed receipt includes:
 - ordered search/read/inspect/verify events and their hash chain
 - TurboVec IDs, dense/lexical ranks, scores, pages, previews, timings, and chunk hashes
 - exact selected quotations plus quote/value verification outcomes
-- all model and embedding calls, response/request IDs when available, token use, retries, and sanitized errors
-- corpus manifest digest, agent-instruction hash, tool-schema hash, verifier version, Git SHA, dependency-lock digests, and runtime configuration
+- all model and embedding calls, response/request IDs when available, token use, observable retry counts, and sanitized errors; hidden client retries are disabled
+- corpus manifest digest, agent-instruction/tool-schema/binding/absence hashes, verifier version, Git/image revision, dependency-lock digests, and all material runtime limits
 
 Receipts are application-sealed and integrity-checked, not cryptographically signed for third-party authentication. The expected digest is stored independently in SQLite, and JSON/HTML is revalidated whenever it is served or replayed.
 

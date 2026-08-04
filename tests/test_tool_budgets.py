@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from needleproof_api.agent import InvestigationContext, build_agent
 from needleproof_api.config import Settings
-from needleproof_api.models import ClaimStatus, DraftClaim
+from needleproof_api.models import ClaimStatus, DraftClaim, SearchResult
 from needleproof_api.verification import EvidenceVerifier
 
 
@@ -28,16 +28,28 @@ def search_arguments(query: str = "total headcount") -> dict[str, object]:
     }
 
 
+def complete_search(state: InvestigationContext, arguments: dict[str, object]) -> None:
+    state.complete_search(
+        arguments,
+        SearchResult(
+            query=str(arguments["query"]),
+            mode=str(arguments["mode"]),  # type: ignore[arg-type]
+            results=[],
+            corpus_manifest_sha256=state.corpus.manifest_sha256,
+        ),
+    )
+
+
 def test_duplicate_searches_do_not_authorize_not_found(corpus):
     state = context(Settings(max_searches=4), corpus)
     for _ in range(4):
         state.begin_search()
-        state.complete_search(search_arguments())
+        complete_search(state, search_arguments())
 
     assert state.attempted_searches == 4
     assert state.completed_searches == 4
     assert state.searches == 1
-    claim = DraftClaim(metric="total headcount", status="not_found")
+    claim = DraftClaim(metric="total headcount", request_absence_probe=True)
     verified = state.verifier.verify_claim(
         claim,
         completed_searches=state.searches,
@@ -55,7 +67,7 @@ def test_punctuation_and_token_order_variants_are_one_search(corpus):
         "total... headcount",
     ):
         state.begin_search()
-        state.complete_search(search_arguments(query))
+        complete_search(state, search_arguments(query))
 
     assert state.completed_searches == 4
     assert state.searches == 1
@@ -73,7 +85,7 @@ def test_rejected_fifth_search_does_not_increment_attempt_count(corpus):
     state = context(Settings(max_searches=4), corpus)
     for index in range(4):
         state.begin_search()
-        state.complete_search(search_arguments(f"headcount wording {index}"))
+        complete_search(state, search_arguments(f"headcount wording {index}"))
 
     with pytest.raises(ValueError, match="Search limit"):
         state.begin_search()
@@ -88,9 +100,9 @@ def test_searches_for_another_metric_do_not_authorize_not_found(corpus):
         arguments = search_arguments(f"assets under management wording {index}")
         arguments["metric"] = "total headcount"
         state.begin_search()
-        state.complete_search(arguments)
+        complete_search(state, arguments)
 
-    claim = DraftClaim(metric="total headcount", status="not_found")
+    claim = DraftClaim(metric="total headcount", request_absence_probe=True)
     verified = state.verifier.verify_claim(
         claim,
         completed_searches=state.searches,
@@ -105,9 +117,9 @@ def test_scoped_searches_do_not_authorize_corpus_wide_not_found(corpus):
         arguments = search_arguments(f"total headcount wording {index}")
         arguments["document_ids"] = ["doc_outside_scope"]
         state.begin_search()
-        state.complete_search(arguments)
+        complete_search(state, arguments)
 
-    claim = DraftClaim(metric="total headcount", status="not_found")
+    claim = DraftClaim(metric="total headcount", request_absence_probe=True)
     verified = state.verifier.verify_claim(
         claim,
         completed_searches=state.searches,

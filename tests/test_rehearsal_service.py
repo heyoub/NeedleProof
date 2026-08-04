@@ -177,8 +177,13 @@ async def test_rehearsal_rejects_untrusted_or_stale_source_receipts(tmp_path, mu
         reseal_receipt(source)
     else:
         claim = next(claim for claim in source["claims"] if claim["status"] == "verified")
-        claim["values"][0]["value"] = "$346 million"
-        claim["values"][0]["evidence"][0]["exact_quote"] = "Fee-related earnings were $346 million."
+        claim["observations"][0]["value_text"] = "$346 million"
+        claim["observations"][0]["evidence"][0]["exact_quote"] = (
+            "Fee-related earnings were $346 million."
+        )
+        claim["observations"][0]["evidence"][0]["exact_assertion"] = (
+            "Fee-related earnings were $346 million."
+        )
         reseal_receipt(source)
     (tmp_path / "rehearsal" / "featured.json").write_text(
         json.dumps(source, indent=2) + "\n", encoding="utf-8"

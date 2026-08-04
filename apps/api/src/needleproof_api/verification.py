@@ -1,545 +1,99 @@
 from __future__ import annotations
 
+import calendar
 import re
-from collections.abc import Iterable, Sequence
-from decimal import Decimal, InvalidOperation
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import date
 
+from .binding import (
+    BINDING_CONTRACT_SHA256,
+    BindingMatch,
+    bind_observation,
+    canonical_numeric_signature,
+    numeric_signature_sequence,
+    numeric_signatures,
+)
 from .chunk_ids import ChunkId
 from .models import (
+    AbsenceConclusion,
+    AbsenceProbeResult,
     ClaimStatus,
     DraftClaim,
+    DraftObservation,
     EvidenceReference,
     EvidenceRelation,
     EvidenceVerificationResult,
-    ReportedValue,
+    ObservationKind,
     VerifiedClaim,
     VerifiedEvidence,
 )
 from .retrieval import CorpusStore
 from .util import evidence_text_contains, normalize_evidence_text
 
-_NUMERIC = re.compile(
-    r"(?P<open>\()?\s*(?P<sign_before>[+-])?\s*(?P<currency>[$£€])?\s*"
-    r"(?P<sign_after>[+-])?\s*(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*"
-    r"(?P<unit>billion|million|thousand|basis\s+points?|bps|percent|%|per\s+share)?"
-    r"\s*(?P<close>\))?",
-    re.IGNORECASE,
-)
-_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
-_ANAPHORIC_SENTENCE = re.compile(r"^(?:by|at|as\s+of|the\s+figure|it|this|that)\b")
-_ANAPHORIC_METRIC = re.compile(r"^(?:the\s+figure|it|this|that)\b")
-_POST_VALUE_ANAPHORA = re.compile(r"^(?:which|who|whose|where|when|the\s+figure|it|this|that)\b")
-_POST_VALUE_CONTEXT = re.compile(
-    r"^(?:about|approximately|around|down|from|nearly|roughly|up|versus|vs\.?|"
-    r"compared\s+(?:with|to))\b"
-)
-_COMPARISON_AMOUNT_PREFIX = re.compile(
-    r"(?:\(|,)\s*(?:(?:up|down)\s+from|compared\s+(?:with|to)|versus|vs\.?)\s*$"
-)
-_VALUE_FIRST_SENTENCE = re.compile(r"^(?:by|at|as\s+of)\b")
-_VALUE_FIRST_TEMPORAL_PREFIX = re.compile(
-    r"^(?:at|as\s+of|by)\s+(?:(?:the\s+)?(?:year|quarter|month|period)\s+end|"
-    r"(?:the\s+)?end\s+of\s+(?:the\s+)?(?:year|quarter|month|period))\b\s*"
-)
-_SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
-# Candidate boundaries are filtered structurally below so an elided predicate such as
-# ``but still reached`` keeps the preceding subject.
-_PREDICATE_CLAUSE_BOUNDARY = re.compile(
-    r"\s*(?P<boundary>;|[—–]|\b(?:after|although|before|because|but|if|nor|once|or|"
-    r"since|though|unless|until|when|whenever|whereas|while|yet)\b)\s*"
-)
-_VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
-_PARENTHETICAL_MODIFIER = re.compile(
-    r"^\s*(?:adjusted\s+for|after|before|despite|excluding|including|net\s+of|"
-    r"which|who|whose|where|with|without)\b"
-)
-_PARENTHETICAL_SPAN = re.compile(r"\((?P<body>[^()]*)\)")
 _WORD = re.compile(r"[^\W_]+")
-_PARTICIPIAL_CONTINUATIONS = frozenset(
-    {
-        "decreasing",
-        "ending",
-        "excluding",
-        "falling",
-        "generating",
-        "including",
-        "increasing",
-        "reaching",
-        "representing",
-        "rising",
-        "settling",
-        "totaling",
-        "totalling",
-    }
-)
-_PARTICIPIAL_ADVERBS = frozenset({"thereby"})
-_SUBJECT_CONTINUATIONS = frozenset(
-    {
-        "about",
-        "amounted",
-        "approximately",
-        "are",
-        "around",
-        "as",
-        "at",
-        "by",
-        "closed",
-        "declined",
-        "decreased",
-        "ended",
-        "fell",
-        "from",
-        "generated",
-        "grew",
-        "had",
-        "has",
-        "have",
-        "increased",
-        "is",
-        "just",
-        "nearly",
-        "now",
-        "of",
-        "only",
-        "reached",
-        "remained",
-        "reported",
-        "rose",
-        "roughly",
-        "stood",
-        "still",
-        "then",
-        "to",
-        "totaled",
-        "totalled",
-        "was",
-        "were",
-    }
-)
-_PREDICATE_VERBS = frozenset(
-    {
-        "amounted",
-        "are",
-        "closed",
-        "declined",
-        "decreased",
-        "ended",
-        "fell",
-        "generated",
-        "grew",
-        "had",
-        "has",
-        "have",
-        "increased",
-        "is",
-        "reached",
-        "remained",
-        "reported",
-        "rose",
-        "stood",
-        "totaled",
-        "totalled",
-        "was",
-        "were",
-    }
+_MONTHS = {month.casefold(): index for index, month in enumerate(calendar.month_name) if month}
+_EXPLICIT_CONFLICT_PHRASES = (
+    "cannot be right",
+    "incompatible",
+    "introduced the error",
+    "unresolved conflict",
 )
 
 
-def _numeric_signature(match: re.Match[str]) -> tuple[str, str, str, str]:
-    parenthesized = bool(match.group("open") and match.group("close"))
-    explicit_sign = match.group("sign_before") or match.group("sign_after")
-    sign = "-" if parenthesized or explicit_sign == "-" else "+"
-    currency = match.group("currency") or ""
-    number = match.group("number").replace(",", "")
-    unit = re.sub(r"\s+", " ", (match.group("unit") or "").lower())
-    return sign, currency, number, unit
+@dataclass(frozen=True, slots=True)
+class _VerifiedObservation:
+    observation: DraftObservation
+    evidence: tuple[VerifiedEvidence, ...]
+    authorized: bool
 
 
-def numeric_signatures(text: str) -> set[tuple[str, str, str, str]]:
-    signatures: set[tuple[str, str, str, str]] = set()
-    for match in _NUMERIC.finditer(text):
-        signatures.add(_numeric_signature(match))
-    return signatures
-
-
-def _numeric_signature_sequence(text: str) -> tuple[tuple[str, str, str, str], ...]:
-    return tuple(_numeric_signature(match) for match in _NUMERIC.finditer(text))
-
-
-def _word_phrase_spans(needle: str, haystack: str) -> list[tuple[int, int]]:
-    expected = _WORD.findall(needle.casefold())
-    observed = list(_WORD.finditer(haystack.casefold()))
-    if not expected:
-        return []
-    width = len(expected)
-    return [
-        (observed[index].start(), observed[index + width - 1].end())
-        for index in range(len(observed) - width + 1)
-        if [match.group() for match in observed[index : index + width]] == expected
-    ]
+def _canonical_metric(value: str) -> str:
+    normalized, _ = normalize_evidence_text(value)
+    return " ".join(_WORD.findall(normalized.casefold()))
 
 
 def _word_phrase_found(needle: str, haystack: str) -> bool:
-    return bool(_word_phrase_spans(needle, haystack))
+    expected = _WORD.findall(needle.casefold())
+    observed = _WORD.findall(haystack.casefold())
+    width = len(expected)
+    return bool(
+        expected
+        and any(
+            observed[index : index + width] == expected
+            for index in range(len(observed) - width + 1)
+        )
+    )
 
 
 def reported_value_found(value: str, quote: str) -> bool:
+    """Return whether the exact qualitative phrase or numeric signature occurs."""
+
     normalized_value, _ = normalize_evidence_text(value)
     normalized_quote, _ = normalize_evidence_text(quote)
-    if not normalized_value:
-        return False
     expected = numeric_signatures(normalized_value)
     if expected:
-        observed = numeric_signatures(normalized_quote)
-        return expected.issubset(observed)
+        return expected.issubset(numeric_signatures(normalized_quote))
     return _word_phrase_found(normalized_value, normalized_quote)
 
 
-def _first_matching_measure_spans(
-    text: str,
-    expected: Sequence[tuple[str, str, str, str]],
+def reported_value_linked_to_metric(
+    value: str,
+    metric_anchor: str,
+    quote: str,
     *,
-    start: int = 0,
-) -> list[tuple[int, int]] | None:
-    observed = [
-        (_numeric_signature(match), (match.start(), match.end()))
-        for match in _NUMERIC.finditer(text, pos=start)
-    ]
-    spans: list[tuple[int, int]] = []
-    observed_index = 0
-    comparison_end: int | None = None
-    for target in expected:
-        while observed_index < len(observed):
-            signature, span = observed[observed_index]
-            observed_index += 1
-            if signature[1] != target[1] or signature[3] != target[3]:
-                continue
-            if signature == target:
-                if comparison_end is not None:
-                    continuation = text[comparison_end : span[0]].strip(" \t,:;()-")
-                    if not _continues_metric_subject(continuation):
-                        return None
-                spans.append(span)
-                comparison_end = None
-                break
-            if _COMPARISON_AMOUNT_PREFIX.search(text[: span[0]]):
-                comparison_end = span[1]
-                continue
-            return None
-        else:
-            return None
-    return spans if expected else None
+    kind: ObservationKind = ObservationKind.REPORTED_LEVEL,
+    temporal_anchor: str | None = None,
+) -> BindingMatch | None:
+    """Return the proved positive binding, never an absence-of-known-errors guess."""
 
-
-def _subject_refers_to_metric(subject: str, metric: str) -> bool:
-    for metric_start, _metric_end in _metric_occurrence_spans(subject, metric):
-        prefix_words = _WORD.findall(subject[:metric_start])
-        if not prefix_words or all(word in {"a", "an", "the"} for word in prefix_words):
-            return True
-    return any(
-        not _WORD.findall(subject[match.end() :]) for match in _SUBJECT_ANAPHORA.finditer(subject)
-    )
-
-
-def _text_introduces_competing_subject(text: str, metric: str) -> bool:
-    normalized = _VALUE_FIRST_TEMPORAL_PREFIX.sub("", text.strip(" \t,:;()-"))
-    for clause in _VALUE_ASSOCIATION_SEPARATOR.split(normalized):
-        words = list(_WORD.finditer(clause))
-        predicate = next(
-            (
-                word
-                for index, word in enumerate(words)
-                if index > 0 and word.group() in _PREDICATE_VERBS
-            ),
-            None,
-        )
-        if predicate is None:
-            if words and not _continues_metric_subject(clause):
-                return True
-            continue
-        subject = clause[: predicate.start()].strip()
-        if _subject_refers_to_metric(subject, metric):
-            continue
-        return True
-    return False
-
-
-def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -> bool:
-    """Detect a new explicit subject after a value-first continuation."""
-
-    tail = text[value_end:].strip(" \t,:;()-")
-    tail = re.sub(r"^(?:and|but)\s+", "", tail)
-    while _POST_VALUE_CONTEXT.match(tail):
-        # A comparison is contextual, but text after its comma still belongs to
-        # the assertion and may introduce a different metric. Strip only the
-        # comparison segment, then keep checking the remainder.
-        _context, separator, remainder = tail.partition(",")
-        if not separator:
-            return False
-        tail = remainder.strip(" \t,:;()-")
-    if not tail or _POST_VALUE_ANAPHORA.match(tail) or _subject_refers_to_metric(tail, metric):
-        return False
-    # A value-first continuation has already supplied its value. Any remaining
-    # unrecognized noun phrase is therefore a new explicit subject regardless
-    # of which predicate verb follows it. Fail closed instead of maintaining an
-    # open-ended verb whitelist.
-    return bool(_WORD.findall(tail))
-
-
-def _continues_metric_subject(value: str) -> bool:
-    normalized = value.strip().casefold()
-    if _ANAPHORIC_METRIC.match(normalized):
-        return True
-    words = _WORD.findall(normalized)
-    predicate_words = words
-    while predicate_words and (
-        predicate_words[0].endswith("ly") or predicate_words[0] in _PARTICIPIAL_ADVERBS
-    ):
-        predicate_words = predicate_words[1:]
-    return (
-        not words
-        or (
-            bool(predicate_words)
-            and predicate_words[0] in _PARTICIPIAL_CONTINUATIONS
-            and not any(
-                index > 1 and word in _PREDICATE_VERBS for index, word in enumerate(predicate_words)
-            )
-        )
-        or all(word in _SUBJECT_CONTINUATIONS for word in words)
-    )
-
-
-def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
-    boundaries: list[re.Match[str]] = []
-    for boundary in _PREDICATE_CLAUSE_BOUNDARY.finditer(sentence):
-        following = sentence[boundary.end() :]
-        if boundary.group("boundary") in {"because", "since"} and re.match(
-            r"^(?:of|due\s+to|as\s+a\s+result\s+of)\b",
-            following,
-        ):
-            continue
-        if boundary.group("boundary") == "since" and "," in following:
-            temporal_modifier, continuation = following.rsplit(",", 1)
-            modifier_words = _WORD.findall(temporal_modifier.casefold())
-            if not any(
-                word in _PREDICATE_VERBS for word in modifier_words
-            ) and _continues_metric_subject(continuation):
-                continue
-        numeric = _NUMERIC.search(following)
-        continuation_prefix = following[: numeric.start()] if numeric else following
-        if boundary.group("boundary") in {";", "—", "–"}:
-            if not _continues_metric_subject(continuation_prefix):
-                boundaries.append(boundary)
-            continue
-        if not _continues_metric_subject(continuation_prefix):
-            boundaries.append(boundary)
-    return boundaries
-
-
-def _value_retains_metric_subject(
-    text: str,
-    metric_end: int,
-    value_start: int,
-    metric: str,
-) -> bool:
-    """Fail closed when punctuation introduces a different metric before a value.
-
-    Separator-delimited text may continue the original metric only with a trusted
-    predicate, modifier, or anaphoric reference. Once an explicit competing subject
-    appears, later anaphora continues that newer subject and cannot restore the
-    original metric.
-    """
-
-    between = text[metric_end:value_start]
-    if between.count("(") > between.count(")"):
-        # The value is inside an intervening parenthetical rather than in the
-        # outer metric's predicate. Fail closed instead of crossing that scope.
-        return False
-    separators = list(_VALUE_ASSOCIATION_SEPARATOR.finditer(between))
-    if not separators:
-        return True
-
-    ignored_parenthetical_separators: set[int] = set()
-    for parenthetical in _PARENTHETICAL_SPAN.finditer(between):
-        if not _PARENTHETICAL_MODIFIER.match(parenthetical.group("body")):
-            continue
-        ignored_parenthetical_separators.update(
-            index
-            for index, separator in enumerate(separators)
-            if parenthetical.start() < separator.start() < parenthetical.end()
-        )
-    for opening_index, opening in enumerate(separators):
-        if opening.group() != "," or opening_index in ignored_parenthetical_separators:
-            continue
-        for closing_index in range(opening_index + 1, len(separators)):
-            closing = separators[closing_index]
-            if closing.group() != ",":
-                continue
-            modifier = between[opening.end() : closing.start()]
-            following_end = (
-                separators[closing_index + 1].start()
-                if closing_index + 1 < len(separators)
-                else len(between)
-            )
-            following = between[closing.end() : following_end]
-            modifier_words = _WORD.findall(modifier.casefold())
-            contains_explicit_predicate = any(
-                index > 0 and word in _PREDICATE_VERBS for index, word in enumerate(modifier_words)
-            )
-            if (
-                _PARENTHETICAL_MODIFIER.match(modifier) or not contains_explicit_predicate
-            ) and _continues_metric_subject(following):
-                # A recognized comma-paired modifier can contain separators of
-                # its own without transferring the sentence to another metric.
-                ignored_parenthetical_separators.update(range(opening_index, closing_index + 1))
-                break
-
-    for index, separator in enumerate(separators):
-        if index in ignored_parenthetical_separators:
-            continue
-        next_start = separators[index + 1].start() if index + 1 < len(separators) else len(between)
-        segment = between[separator.end() : next_start]
-        if not _continues_metric_subject(segment):
-            return False
-    return True
-
-
-def _metric_occurrence_spans(sentence: str, metric: str) -> list[tuple[int, int]]:
-    spans: list[tuple[int, int]] = []
-    search_from = 0
-    while (metric_start := sentence.find(metric, search_from)) >= 0:
-        metric_end = metric_start + len(metric)
-        starts_inside_word = metric_start > 0 and bool(_WORD.fullmatch(sentence[metric_start - 1]))
-        ends_inside_word = metric_end < len(sentence) and bool(
-            _WORD.fullmatch(sentence[metric_end])
-        )
-        if not starts_inside_word and not ends_inside_word:
-            spans.append((metric_start, metric_end))
-        search_from = metric_start + 1
-    return spans
-
-
-def _metric_predicate_clauses(sentence: str, metric: str) -> list[tuple[str, int]]:
-    """Return predicate clauses containing the complete metric anchor.
-
-    A boundary inside the anchor itself is ignored, so compound names such as
-    ``research and development expenses`` remain intact. Boundaries before or
-    after the complete anchor still isolate competing predicates.
-    """
-
-    boundaries = _predicate_clause_boundaries(sentence)
-    clauses: list[tuple[str, int]] = []
-    seen: set[tuple[int, int]] = set()
-    for metric_start, metric_end in _metric_occurrence_spans(sentence, metric):
-        clause_start = max(
-            (boundary.end() for boundary in boundaries if boundary.end() <= metric_start),
-            default=0,
-        )
-        clause_end = min(
-            (boundary.start() for boundary in boundaries if boundary.start() >= metric_end),
-            default=len(sentence),
-        )
-        span = (clause_start, clause_end)
-        if span not in seen:
-            clause = sentence[clause_start:clause_end]
-            clauses.append((clause, metric_start - clause_start))
-            seen.add(span)
-    return clauses
-
-
-def _metric_is_final_subject(sentence: str, metric: str) -> bool:
-    boundaries = _predicate_clause_boundaries(sentence)
-    return any(
-        not any(boundary.start() >= metric_end for boundary in boundaries)
-        and _value_retains_metric_subject(sentence, metric_end, len(sentence), metric)
-        for _metric_start, metric_end in _metric_occurrence_spans(sentence, metric)
-    )
-
-
-def reported_value_linked_to_metric(value: str, metric_anchor: str, quote: str) -> bool:
-    normalized_value = normalize_evidence_text(value)[0].casefold()
-    normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
-    normalized_quote = normalize_evidence_text(quote)[0].casefold()
-    if not normalized_value or not normalized_metric:
-        return False
-
-    expected = _numeric_signature_sequence(normalized_value)
-    sentences = _SENTENCE_BOUNDARY.split(normalized_quote)
-    for index, sentence in enumerate(sentences):
-        metric_clauses = _metric_predicate_clauses(sentence, normalized_metric)
-        for clause, metric_position in metric_clauses:
-            metric_end = metric_position + len(normalized_metric)
-            measure_spans = (
-                _first_matching_measure_spans(
-                    clause,
-                    expected,
-                    start=metric_end,
-                )
-                if expected
-                else None
-            )
-            if measure_spans and all(
-                _value_retains_metric_subject(clause, metric_end, start, normalized_metric)
-                for start, _end in measure_spans
-            ):
-                return True
-            phrase_positions = (
-                _word_phrase_spans(normalized_value, clause[metric_end:]) if not expected else []
-            )
-            if any(
-                _value_retains_metric_subject(
-                    clause,
-                    metric_end,
-                    metric_end + position,
-                    normalized_metric,
-                )
-                for position, _ in phrase_positions
-            ):
-                return True
-        if _metric_is_final_subject(sentence, normalized_metric) and index + 1 < len(sentences):
-            following = sentences[index + 1].strip()
-            following_spans = (
-                _first_matching_measure_spans(following, expected) if expected else None
-            )
-            first_value_start = (
-                min(start for start, _end in following_spans) if following_spans else None
-            )
-            subject_precedes_value = bool(
-                first_value_start is not None
-                and any(
-                    match.start() < first_value_start
-                    for match in _SUBJECT_ANAPHORA.finditer(following)
-                )
-            )
-            needs_value_first_tail_guard = bool(
-                first_value_start is not None
-                and _VALUE_FIRST_SENTENCE.match(following)
-                and not subject_precedes_value
-            )
-            if (
-                expected
-                and _ANAPHORIC_SENTENCE.match(following)
-                and following_spans
-                and first_value_start is not None
-                and not _text_introduces_competing_subject(
-                    following[:first_value_start],
-                    normalized_metric,
-                )
-                and all(
-                    _value_retains_metric_subject(following, 0, start, normalized_metric)
-                    for start, _end in following_spans
-                )
-                and (
-                    not needs_value_first_tail_guard
-                    or not _tail_introduces_competing_subject(
-                        following,
-                        max(end for _start, end in following_spans),
-                        normalized_metric,
-                    )
-                )
-            ):
-                return True
-    return False
+    return bind_observation(
+        metric_anchor=metric_anchor,
+        value_text=value,
+        kind=kind,
+        temporal_anchor=temporal_anchor,
+        assertion=quote,
+    ).match
 
 
 def temporal_anchor_linked_to_value(
@@ -547,187 +101,170 @@ def temporal_anchor_linked_to_value(
     temporal_anchor: str,
     metric_anchor: str,
     quote: str,
+    *,
+    kind: ObservationKind = ObservationKind.REPORTED_LEVEL,
 ) -> bool:
-    """Require a temporal anchor to occur with its value in one source sentence."""
+    """Compatibility diagnostic backed by one exact binding match."""
 
-    normalized_quote = normalize_evidence_text(quote)[0]
-    if not reported_value_linked_to_metric(value, metric_anchor, normalized_quote):
+    match = reported_value_linked_to_metric(
+        value,
+        metric_anchor,
+        quote,
+        kind=kind,
+        temporal_anchor=temporal_anchor,
+    )
+    return bool(match and match.temporal_span)
+
+
+def _canonical_value(value: str) -> str:
+    signatures = numeric_signature_sequence(value)
+    if signatures:
+        return repr(tuple(canonical_numeric_signature(signature) for signature in signatures))
+    return normalize_evidence_text(value)[0].casefold()
+
+
+def _distinct_values(observations: Iterable[DraftObservation]) -> set[str]:
+    return {_canonical_value(observation.value_text) for observation in observations}
+
+
+def _valid_date(year: int, month: int, day: int) -> bool:
+    try:
+        date(year, month, day)
+    except ValueError:
         return False
-    return any(
-        reported_value_found(value, sentence) and _word_phrase_found(temporal_anchor, sentence)
-        for sentence in _SENTENCE_BOUNDARY.split(normalized_quote)
-    )
-
-
-def _all_evidence(claim: DraftClaim) -> list[EvidenceReference]:
-    evidence: list[EvidenceReference] = list(claim.evidence)
-    for value in claim.values:
-        evidence.extend(value.evidence)
-    output: list[EvidenceReference] = []
-    seen: set[tuple[ChunkId, str, str, EvidenceRelation]] = set()
-    for reference in evidence:
-        key = (
-            reference.chunk_id,
-            reference.metric_anchor,
-            reference.exact_quote,
-            reference.relation,
-        )
-        if key not in seen:
-            seen.add(key)
-            output.append(reference)
-    return output
-
-
-def _distinct_values(values: Iterable[ReportedValue]) -> set[str]:
-    output: set[str] = set()
-    for value in values:
-        signatures = numeric_signatures(value.value)
-        if signatures:
-            canonical: list[tuple[str, str, str, str]] = []
-            for sign, currency, number, unit in signatures:
-                try:
-                    number = format(Decimal(number).normalize(), "f")
-                except InvalidOperation:
-                    pass
-                unit = {
-                    "bps": "basis points",
-                    "basis point": "basis points",
-                    "%": "percent",
-                }.get(unit, unit)
-                canonical.append((sign, currency, number, unit))
-            output.add(repr(sorted(canonical)))
-        else:
-            output.add(normalize_evidence_text(value.value)[0].casefold())
-    return output
-
-
-_MONTHS = {
-    month.casefold(): index
-    for index, month in enumerate(
-        (
-            "",
-            "January",
-            "February",
-            "March",
-            "April",
-            "May",
-            "June",
-            "July",
-            "August",
-            "September",
-            "October",
-            "November",
-            "December",
-        )
-    )
-    if month
-}
+    return True
 
 
 def _temporal_signature(value: str) -> str | None:
     normalized = normalize_evidence_text(value)[0].casefold()
     iso = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", normalized)
     if iso:
-        return f"date:{iso.group(1)}-{iso.group(2)}-{iso.group(3)}"
+        year, month, day = (int(part) for part in iso.groups())
+        return f"date:{year:04d}-{month:02d}-{day:02d}" if _valid_date(year, month, day) else None
     day_first = re.search(
         r"\b(\d{1,2})\s+(" + "|".join(_MONTHS) + r")\s+(\d{4})\b",
         normalized,
     )
     if day_first:
-        day, month, year = day_first.groups()
-        return f"date:{year}-{_MONTHS[month]:02d}-{int(day):02d}"
+        day_text, month_text, year_text = day_first.groups()
+        year, month, day = int(year_text), _MONTHS[month_text], int(day_text)
+        return f"date:{year:04d}-{month:02d}-{day:02d}" if _valid_date(year, month, day) else None
     month_first = re.search(
         r"\b(" + "|".join(_MONTHS) + r")\s+(\d{1,2}),?\s+(\d{4})\b",
         normalized,
     )
     if month_first:
-        month, day, year = month_first.groups()
-        return f"date:{year}-{_MONTHS[month]:02d}-{int(day):02d}"
+        month_text, day_text, year_text = month_first.groups()
+        year, month, day = int(year_text), _MONTHS[month_text], int(day_text)
+        return f"date:{year:04d}-{month:02d}-{day:02d}" if _valid_date(year, month, day) else None
     fiscal_period = re.search(
         r"\b(?:fy|fiscal\s+year)\s*(\d{4})\b|\bq([1-4])\s*(\d{4})\b",
         normalized,
     )
     if fiscal_period:
         fiscal_year, quarter, quarter_year = fiscal_period.groups()
-        if fiscal_year:
-            return f"fiscal-year:{fiscal_year}"
-        return f"quarter:{quarter_year}-q{quarter}"
+        return f"fiscal-year:{fiscal_year}" if fiscal_year else f"quarter:{quarter_year}-q{quarter}"
     return None
 
 
-def _distinct_temporal_anchors(values: Iterable[ReportedValue]) -> set[str]:
-    signatures = (
-        _temporal_signature(value.temporal_anchor) for value in values if value.temporal_anchor
+def _temporal_anchor_is_valid(value: str | None) -> bool:
+    if value is None:
+        return True
+    normalized = normalize_evidence_text(value)[0].casefold()
+    looks_like_calendar_date = bool(
+        re.search(r"\b\d{4}-\d{2}-\d{2}\b", normalized)
+        or re.search(r"\b\d{1,2}\s+(?:" + "|".join(_MONTHS) + r")\s+\d{4}\b", normalized)
+        or re.search(
+            r"\b(?:" + "|".join(_MONTHS) + r")\s+\d{1,2},?\s+\d{4}\b",
+            normalized,
+        )
     )
-    return {signature for signature in signatures if signature is not None}
+    return not looks_like_calendar_date or _temporal_signature(value) is not None
 
 
-def _canonical_metric(value: str) -> str:
-    normalized, _ = normalize_evidence_text(value)
-    return re.sub(r"[^a-z0-9]+", " ", normalized.casefold()).strip()
+def _distinct_temporal_anchors(observations: Iterable[DraftObservation]) -> set[str]:
+    return {
+        signature
+        for observation in observations
+        if observation.temporal_anchor
+        and (signature := _temporal_signature(observation.temporal_anchor)) is not None
+    }
 
 
-def _text_found(needle: str, haystack: str) -> bool:
-    return evidence_text_contains(needle, haystack)
-
-
-def _reference_key(
-    reference: EvidenceReference,
-) -> tuple[ChunkId, str, str, EvidenceRelation]:
+def _reference_key(reference: EvidenceReference) -> tuple[ChunkId, str, str, str, EvidenceRelation]:
     return (
         reference.chunk_id,
         reference.metric_anchor,
+        reference.exact_assertion,
         reference.exact_quote,
         reference.relation,
     )
 
 
-def _authoritative_statement(claim: DraftClaim, status: ClaimStatus) -> str:
-    if status == ClaimStatus.NOT_FOUND:
-        return claim.metric.strip()
-    if status == ClaimStatus.UNVERIFIED:
-        return f"Unverified claim about {claim.metric.strip()}"
+def _unique_references(claim: DraftClaim) -> list[EvidenceReference]:
+    references = list(claim.context_evidence)
+    for observation in claim.observations:
+        references.extend(observation.evidence)
+    output: list[EvidenceReference] = []
+    seen: set[tuple[ChunkId, str, str, str, EvidenceRelation]] = set()
+    for reference in references:
+        key = _reference_key(reference)
+        if key not in seen:
+            seen.add(key)
+            output.append(reference)
+    return output
 
-    metric_anchor = claim.metric.strip()
-    for value in claim.values:
-        if value.evidence:
-            metric_anchor = value.evidence[0].metric_anchor.strip()
+
+def _has_explicit_conflict(evidence: Iterable[VerifiedEvidence], metric: str) -> bool:
+    return any(
+        item.relation == EvidenceRelation.SUPPORTS
+        and item.quote_found
+        and item.assertion_found
+        and item.metric_anchor_found
+        and _canonical_metric(item.metric_anchor) == _canonical_metric(metric)
+        and any(phrase in item.normalized_quote.casefold() for phrase in _EXPLICIT_CONFLICT_PHRASES)
+        for item in evidence
+    )
+
+
+def _render_observation(observation: DraftObservation) -> str:
+    if observation.temporal_anchor:
+        return f"{observation.value_text} ({observation.temporal_anchor})"
+    return observation.value_text
+
+
+def _authoritative_statement(
+    metric: str,
+    status: ClaimStatus,
+    observations: list[DraftObservation],
+) -> str:
+    metric_anchor = metric.strip()
+    for observation in observations:
+        if observation.evidence:
+            metric_anchor = observation.evidence[0].metric_anchor.strip()
             break
-    rendered_values = [
-        f"{value.value} ({value.temporal_anchor})" if value.temporal_anchor else value.value
-        for value in claim.values
-    ]
-    values_text = ", ".join(rendered_values[:-1])
-    if len(rendered_values) > 1:
-        values_text = f"{values_text} and {rendered_values[-1]}"
-    elif rendered_values:
-        values_text = rendered_values[0]
-
+    rendered = [_render_observation(observation) for observation in observations]
+    values_text = (
+        " and ".join(rendered)
+        if len(rendered) <= 2
+        else ", ".join(rendered[:-1]) + f", and {rendered[-1]}"
+    )
+    if status == ClaimStatus.NOT_FOUND:
+        return metric_anchor
     if status == ClaimStatus.CONFLICT:
         return f"{metric_anchor} is reported with conflicting values: {values_text}"
     if status == ClaimStatus.DATE_VARIANT:
         return f"{metric_anchor} is reported at different dates: {values_text}"
     if status == ClaimStatus.POSSIBLE_CONFLICT:
         return f"{metric_anchor} has unresolved reported values: {values_text}"
-    return f"{metric_anchor}: {values_text}"
-
-
-def _has_explicit_conflict(evidence: list[VerifiedEvidence]) -> bool:
-    conflict_phrases = (
-        "cannot be right",
-        "incompatible",
-        "introduced the error",
-        "unresolved conflict",
-    )
-    return any(
-        item.relation == EvidenceRelation.SUPPORTS
-        and any(phrase in item.normalized_quote.casefold() for phrase in conflict_phrases)
-        for item in evidence
-    )
+    if status == ClaimStatus.VERIFIED:
+        return f"{metric_anchor}: {values_text}"
+    return f"Unverified claim about {metric_anchor}"
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v4-bound-anchors"
+    version = "deterministic-verifier-v5-positive-bindings"
+    binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: CorpusStore):
         self.corpus = corpus
@@ -736,14 +273,15 @@ class EvidenceVerifier:
         self,
         claims: list[DraftClaim],
         *,
-        completed_searches: int,
+        absence_probes: dict[str, AbsenceProbeResult] | None = None,
+        completed_searches: int | None = None,
         completed_search_records: list[dict[str, object]] | None = None,
     ) -> EvidenceVerificationResult:
+        del completed_searches, completed_search_records
         verified = [
             self.verify_claim(
                 claim,
-                completed_searches=completed_searches,
-                completed_search_records=completed_search_records,
+                absence_probe=(absence_probes or {}).get(_canonical_metric(claim.metric)),
             )
             for claim in claims
         ]
@@ -763,244 +301,195 @@ class EvidenceVerifier:
         self,
         claim: DraftClaim,
         *,
-        completed_searches: int,
+        absence_probe: AbsenceProbeResult | None = None,
+        completed_searches: int | None = None,
         completed_search_records: list[dict[str, object]] | None = None,
     ) -> VerifiedClaim:
+        del completed_searches, completed_search_records
         notes: list[str] = []
-        references = _all_evidence(claim)
+        references = _unique_references(claim)
         chunks = self.corpus.get_chunks([reference.chunk_id for reference in references])
         chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
-        evidence: list[VerifiedEvidence] = []
-        missing_reference = False
-        valid_reference_keys: set[tuple[ChunkId, str, str, EvidenceRelation]] = set()
-        metric_linked_keys: set[tuple[ChunkId, str, str, EvidenceRelation]] = set()
+        verified_by_reference: dict[
+            tuple[ChunkId, str, str, str, EvidenceRelation], VerifiedEvidence
+        ] = {}
+
+        observation_by_reference: dict[
+            tuple[ChunkId, str, str, str, EvidenceRelation], DraftObservation
+        ] = {}
+        for observation in claim.observations:
+            for reference in observation.evidence:
+                observation_by_reference[_reference_key(reference)] = observation
 
         for reference in references:
+            key = _reference_key(reference)
             chunk = chunks_by_id.get(reference.chunk_id)
             normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
+            operations = [*operations, "unicode_casefold_comparison"]
             quote_found = bool(
                 chunk and evidence_text_contains(reference.exact_quote, chunk.normalized_text)
             )
-            relevant_values = [
-                value
-                for value in claim.values
-                if any(
-                    nested.chunk_id == reference.chunk_id
-                    and nested.exact_quote == reference.exact_quote
-                    for nested in value.evidence
+            assertion_found = evidence_text_contains(
+                reference.exact_assertion,
+                reference.exact_quote,
+            )
+            metric_anchor_found = _word_phrase_found(
+                reference.metric_anchor,
+                reference.exact_assertion,
+            )
+            observation = observation_by_reference.get(key)
+            binding = None
+            value_text_found = False
+            failure_reason: str | None = None
+            if observation is not None:
+                result = bind_observation(
+                    metric_anchor=reference.metric_anchor,
+                    value_text=observation.value_text,
+                    kind=observation.kind,
+                    temporal_anchor=observation.temporal_anchor,
+                    assertion=reference.exact_assertion,
                 )
-            ]
-            value_found = all(
-                reported_value_found(value.value, reference.exact_quote)
-                and reported_value_linked_to_metric(
-                    value.value,
-                    reference.metric_anchor,
-                    reference.exact_quote,
-                )
-                for value in relevant_values
-            )
-            if not relevant_values:
-                value_found = True
-            metric_anchor_found = bool(
-                chunk and _text_found(reference.metric_anchor, reference.exact_quote)
-            )
-            metric_linked = _canonical_metric(reference.metric_anchor) == _canonical_metric(
-                claim.metric
-            )
-            temporal_anchors = [
-                value.temporal_anchor for value in relevant_values if value.temporal_anchor
-            ]
-            temporal_anchors_found = all(
-                not value.temporal_anchor
-                or temporal_anchor_linked_to_value(
-                    value.value,
-                    value.temporal_anchor,
-                    reference.metric_anchor,
-                    reference.exact_quote,
-                )
-                for value in relevant_values
-            )
-            if not chunk:
-                missing_reference = True
+                binding = result.match
+                value_text_found = result.value_text_found
+                failure_reason = result.failure_reason
+            if chunk is None:
                 notes.append(f"Chunk {reference.chunk_id} is not part of this corpus version.")
                 continue
-            evidence.append(
-                VerifiedEvidence(
-                    chunk_id=chunk.chunk_id,
-                    document_id=chunk.document_id,
-                    document_name=chunk.document_name,
-                    physical_page_index=chunk.physical_page_index,
-                    printed_page_label=chunk.printed_page_label,
-                    metric_anchor=reference.metric_anchor,
-                    metric_anchor_found=metric_anchor_found,
-                    temporal_anchors=temporal_anchors,
-                    temporal_anchors_found=temporal_anchors_found,
-                    quote=reference.exact_quote,
-                    normalized_quote=normalized_quote,
-                    normalization_operations=operations,
-                    relation=reference.relation,
-                    quote_found=quote_found,
-                    value_found=value_found,
-                    chunk_sha256=chunk.sha256,
-                    source_url=(
-                        f"/api/corpora/{self.corpus.corpus_version}/documents/"
-                        f"{chunk.document_id}/pdf#page={chunk.physical_page_index}"
-                    ),
-                )
+            metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
+                claim.metric
             )
-            if quote_found and value_found and metric_anchor_found and temporal_anchors_found:
-                valid_reference_keys.add(_reference_key(reference))
-                if metric_linked:
-                    metric_linked_keys.add(_reference_key(reference))
-
-        all_quotes_found = (
-            not missing_reference and bool(evidence) and all(item.quote_found for item in evidence)
-        )
-        all_values_found = not missing_reference and all(item.value_found for item in evidence)
-        all_metric_anchors_found = not missing_reference and all(
-            item.metric_anchor_found for item in evidence
-        )
-        all_temporal_anchors_found = not missing_reference and all(
-            item.temporal_anchors_found for item in evidence
-        )
-        has_supporting_evidence = any(
-            reference.relation == EvidenceRelation.SUPPORTS
-            and _reference_key(reference) in valid_reference_keys
-            and _canonical_metric(reference.metric_anchor) == _canonical_metric(claim.metric)
-            for reference in references
-        )
-        all_values_metric_linked = all(
-            any(_reference_key(reference) in metric_linked_keys for reference in value.evidence)
-            for value in claim.values
-        )
-        all_values_supported = all(
-            any(
-                reference.relation == EvidenceRelation.SUPPORTS
-                and _reference_key(reference) in metric_linked_keys
-                for reference in value.evidence
+            verified_by_reference[key] = VerifiedEvidence(
+                chunk_id=chunk.chunk_id,
+                document_id=chunk.document_id,
+                document_name=chunk.document_name,
+                physical_page_index=chunk.physical_page_index,
+                printed_page_label=chunk.printed_page_label,
+                metric_anchor=reference.metric_anchor,
+                metric_anchor_found=metric_anchor_found,
+                assertion=reference.exact_assertion,
+                assertion_found=assertion_found,
+                temporal_anchor=observation.temporal_anchor if observation else None,
+                temporal_value_bound=bool(
+                    binding
+                    and _temporal_anchor_is_valid(
+                        observation.temporal_anchor if observation else None
+                    )
+                    and (
+                        observation is None
+                        or observation.temporal_anchor is None
+                        or binding.temporal_span is not None
+                    )
+                ),
+                quote=reference.exact_quote,
+                normalized_quote=normalized_quote,
+                normalization_operations=operations,
+                relation=reference.relation,
+                quote_found=quote_found,
+                value_text_found=value_text_found,
+                metric_value_bound=bool(binding and metric_matches_claim),
+                value_role_authorized=bool(binding),
+                binding_profile=binding.profile if binding else None,
+                binding_failure_reason=(
+                    failure_reason
+                    if metric_matches_claim
+                    else "metric_anchor_does_not_match_canonical_metric"
+                ),
+                chunk_sha256=chunk.sha256,
+                source_url=(
+                    f"/api/corpora/{self.corpus.corpus_version}/documents/"
+                    f"{chunk.document_id}/pdf#page={chunk.physical_page_index}"
+                ),
             )
-            for value in claim.values
-        )
-        distinct_values = _distinct_values(claim.values)
-        distinct_temporal_anchors = _distinct_temporal_anchors(claim.values)
-        explicit_conflict = _has_explicit_conflict(evidence)
 
-        if claim.status == "not_found":
-            canonical_claim_metric = _canonical_metric(claim.metric)
-            relevant_searches = {
-                str(record.get("signature"))
-                for record in completed_search_records or []
-                if _canonical_metric(str(record.get("metric") or "")) == canonical_claim_metric
-                and canonical_claim_metric in _canonical_metric(str(record.get("query") or ""))
-                and not record.get("document_ids")
-                and not record.get("date_from")
-                and not record.get("date_to")
-            }
-            if len(relevant_searches) >= 4 and not references and not claim.values:
+        evidence = list(verified_by_reference.values())
+        verified_observations: list[_VerifiedObservation] = []
+        for observation in claim.observations:
+            observation_evidence = tuple(
+                verified_by_reference[key]
+                for reference in observation.evidence
+                if (key := _reference_key(reference)) in verified_by_reference
+            )
+            supporting = any(
+                item.relation == EvidenceRelation.SUPPORTS
+                and item.quote_found
+                and item.assertion_found
+                and item.metric_anchor_found
+                and item.value_text_found
+                and item.metric_value_bound
+                and item.temporal_value_bound
+                and item.value_role_authorized
+                for item in observation_evidence
+            )
+            verified_observations.append(
+                _VerifiedObservation(observation, observation_evidence, supporting)
+            )
+
+        authorized = [item.observation for item in verified_observations if item.authorized]
+        all_observations_authorized = bool(claim.observations) and len(authorized) == len(
+            claim.observations
+        )
+        distinct_values = _distinct_values(authorized)
+        distinct_temporal = _distinct_temporal_anchors(authorized)
+        temporal_count = sum(bool(observation.temporal_anchor) for observation in authorized)
+        explicit_conflict = _has_explicit_conflict(evidence, claim.metric)
+        all_references_valid = len(evidence) == len(references) and all(
+            item.quote_found
+            and item.assertion_found
+            and item.metric_anchor_found
+            and _canonical_metric(item.metric_anchor) == _canonical_metric(claim.metric)
+            for item in evidence
+        )
+
+        if claim.request_absence_probe:
+            if claim.observations or references:
+                status = ClaimStatus.UNVERIFIED
+                notes.append("An absence request cannot also propose observations or evidence.")
+            elif absence_probe and absence_probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE:
                 status = ClaimStatus.NOT_FOUND
                 notes.append(
-                    f"Not found after {len(relevant_searches)} metric-targeted searches "
-                    f"across corpus version {self.corpus.corpus_version}."
+                    f"Not found after {len(absence_probe.searches)} searches and "
+                    f"{len(absence_probe.opened_chunk_ids)} inspected candidates across "
+                    f"corpus version {self.corpus.corpus_version} under "
+                    f"{absence_probe.protocol_version}."
                 )
             else:
                 status = ClaimStatus.UNVERIFIED
-                notes.append(
-                    "A not-found conclusion requires four distinct completed searches tagged "
-                    "with the claimed metric and no evidence."
-                )
-        elif not claim.values:
+                notes.append("The server-owned bounded absence probe did not establish not found.")
+        elif not claim.observations:
             status = ClaimStatus.UNVERIFIED
-            notes.append("An authoritative factual claim requires at least one reported value.")
-        elif (
-            not all_quotes_found
-            or not all_values_found
-            or not all_metric_anchors_found
-            or not all_temporal_anchors_found
-            or not all_values_metric_linked
-            or not has_supporting_evidence
-        ):
+            notes.append("An authoritative factual claim requires at least one observation.")
+        elif not all_references_valid or not all_observations_authorized:
             status = ClaimStatus.UNVERIFIED
-            if not all_quotes_found:
+            if not all_references_valid:
                 notes.append(
-                    "At least one quotation was not found verbatim after allowed normalization."
+                    "Every cited evidence reference must resolve inside this corpus version."
                 )
-            if not all_values_found:
-                notes.append("At least one reported value was not present in its cited quotation.")
-            if not all_metric_anchors_found:
-                notes.append("At least one metric anchor was not present in its cited quotation.")
-            if not all_temporal_anchors_found:
-                notes.append("At least one temporal anchor was not present in its cited quotation.")
-            if not all_values_metric_linked:
-                notes.append(
-                    "At least one evidence metric anchor did not match the canonical metric."
-                )
-            if not has_supporting_evidence:
-                notes.append(
-                    "Contextual or contradicting evidence cannot independently authorize a claim."
-                )
+            notes.append(
+                "Every observation requires a supporting quotation with one authorized positive binding profile."
+            )
         elif len(distinct_values) >= 2:
             if explicit_conflict:
                 status = ClaimStatus.CONFLICT
-                notes.append(
-                    "A verified quotation explicitly characterizes the values as erroneous or incompatible."
-                )
-            elif (
-                all_values_supported
-                and len(distinct_temporal_anchors) >= 2
-                and len(distinct_temporal_anchors) == len(claim.values)
-            ):
+            elif temporal_count == len(authorized) and len(distinct_temporal) == len(authorized):
                 status = ClaimStatus.DATE_VARIANT
-            elif (
-                all_values_supported
-                and len(distinct_temporal_anchors) == 1
-                and all(value.temporal_anchor for value in claim.values)
-            ):
+            elif temporal_count == len(authorized) and len(distinct_temporal) == 1:
                 status = ClaimStatus.CONFLICT
             else:
                 status = ClaimStatus.POSSIBLE_CONFLICT
                 notes.append(
-                    "Distinct values were not fully supported and tied to a consistent temporal relationship."
+                    "Distinct values lack a fully verified common or distinct temporal relationship."
                 )
-        elif claim.status == "date_variant":
-            status = ClaimStatus.POSSIBLE_CONFLICT
-            notes.append("A date variant requires at least two distinct reported values.")
-        elif claim.status in {"conflict", "possible_conflict"}:
-            if len(distinct_values) < 2:
-                status = ClaimStatus.UNVERIFIED
-                notes.append("A conflict requires at least two distinct reported values.")
-            elif explicit_conflict:
-                status = ClaimStatus.CONFLICT
-                notes.append(
-                    "A verified quotation explicitly characterizes the values as erroneous or incompatible."
-                )
-            elif len(distinct_temporal_anchors) >= 2 and len(distinct_temporal_anchors) == len(
-                claim.values
-            ):
-                status = ClaimStatus.DATE_VARIANT
-                notes.append(
-                    "All differing values have distinct dates; classified as date variants."
-                )
-            elif len(distinct_temporal_anchors) == 1 and all(
-                value.temporal_anchor for value in claim.values
-            ):
-                status = ClaimStatus.CONFLICT
-            else:
-                status = ClaimStatus.POSSIBLE_CONFLICT
-        elif not all_values_supported:
-            status = ClaimStatus.UNVERIFIED
-            notes.append(
-                "Each value in a supported claim requires its own supporting evidence item."
-            )
-        elif all_quotes_found and all_values_found:
+        elif len(distinct_values) == 1:
             status = ClaimStatus.VERIFIED
         else:
             status = ClaimStatus.UNVERIFIED
 
         return VerifiedClaim(
-            statement=_authoritative_statement(claim, status),
+            statement=_authoritative_statement(claim.metric, status, authorized),
             metric=claim.metric,
             status=status,
-            values=claim.values,
+            observations=claim.observations,
             evidence=evidence,
+            absence_probe=absence_probe,
             verification_notes=notes,
         )
