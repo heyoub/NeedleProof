@@ -130,7 +130,9 @@ qualitative states are inspected on both sides of the complete metric phrase, wi
 initialism qualifier tokens. This does
 not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Compact initialisms retain their token kind, so `IT`
-matches `I.T.` but never the pronoun `It`. Failed probes, a failed or over-broad exact scan, scoped searches,
+matches `I.T.` but never the pronoun `It`. If all-caps typography creates a word/initialism
+ambiguity, the exact scan fails closed instead of post-filtering the candidate into `not_found`.
+Failed probes, a failed or over-broad exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
 predicate requires review. Qualitative predicate detection permits at most eight punctuation-free

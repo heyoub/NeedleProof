@@ -17,6 +17,19 @@ tests = [
 ]
 
 [[invariant]]
+id = "INV-METRIC-005"
+family = "metric-identity"
+severity = "P1"
+invariant = "An all-caps token-kind mismatch may reduce recall but can never authorize not-found."
+finding = "REVENUE typography could be post-filtered from a Revenue absence scan."
+disposition = "fixed"
+owner = "retrieval"
+tests = [
+  "test_exact_scan_reports_all_caps_word_as_kind_ambiguous",
+  "test_kind_ambiguous_exact_scan_cannot_authorize_absence",
+]
+
+[[invariant]]
 id = "INV-ABSENCE-007"
 family = "proof-completeness"
 severity = "P1"

@@ -12,10 +12,11 @@ import numpy as np
 import pytest
 from needleproof_api.absence import probe_metric_absence
 from needleproof_api.binding import word_phrase_spans
+from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
 from needleproof_api.exact_scan import ExactMetricScanComplete, ExactMetricScanTooBroad
-from needleproof_api.models import AbsenceConclusion
+from needleproof_api.models import AbsenceConclusion, ChunkRecord
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.util import normalize_evidence_text
 
@@ -187,6 +188,52 @@ def test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word(
 
     assert isinstance(scan, ExactMetricScanComplete)
     assert all(word_phrase_spans("IT", chunk.normalized_text) for chunk in scan.chunks)
+
+
+def test_exact_scan_reports_all_caps_word_as_kind_ambiguous(tmp_path):
+    db_path = tmp_path / "uppercase.sqlite3"
+    chunk_id = chunk_id_from_uint64(2**63 + 1900)
+    text = "REVENUE was $2 million."
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE chunks (internal_id INTEGER PRIMARY KEY, chunk_external_id TEXT, normalized_text TEXT)"
+        )
+        connection.execute(
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_external_id UNINDEXED, document_id UNINDEXED, text)"
+        )
+        connection.execute(
+            "INSERT INTO chunks VALUES (1, ?, ?)",
+            (str(chunk_id), text),
+        )
+        connection.execute(
+            "INSERT INTO chunks_fts(rowid, chunk_external_id, document_id, text) VALUES (1, ?, ?, ?)",
+            (str(chunk_id), "doc_uppercase", text),
+        )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_uppercase",
+        document_name="Uppercase",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="c" * 64,
+        token_estimate=5,
+    )
+    store = object.__new__(CorpusStore)
+    store.db_path = db_path
+
+    def get_chunks(self, chunk_ids, neighbor_radius=0):
+        del self, neighbor_radius
+        return [chunk] if chunk_id in chunk_ids else []
+
+    store.get_chunks = MethodType(get_chunks, store)  # type: ignore[method-assign]
+
+    scan = store.find_exact_metric_chunks("Revenue")
+
+    assert isinstance(scan, ExactMetricScanComplete)
+    assert scan.chunks == ()
+    assert scan.ambiguous_candidate_count == 1
 
 
 @pytest.mark.asyncio

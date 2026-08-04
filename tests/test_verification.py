@@ -796,6 +796,15 @@ def test_compact_initialism_never_binds_to_ordinary_word(metric, ordinary_word):
     assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
 
 
+def test_all_caps_word_styling_is_visible_as_ambiguity_not_metric_identity():
+    assert word_phrase_spans("Revenue", "REVENUE was $2 million.") == []
+    assert word_phrase_spans(
+        "Revenue",
+        "REVENUE was $2 million.",
+        preserve_token_kind=False,
+    )
+
+
 @pytest.mark.parametrize("source_metric", ["IT", "I.T."])
 def test_compact_and_dotted_initialism_authorize_the_same_exact_metric(source_metric):
     assertion = f"{source_metric} was $2 million."

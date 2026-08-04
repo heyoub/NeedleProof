@@ -895,6 +895,40 @@ async def test_too_broad_exact_scan_is_typed_incomplete_not_absence():
 
 
 @pytest.mark.asyncio
+async def test_kind_ambiguous_exact_scan_cannot_authorize_absence():
+    class Corpus:
+        corpus_version = "v_0000000000000008"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="d" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del chunk_ids, neighbor_radius
+            return []
+
+        def find_exact_metric_chunks(self, metric):
+            del metric
+            return ExactMetricScanComplete(
+                chunks=(),
+                candidate_count=1,
+                character_count=24,
+                ambiguous_candidate_count=1,
+            )
+
+    probe = await probe_metric_absence(Corpus(), "Revenue")
+
+    assert probe.exact_metric_scan_completed is False
+    assert probe.exact_metric_scan_error == "MetricTokenKindAmbiguous"
+    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "text",
     [

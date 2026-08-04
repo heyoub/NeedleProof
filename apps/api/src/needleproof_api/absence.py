@@ -67,6 +67,7 @@ ABSENCE_PROTOCOL_SPEC = {
         "maximum_candidates": EXACT_METRIC_SCAN_MAX_CANDIDATES,
         "maximum_characters": EXACT_METRIC_SCAN_MAX_CHARACTERS,
         "breadth_limit": "typed_incomplete_probe",
+        "token_kind_mismatch": "typed_incomplete_probe",
         "failure": "incomplete_probe",
     },
     "requires_all_unique_candidates_opened": True,
@@ -470,13 +471,16 @@ async def probe_metric_absence(
         except Exception as error:  # noqa: BLE001 - absence fails closed on scan failure
             exact_scan = ExactMetricScanFailed(type(error).__name__)
         if isinstance(exact_scan, ExactMetricScanComplete):
-            exact_metric_scan_completed = True
-            exact_metric_scan_chunk_ids = [
-                chunk.chunk_id
-                for chunk in exact_scan.chunks
-                if word_phrase_spans(metric, chunk.normalized_text)
-            ]
-            candidate_ids.extend(exact_metric_scan_chunk_ids)
+            if exact_scan.ambiguous_candidate_count:
+                exact_metric_scan_error = "MetricTokenKindAmbiguous"
+            else:
+                exact_metric_scan_completed = True
+                exact_metric_scan_chunk_ids = [
+                    chunk.chunk_id
+                    for chunk in exact_scan.chunks
+                    if word_phrase_spans(metric, chunk.normalized_text)
+                ]
+                candidate_ids.extend(exact_metric_scan_chunk_ids)
         elif isinstance(exact_scan, ExactMetricScanTooBroad):
             exact_metric_scan_error = "ExactScanTooBroad"
         else:

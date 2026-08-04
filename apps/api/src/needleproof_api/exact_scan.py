@@ -14,6 +14,7 @@ class ExactMetricScanComplete:
     chunks: tuple[ChunkRecord, ...]
     candidate_count: int
     character_count: int
+    ambiguous_candidate_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -264,7 +264,12 @@ def canonical_word_phrase(value: str) -> str:
     return " ".join(match.group() for match in _WORD.finditer(normalized))
 
 
-def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
+def word_phrase_spans(
+    needle: str,
+    haystack: str,
+    *,
+    preserve_token_kind: bool = True,
+) -> list[Span]:
     # Callers may supply a raw PDF metric anchor; the corpus-side haystack is
     # already normalized and its offsets must remain in that source space.
     expected = metric_tokens(normalize_evidence_text(needle)[0])
@@ -275,7 +280,17 @@ def word_phrase_spans(needle: str, haystack: str) -> list[Span]:
     spans = []
     for index in range(len(observed) - width + 1):
         window = observed[index : index + width]
-        if [token.identity for token in window] != [token.identity for token in expected]:
+        expected_identity = (
+            [token.identity for token in expected]
+            if preserve_token_kind
+            else [token.value for token in expected]
+        )
+        observed_identity = (
+            [token.identity for token in window]
+            if preserve_token_kind
+            else [token.value for token in window]
+        )
+        if observed_identity != expected_identity:
             continue
         if all(
             _INTRA_PHRASE_FORMATTING.fullmatch(haystack[left.end : right.start])

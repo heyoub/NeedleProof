@@ -307,12 +307,23 @@ class CorpusStore:
                     ).fetchall()
         except sqlite3.Error as error:
             return ExactMetricScanFailed(type(error).__name__)
-        chunks = tuple(
-            chunk
-            for chunk in self.get_chunks([row[0] for row in rows])
-            if word_phrase_spans(metric, chunk.normalized_text)
+        chunks = []
+        ambiguous_candidate_count = 0
+        for chunk in self.get_chunks([row[0] for row in rows]):
+            if word_phrase_spans(metric, chunk.normalized_text):
+                chunks.append(chunk)
+            elif word_phrase_spans(
+                metric,
+                chunk.normalized_text,
+                preserve_token_kind=False,
+            ):
+                ambiguous_candidate_count += 1
+        return ExactMetricScanComplete(
+            tuple(chunks),
+            candidate_count,
+            character_count,
+            ambiguous_candidate_count,
         )
-        return ExactMetricScanComplete(chunks, candidate_count, character_count)
 
     async def search(
         self,
