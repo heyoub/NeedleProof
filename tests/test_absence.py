@@ -490,7 +490,7 @@ async def test_failed_search_makes_absence_probe_incomplete():
     ("metric_text", "include_neighbor", "expected"),
     [
         ("Revenue", True, AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW),
-        ("Revenue.", True, AbsenceConclusion.NOT_FOUND_IN_PROBE),
+        ("Revenue.", True, AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW),
         ("Revenue", False, AbsenceConclusion.INCOMPLETE_PROBE),
     ],
 )
@@ -577,38 +577,44 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
         (
             "Fee-earning AUM. It remained at",
             "the prior level. It was $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
         (
             "Fee-earning AUM. It remained at",
             "the prior level. They were $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
         (
             "Fee-earning AUM. It remained at",
             "the prior level. These figures were $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
         (
             "Fee-earning AUM. It remained at",
             "the prior level. Those values were $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
         (
             "Fee-earning AUM. It remained at",
             "the prior level. As of FY 2025, it was $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
         (
             "Fee-earning AUM. It remained at",
             "the prior level. The metric was $82 billion.",
-            None,
-            AbsenceConclusion.INCOMPLETE_PROBE,
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
+        ),
+        (
+            "Fee-earning AUM. It remained at",
+            "the prior level. The unseen ledger label was $82 billion.",
+            "$82 billion",
+            AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
         ),
     ],
 )
@@ -785,7 +791,7 @@ async def test_metric_at_chunk_end_follows_linked_anaphoric_value(linked_text):
         "The reported metric was",
     ],
 )
-async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
+async def test_second_same_chunk_anaphor_value_requires_review(second_lead):
     chunk_id = chunk_id_from_uint64(2**63 + 45)
     text = f"Fee-earning AUM. It remained at the prior level. {second_lead} $82 billion."
     chunk = ChunkRecord(
@@ -823,10 +829,10 @@ async def test_second_same_chunk_anaphor_makes_absence_incomplete(second_lead):
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Fee-earning AUM")
 
-    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert (
         derive_absence_conclusion_against_corpus(probe, corpus)
-        == AbsenceConclusion.INCOMPLETE_PROBE
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     )
 
 
@@ -898,7 +904,7 @@ async def test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing(text):
         "The reported metric stood at $82 billion.",
     ],
 )
-async def test_completed_local_anaphor_checks_linked_coreferential_continuation(
+async def test_completed_local_anaphor_includes_linked_coreferential_value(
     linked_text,
 ):
     metric_id = chunk_id_from_uint64(2**63 + 47)
@@ -955,10 +961,10 @@ async def test_completed_local_anaphor_checks_linked_coreferential_continuation(
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Fee-earning AUM")
 
-    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert (
         derive_absence_conclusion_against_corpus(probe, corpus)
-        == AbsenceConclusion.INCOMPLETE_PROBE
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     )
 
 

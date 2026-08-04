@@ -247,7 +247,8 @@ async def test_real_corpus_store_parenthesized_value_first_evidence_blocks_absen
 
     assert reviewable.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert reviewable.supporting_value_candidates
-    assert no_value_control.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+    assert no_value_control.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert no_value_control.exact_metric_scan_error == "ContextExpansionLimitExceeded"
 
 
 def test_chunk_lookup_batches_sqlite_parameters_and_preserves_order(haystack_store, monkeypatch):

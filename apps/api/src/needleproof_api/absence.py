@@ -37,12 +37,22 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v21-structural-anaphoric-state-machine"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v22-full-opened-source-context"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
+ABSENCE_CONTEXT_MAX_OPENED_CHUNKS = 50
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
     r"(?:\s*|\s*[,;:—–-]\s*|\s*[([{\"'“‘]\s*|"
     r"\s*(?:in|of)\s+(?:[^\W\d_]+\s+){0,3})",
+    re.IGNORECASE,
+)
+_POTENTIAL_ANAPHORIC_PREDICATE_LEAD = re.compile(
+    r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
+    r"(?:(?:it|they|this|that|these|those)\b|"
+    r"(?:the|these|those)\s+(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,3}))"
+    r"\s+(?:is|are|was|were|remained(?:\s+at)?|stayed(?:\s+at)?|"
+    r"reached|stood\s+at|amounted\s+to|reported(?:\s+at)?|"
+    r"totaled|totalled|ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at)\b",
     re.IGNORECASE,
 )
 AbsenceMode = Literal["lexical"]
@@ -74,20 +84,19 @@ ABSENCE_PROTOCOL_SPEC = {
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
     "numeric_candidate_policy": (
-        "bidirectional_metric_context_with_bounded_separator_or_enclosure_requires_review"
+        "same_assertion_or_structural_anaphoric_value_and_closed_value_first_shape"
     ),
     "qualitative_predicate_policy": (
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
-    "metric_context_policy": (
-        "complete_positive_boundary_context_with_ambiguous_punctuation_expanding_fail_closed"
-    ),
+    "metric_context_policy": ("full_opened_source_chain_with_bounded_display_excerpt"),
     "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
     "neighbor_radius": 1,
+    "maximum_context_chunks": ABSENCE_CONTEXT_MAX_OPENED_CHUNKS,
     "cross_chunk_context": (
-        "one_source_linked_sentence_when_local_clause_or_anaphoric_assertion_edge_is_open;"
-        "immediate_linked_anaphoric_chain_is_incomplete"
+        "expand_source_links_to_document_edge_within_context_budget;"
+        "missing_or_over_budget_link_is_incomplete"
     ),
     "conclusion": "bounded_not_global",
 }
@@ -199,6 +208,20 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
     occurrence_ids = {occurrence.chunk_id for occurrence in probe.exact_metric_occurrences}
     result_ids = {chunk_id for search in probe.searches for chunk_id in search.result_chunk_ids}
     exact_scan_ids = set(probe.exact_metric_scan_chunk_ids)
+    reviewable_occurrence = any(
+        has_unresolved_metric_predicate(probe.metric, occurrence.sentence)
+        or bool(_metric_context_numeric_candidates(occurrence))
+        for occurrence in probe.exact_metric_occurrences
+    )
+    if (
+        probe.unresolved_predicate_occurrences
+        or probe.supporting_value_candidates
+        or reviewable_occurrence
+    ):
+        # Known reviewable evidence dominates an incomplete breadth/context
+        # proof. Either outcome blocks absence authority, while preserving the
+        # evidence-specific result makes the receipt useful.
+        return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     if (
         not probe.exact_metric_scan_completed
         or probe.exact_metric_scan_error is not None
@@ -211,30 +234,41 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
         or not occurrence_ids.issubset(opened_set)
     ):
         return AbsenceConclusion.INCOMPLETE_PROBE
-
-    reviewable_occurrence = any(
-        has_unresolved_metric_predicate(probe.metric, occurrence.sentence)
-        or bool(_metric_context_numeric_candidates(occurrence))
-        for occurrence in probe.exact_metric_occurrences
-    )
-    if (
-        probe.unresolved_predicate_occurrences
-        or probe.supporting_value_candidates
-        or reviewable_occurrence
-    ):
-        return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     return AbsenceConclusion.NOT_FOUND_IN_PROBE
 
 
 def _metric_context_numeric_candidates(
     occurrence: MetricOccurrence,
 ) -> list[tuple[str, tuple[int, int]]]:
-    """Return conservative forward values and closed value-first metric shapes."""
+    """Return same-assertion, structural-anaphoric, and closed value-first values."""
 
     metric_start, metric_end = occurrence.span
+    boundaries = punctuation_boundaries(occurrence.sentence)
+    metric_sentence_end = next(
+        (end for start, end in boundaries if start >= metric_end),
+        len(occurrence.sentence),
+    )
+    anaphoric_sentence_spans: list[tuple[int, int]] = []
+    sentence_start = metric_sentence_end
+    following_sentence_ends = [end for _start, end in boundaries if end > metric_sentence_end]
+    if not following_sentence_ends or following_sentence_ends[-1] < len(occurrence.sentence):
+        following_sentence_ends.append(len(occurrence.sentence))
+    for sentence_end in following_sentence_ends:
+        sentence = occurrence.sentence[sentence_start:sentence_end]
+        if not _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(sentence):
+            break
+        anaphoric_sentence_spans.append((sentence_start, sentence_end))
+        sentence_start = sentence_end
+
     candidates = []
     for value_text, value_span in numeric_value_candidates(occurrence.sentence):
-        if value_span[0] >= metric_end:
+        if metric_end <= value_span[0] < metric_sentence_end:
+            candidates.append((value_text, value_span))
+            continue
+        if any(
+            start <= value_span[0] and value_span[1] <= end
+            for start, end in anaphoric_sentence_spans
+        ):
             candidates.append((value_text, value_span))
             continue
         if value_span[1] <= metric_start and _VALUE_FIRST_METRIC_BRIDGE.fullmatch(
@@ -303,46 +337,6 @@ def _join_source_fragments(left: str, right: str) -> str:
     return f"{left}{separator}{right}"
 
 
-_POTENTIAL_ANAPHORIC_PREDICATE_LEAD = re.compile(
-    r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
-    r"(?:(?:it|they|this|that|these|those)\b|"
-    r"(?:the|these|those)\s+(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,3}))"
-    r"\s+(?:is|are|was|were|remained(?:\s+at)?|stayed(?:\s+at)?|"
-    r"reached|stood\s+at|amounted\s+to|reported(?:\s+at)?|"
-    r"totaled|totalled|ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at)\b",
-    re.IGNORECASE,
-)
-
-
-def _linked_following_fragment(
-    chunk: ChunkRecord,
-    chunks_by_id: Mapping[ChunkId, ChunkRecord],
-) -> tuple[str, bool]:
-    """Return one linked source sentence fragment and whether it is complete."""
-
-    if chunk.next_chunk_id is None:
-        return "", True
-    following = chunks_by_id.get(chunk.next_chunk_id)
-    if following is None:
-        return "", False
-    boundaries = punctuation_boundaries(following.normalized_text)
-    if boundaries:
-        boundary_end = boundaries[0][1]
-        remainder = following.normalized_text[boundary_end:]
-        # One linked sentence is the maximum supported proof profile. An
-        # immediately following anaphoric sentence may still belong to the
-        # metric assertion, so omitting it cannot prove absence. Keep that
-        # shape deliberately unsupported and fail closed.
-        complete = _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(remainder) is None
-        if complete and not remainder.strip() and following.next_chunk_id is not None:
-            # The probe opens one source neighbor. If the consumed sentence
-            # ends exactly at that boundary, a further linked anaphor cannot
-            # be ruled out from the available proof context.
-            complete = False
-        return following.normalized_text[:boundary_end], complete
-    return following.normalized_text, following.next_chunk_id is None
-
-
 @dataclass(frozen=True, slots=True)
 class _AnalyzedMetricContext:
     display_occurrence: MetricOccurrence
@@ -356,7 +350,7 @@ def _metric_occurrence_with_open_neighbors(
     metric_start: int,
     metric_end: int,
 ) -> _AnalyzedMetricContext:
-    """Analyze one complete, conservatively bounded source proposition."""
+    """Analyze full opened source context while bounding only its display excerpt."""
 
     before = chunk.normalized_text[:metric_start]
     after = chunk.normalized_text[metric_end:]
@@ -365,11 +359,18 @@ def _metric_occurrence_with_open_neighbors(
     prior_boundaries = punctuation_boundaries(before)
     if prior_boundaries:
         before = before[prior_boundaries[-1][1] :]
-    elif chunk.previous_chunk_id is not None:
-        previous = chunks_by_id.get(chunk.previous_chunk_id)
-        if previous is None:
-            complete = False
-        else:
+    else:
+        previous_id = chunk.previous_chunk_id
+        visited_previous = {chunk.chunk_id}
+        while previous_id is not None:
+            if previous_id in visited_previous:
+                complete = False
+                break
+            visited_previous.add(previous_id)
+            previous = chunks_by_id.get(previous_id)
+            if previous is None:
+                complete = False
+                break
             previous_boundaries = punctuation_boundaries(previous.normalized_text)
             previous_fragment = (
                 previous.normalized_text[previous_boundaries[-1][1] :]
@@ -377,58 +378,23 @@ def _metric_occurrence_with_open_neighbors(
                 else previous.normalized_text
             )
             before = _join_source_fragments(previous_fragment, before)
-            if not previous_boundaries and previous.previous_chunk_id is not None:
-                complete = False
+            if previous_boundaries:
+                break
+            previous_id = previous.previous_chunk_id
 
-    following_boundaries = punctuation_boundaries(after)
-    following_boundary = following_boundaries[0] if following_boundaries else None
-    if following_boundary:
-        after = after[: following_boundary[1]]
-        remainder = chunk.normalized_text[metric_end + following_boundary[1] :]
-        if _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(remainder):
-            anaphoric_boundaries = punctuation_boundaries(remainder)
-            after = _join_source_fragments(
-                after,
-                remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
-            )
-            if anaphoric_boundaries:
-                trailing = remainder[anaphoric_boundaries[0][1] :]
-                if _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(trailing):
-                    # One anaphoric continuation is the maximum supported proof
-                    # profile. A second coreferential sentence may still own a
-                    # value for the metric, so excluding it cannot prove absence.
-                    complete = False
-                elif not trailing.strip() and chunk.next_chunk_id is not None:
-                    following = chunks_by_id.get(chunk.next_chunk_id)
-                    if following is None or _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(
-                        following.normalized_text
-                    ):
-                        complete = False
-            elif chunk.next_chunk_id is not None:
-                following_fragment, following_complete = _linked_following_fragment(
-                    chunk,
-                    chunks_by_id,
-                )
-                after = _join_source_fragments(after, following_fragment)
-                complete = complete and following_complete
-        elif not remainder.strip() and chunk.next_chunk_id is not None:
-            following = chunks_by_id.get(chunk.next_chunk_id)
-            if following is None:
-                complete = False
-            elif _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(following.normalized_text):
-                following_fragment, following_complete = _linked_following_fragment(
-                    chunk,
-                    chunks_by_id,
-                )
-                after = _join_source_fragments(after, following_fragment)
-                complete = complete and following_complete
-    elif chunk.next_chunk_id is not None:
-        following_fragment, following_complete = _linked_following_fragment(
-            chunk,
-            chunks_by_id,
-        )
-        after = _join_source_fragments(after, following_fragment)
-        complete = complete and following_complete
+    following_id = chunk.next_chunk_id
+    visited_following = {chunk.chunk_id}
+    while following_id is not None:
+        if following_id in visited_following:
+            complete = False
+            break
+        visited_following.add(following_id)
+        following = chunks_by_id.get(following_id)
+        if following is None:
+            complete = False
+            break
+        after = _join_source_fragments(after, following.normalized_text)
+        following_id = following.next_chunk_id
 
     metric_text = chunk.normalized_text[metric_start:metric_end]
     proof_context = _join_source_fragments(before, metric_text)
@@ -547,14 +513,45 @@ async def probe_metric_absence(
             exact_metric_scan_error = exact_scan.error_type
 
     unique_ids = list(dict.fromkeys(candidate_ids))
-    chunks = await asyncio.to_thread(corpus.get_chunks, unique_ids, 1)
-    unique_ids = list(dict.fromkeys([*unique_ids, *(chunk.chunk_id for chunk in chunks)]))
+    context_expansion_limited = len(unique_ids) > ABSENCE_CONTEXT_MAX_OPENED_CHUNKS
+    initial_ids = unique_ids[:ABSENCE_CONTEXT_MAX_OPENED_CHUNKS]
+    chunks = await asyncio.to_thread(corpus.get_chunks, initial_ids, 0)
     chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    while not context_expansion_limited:
+        linked_ids = {
+            linked_id
+            for opened in chunks_by_id.values()
+            for linked_id in (opened.previous_chunk_id, opened.next_chunk_id)
+            if linked_id is not None and linked_id not in chunks_by_id
+        }
+        if not linked_ids:
+            break
+        if len(chunks_by_id) + len(linked_ids) > ABSENCE_CONTEXT_MAX_OPENED_CHUNKS:
+            context_expansion_limited = True
+            break
+        expanded = await asyncio.to_thread(
+            corpus.get_chunks,
+            list(chunks_by_id),
+            1,
+        )
+        added = False
+        for expanded_chunk in expanded:
+            if expanded_chunk.chunk_id in chunks_by_id:
+                continue
+            if len(chunks_by_id) >= ABSENCE_CONTEXT_MAX_OPENED_CHUNKS:
+                context_expansion_limited = True
+                break
+            chunks_by_id[expanded_chunk.chunk_id] = expanded_chunk
+            added = True
+        if context_expansion_limited or not added:
+            break
+    chunks = list(chunks_by_id.values())
+    unique_ids = list(dict.fromkeys([*unique_ids, *chunks_by_id]))
     occurrences: list[MetricOccurrence] = []
     unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
     value_candidate_keys: set[tuple[ChunkId, str]] = set()
-    missing_open_edge_neighbor = False
+    missing_open_edge_neighbor = context_expansion_limited
     for chunk in chunks:
         for metric_start, metric_end in word_phrase_spans(metric, chunk.normalized_text):
             analyzed = _metric_occurrence_with_open_neighbors(
@@ -585,7 +582,9 @@ async def probe_metric_absence(
 
     if missing_open_edge_neighbor:
         exact_metric_scan_completed = False
-        exact_metric_scan_error = "NeighborChunkMissing"
+        exact_metric_scan_error = (
+            "ContextExpansionLimitExceeded" if context_expansion_limited else "NeighborChunkMissing"
+        )
 
     probe = AbsenceProbeResult(
         protocol_version=ABSENCE_PROTOCOL_VERSION,

@@ -44,10 +44,11 @@ tests = [
   "test_absence_probe_handles_metric_values_split_across_chunk_edges",
   "test_open_anaphoric_continuation_extends_into_linked_chunk",
   "test_metric_at_chunk_end_follows_linked_anaphoric_value",
-  "test_second_same_chunk_anaphor_makes_absence_incomplete",
+  "test_second_same_chunk_anaphor_value_requires_review",
   "test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing",
-  "test_completed_local_anaphor_checks_linked_coreferential_continuation",
+  "test_completed_local_anaphor_includes_linked_coreferential_value",
   "test_linked_anaphoric_chain_beyond_opened_neighbor_is_incomplete",
+  "test_real_corpus_store_parenthesized_value_first_evidence_blocks_absence",
 ]
 
 [[invariant]]

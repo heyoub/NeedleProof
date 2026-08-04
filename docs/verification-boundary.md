@@ -115,17 +115,18 @@ then the exhaustive scan is filtered again by the same complete-word matcher use
 Variant generation is capped; a pathologically acronym-heavy metric falls back to a full
 chunk-table scan instead of allocating an exponential query. Exact scans first count candidate
 rows and characters; a configured contract limit produces a typed incomplete result before source
-rows are materialized. The protocol records both result sets and opens every unique candidate plus
-its source-linked immediate neighbors. Proof analysis uses a complete proposition selected only by
-positive punctuation boundaries; ambiguous abbreviation punctuation expands the analysis context
-rather than truncating it. A separate
-fixed 384-character window on both sides of every complete metric occurrence is only the receipt
-and UI excerpt. A missing required neighbor makes the probe incomplete. This deliberately accepts
-some false-negative review outcomes rather than turning punctuation guesses into false absence.
+rows are materialized. The protocol records both result sets, opens every unique candidate, and
+expands source links deterministically to the document edge within a 50-chunk context budget.
+Proof analysis uses that full opened source chain; only the separate fixed 384-character window on
+both sides of every complete metric occurrence is bounded for the receipt and UI. A missing link,
+cycle, or context-budget overflow makes the probe incomplete. This deliberately accepts some
+false-negative review outcomes rather than treating an omitted source tail as proof of absence.
 Values before the metric require a closed
-`VALUE in/of METRIC` bridge; forward values
-and immediate `VALUE METRIC` adjacency make the occurrence reviewable, including bounded
-comma/colon/dash separators and opening parentheses, brackets, braces, or quotes. Closed
+`VALUE in/of METRIC` bridge. Forward values require either the metric's own assertion or a
+contiguous chain of structurally recognized anaphoric reporting assertions; reference phrases are
+matched by shape rather than a financial-noun whitelist. Immediate `VALUE METRIC` adjacency also
+makes the occurrence reviewable, including bounded comma/colon/dash separators and opening
+parentheses, brackets, braces, or quotes. Closed
 qualitative states are inspected on both sides of the complete metric phrase, with bounded plain or
 initialism qualifier tokens. This does
 not attempt sentence parsing, so punctuation inside abbreviations such as
