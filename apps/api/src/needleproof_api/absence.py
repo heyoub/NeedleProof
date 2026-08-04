@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v18-total-anaphoric-boundary-states"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v19-source-linked-anaphoric-state-machine"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -330,6 +330,11 @@ def _linked_following_fragment(
         # metric assertion, so omitting it cannot prove absence. Keep that
         # shape deliberately unsupported and fail closed.
         complete = _ANAPHORIC_SENTENCE_LEAD.match(remainder) is None
+        if complete and not remainder.strip() and following.next_chunk_id is not None:
+            # The probe opens one source neighbor. If the consumed sentence
+            # ends exactly at that boundary, a further linked anaphor cannot
+            # be ruled out from the available proof context.
+            complete = False
         return following.normalized_text[:boundary_end], complete
     return following.normalized_text, following.next_chunk_id is None
 
@@ -383,11 +388,18 @@ def _metric_occurrence_with_open_neighbors(
                 remainder[: anaphoric_boundaries[0][1]] if anaphoric_boundaries else remainder,
             )
             if anaphoric_boundaries:
-                if _ANAPHORIC_SENTENCE_LEAD.match(remainder[anaphoric_boundaries[0][1] :]):
+                trailing = remainder[anaphoric_boundaries[0][1] :]
+                if _ANAPHORIC_SENTENCE_LEAD.match(trailing):
                     # One anaphoric continuation is the maximum supported proof
                     # profile. A second coreferential sentence may still own a
                     # value for the metric, so excluding it cannot prove absence.
                     complete = False
+                elif not trailing.strip() and chunk.next_chunk_id is not None:
+                    following = chunks_by_id.get(chunk.next_chunk_id)
+                    if following is None or _ANAPHORIC_SENTENCE_LEAD.match(
+                        following.normalized_text
+                    ):
+                        complete = False
             elif chunk.next_chunk_id is not None:
                 following_fragment, following_complete = _linked_following_fragment(
                     chunk,
