@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+from typing import Protocol
 
 from .binding import (
     BINDING_CONTRACT_SHA256,
@@ -14,9 +15,11 @@ from .binding import (
     numeric_signature_sequence,
     numeric_signatures,
 )
+from .chunk_ids import ChunkId
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
+    ChunkRecord,
     ClaimStatus,
     DraftClaim,
     DraftObservation,
@@ -27,7 +30,6 @@ from .models import (
     VerifiedClaim,
     VerifiedEvidence,
 )
-from .retrieval import CorpusStore
 from .util import canonical_metric_key, evidence_text_contains, normalize_evidence_text
 
 _WORD = re.compile(r"[^\W_]+")
@@ -45,6 +47,17 @@ class _VerifiedObservation:
     observation: DraftObservation
     evidence: tuple[VerifiedEvidence, ...]
     authorized: bool
+
+
+class VerificationCorpus(Protocol):
+    @property
+    def corpus_version(self) -> str: ...
+
+    def get_chunks(
+        self,
+        chunk_ids: list[ChunkId],
+        neighbor_radius: int = 0,
+    ) -> list[ChunkRecord]: ...
 
 
 def _canonical_metric(value: str) -> str:
@@ -237,10 +250,10 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v5-positive-bindings"
+    version = "deterministic-verifier-v6-atomic-bindings"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
-    def __init__(self, corpus: CorpusStore):
+    def __init__(self, corpus: VerificationCorpus):
         self.corpus = corpus
 
     def verify_claims(
@@ -251,6 +264,8 @@ class EvidenceVerifier:
         completed_searches: int | None = None,
         completed_search_records: list[dict[str, object]] | None = None,
     ) -> EvidenceVerificationResult:
+        """Verify claims; deprecated model-search counters never authorize absence."""
+
         del completed_searches, completed_search_records
         verified = [
             self.verify_claim(
@@ -279,6 +294,8 @@ class EvidenceVerifier:
         completed_searches: int | None = None,
         completed_search_records: list[dict[str, object]] | None = None,
     ) -> VerifiedClaim:
+        """Verify one claim; deprecated model-search counters are intentionally ignored."""
+
         del completed_searches, completed_search_records
         notes: list[str] = []
         reference_pairs: list[tuple[EvidenceReference, DraftObservation | None]] = [
@@ -489,6 +506,7 @@ class EvidenceVerifier:
             metric=claim.metric,
             status=status,
             observations=claim.observations,
+            context_evidence=claim.context_evidence,
             evidence=evidence,
             absence_probe=absence_probe,
             verification_notes=notes,

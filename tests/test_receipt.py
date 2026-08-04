@@ -7,6 +7,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from needleproof_api.receipt import (
+    ReceiptProvenance,
     _git_sha,
     _optional_env,
     receipt_contract_schema,
@@ -24,6 +25,9 @@ def test_featured_rehearsal_receipt_is_sealed(settings):
     assert receipt["configuration"]["model"] == "gpt-5.6-terra"
     assert receipt["configuration"]["reasoning_effort"] == "medium"
     assert receipt["configuration"]["trace_include_sensitive_data"] is False
+    assert receipt["provenance"]["receipt_derivation"] == "contract_migration"
+    assert receipt["provenance"]["source_receipt_sha256"]
+    assert receipt["provenance"]["source_verifier_version"]
 
 
 def test_committed_receipt_schema_is_generated_from_pydantic_contract():
@@ -86,3 +90,11 @@ def test_git_sha_is_optional_when_git_executable_is_missing(monkeypatch):
 def test_empty_build_provenance_is_normalized_to_none(monkeypatch):
     monkeypatch.setenv("NEEDLEPROOF_IMAGE_REVISION", "")
     assert _optional_env("NEEDLEPROOF_IMAGE_REVISION") is None
+
+
+def test_contract_migration_requires_source_provenance(settings):
+    receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
+    provenance = receipt["provenance"]
+    provenance["source_receipt_sha256"] = None
+    with pytest.raises(ValueError, match="source receipt provenance"):
+        ReceiptProvenance.model_validate(provenance)

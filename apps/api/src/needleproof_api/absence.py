@@ -2,21 +2,28 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from typing import Literal
+from typing import Literal, Protocol
 
-from .binding import bind_observation, numeric_value_candidates, word_phrase_spans
+from .binding import (
+    bind_observation,
+    has_unresolved_metric_predicate,
+    numeric_value_candidates,
+    word_phrase_spans,
+)
+from .chunk_ids import ChunkId
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
+    ChunkRecord,
     CompletedSearchRecord,
     MetricOccurrence,
     ObservationKind,
+    SearchResult,
     ValueCandidate,
 )
-from .retrieval import CorpusStore
 from .util import canonical_json, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v2"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v3-exact-occurrence-review"
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -33,11 +40,29 @@ ABSENCE_PROTOCOL_SPEC = {
     "metric_matching": "complete_word_phrase",
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
     "numeric_candidate_policy": "requires_review_even_without_positive_binding",
+    "qualitative_predicate_policy": "known_positive_connector_requires_review",
     "conclusion": "bounded_not_global",
 }
 ABSENCE_PROTOCOL_SHA256 = sha256_text(canonical_json(ABSENCE_PROTOCOL_SPEC))
 
 CallRecorder = Callable[[dict[str, object]], Awaitable[None]]
+
+
+class AbsenceCorpus(Protocol):
+    async def search(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        mode: AbsenceMode,
+        recorder: CallRecorder | None = None,
+    ) -> SearchResult: ...
+
+    def get_chunks(
+        self,
+        chunk_ids: list[ChunkId],
+        neighbor_radius: int = 0,
+    ) -> list[ChunkRecord]: ...
 
 
 def _normalized_query(value: str) -> str:
@@ -92,7 +117,7 @@ def _sentences(text: str) -> list[tuple[str, int]]:
 
 
 async def probe_metric_absence(
-    corpus: CorpusStore,
+    corpus: AbsenceCorpus,
     metric: str,
     *,
     top_k: int = 8,
@@ -157,20 +182,24 @@ async def probe_metric_absence(
     unique_ids = list(dict.fromkeys(candidate_ids))
     chunks = corpus.get_chunks(unique_ids)
     occurrences: list[MetricOccurrence] = []
+    unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
     for chunk in chunks:
         for sentence, sentence_start in _sentences(chunk.normalized_text):
             metric_spans = word_phrase_spans(metric, sentence)
             if not metric_spans:
                 continue
-            for start, end in metric_spans:
-                occurrences.append(
-                    MetricOccurrence(
-                        chunk_id=chunk.chunk_id,
-                        sentence=sentence,
-                        span=(sentence_start + start, sentence_start + end),
-                    )
+            sentence_occurrences = [
+                MetricOccurrence(
+                    chunk_id=chunk.chunk_id,
+                    sentence=sentence,
+                    span=(sentence_start + start, sentence_start + end),
                 )
+                for start, end in metric_spans
+            ]
+            occurrences.extend(sentence_occurrences)
+            if has_unresolved_metric_predicate(metric, sentence):
+                unresolved_predicates.extend(sentence_occurrences)
             for value_text, _span in numeric_value_candidates(sentence):
                 found_binding = False
                 for kind in (
@@ -213,7 +242,7 @@ async def probe_metric_absence(
     )
     if len(completed) < 4 or not has_exact_lexical or len(chunks) != len(unique_ids):
         conclusion = AbsenceConclusion.INCOMPLETE_PROBE
-    elif value_candidates:
+    elif unresolved_predicates or value_candidates:
         conclusion = AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     else:
         conclusion = AbsenceConclusion.NOT_FOUND_IN_PROBE
@@ -224,6 +253,7 @@ async def probe_metric_absence(
         unique_candidate_chunk_ids=unique_ids,
         opened_chunk_ids=[chunk.chunk_id for chunk in chunks],
         exact_metric_occurrences=occurrences,
+        unresolved_predicate_occurrences=unresolved_predicates,
         supporting_value_candidates=value_candidates,
         conclusion=conclusion,
     )

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from . import __version__
 from .absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
@@ -84,10 +84,22 @@ class ReceiptProvenance(BaseModel):
     numeric_contract_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     absence_protocol_version: str
     absence_protocol_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    receipt_derivation: Literal["live", "contract_migration"] = "live"
+    source_receipt_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    source_verifier_version: str | None = None
     image_revision: str | None
     trace_id: str | None
     sealed_at: str
     event_chain_head: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def require_consistent_derivation(self) -> ReceiptProvenance:
+        source_fields = (self.source_receipt_sha256, self.source_verifier_version)
+        if self.receipt_derivation == "contract_migration" and not all(source_fields):
+            raise ValueError("Contract-migrated receipts require source receipt provenance")
+        if self.receipt_derivation == "live" and any(source_fields):
+            raise ValueError("Live receipts cannot claim contract-migration source provenance")
+        return self
 
 
 class ReceiptRehearsal(BaseModel):
@@ -132,7 +144,7 @@ class ReceiptOpenAICall(BaseModel):
 class ReceiptContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.3"]
+    schema_version: Literal["1.4"]
     run_id: str = Field(pattern=r"^run_[0-9a-f]{32}$")
     status: Literal["completed", "incomplete", "cancelled", "failed", "interrupted"]
     question: str
@@ -254,7 +266,7 @@ class RunLedger:
             elif injected_locks[lock_path.name]:
                 lock_digests[lock_path.name] = str(injected_locks[lock_path.name])
         receipt: dict[str, Any] = {
-            "schema_version": "1.3",
+            "schema_version": "1.4",
             "run_id": envelope.run_id,
             "status": envelope.status.value,
             "question": envelope.question,
@@ -303,6 +315,9 @@ class RunLedger:
                 "numeric_contract_sha256": NUMERIC_CONTRACT_SHA256,
                 "absence_protocol_version": ABSENCE_PROTOCOL_VERSION,
                 "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
+                "receipt_derivation": "live",
+                "source_receipt_sha256": None,
+                "source_verifier_version": None,
                 "image_revision": _optional_env("NEEDLEPROOF_IMAGE_REVISION"),
                 "trace_id": trace_id,
                 "sealed_at": utc_now_iso(),

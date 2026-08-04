@@ -15,6 +15,9 @@ An authoritative observation must prove all of these facts:
 - the complete metric anchor occurs in that assertion and matches the canonical metric;
 - the exact value occurs in the assertion;
 - one closed positive binding profile connects that metric span to that value span;
+- the exact assertion ends at the value or its bound trailing temporal anchor, apart from terminal
+  punctuation, so a later target, forecast, bound, component, delta, or negation cannot change the
+  value role after the matched prefix;
 - any temporal anchor is valid and belongs to that same binding match;
 - the value role is currently authorized; and
 - at least one independently sufficient evidence item has the `supports` relation.
@@ -49,7 +52,8 @@ relationships never enter authoritative prose.
 four corpus-wide probes, including an exact lexical metric probe, records result IDs and counts,
 opens every unique candidate, and finds complete-word metric occurrences and nearby numeric
 candidates. Failed probes, scoped searches, duplicate wording, uninspected candidates, or plausible
-metric-adjacent values cannot authorize absence. The conclusion remains bounded to the recorded
+metric-adjacent values cannot authorize absence. Any exact metric occurrence also requires review,
+even when the predicate is qualitative and yields no numeric candidate. The conclusion remains bounded to the recorded
 probe and exact corpus version; it never claims that the corpus proves nonexistence.
 
 ## Numeric integrity
@@ -71,9 +75,11 @@ Floating point is used only outside authoritative financial claim truth:
 ## Normalization and provenance
 
 Quote containment uses Unicode NFKC, PDF line-break dehyphenation, whitespace folding, and Unicode
-case-folded comparison. The receipt records the operations actually applied. Receipt schema 1.3
+case-folded comparison. The receipt records the operations actually applied. Receipt schema 1.4
 records separate quote, assertion, metric, value, temporal, role, and binding-profile outcomes,
-plus hashes for the binding and bounded-absence contracts.
+plus hashes for the binding and bounded-absence contracts. Checked-in rehearsal receipts that are
+re-verified after a contract change record `receipt_derivation=contract_migration` together with
+the original sealed receipt digest and verifier version; they are not represented as fresh model runs.
 
 ## Static analysis
 

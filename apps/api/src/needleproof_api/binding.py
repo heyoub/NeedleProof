@@ -55,6 +55,7 @@ _BEFORE_METRIC_TEMPORAL_GAP = re.compile(
     r"\s*(?:,|;)?\s*(?:(?:the\s+)?(?:figure|metric)\s+)?(?:has|reported|showed|listed)?\s*$",
     re.IGNORECASE,
 )
+_TERMINAL_ASSERTION_TAIL = re.compile(r"\s*[.!?]?\s*")
 
 AUTHORIZED_OBSERVATION_KINDS = frozenset(
     {
@@ -63,9 +64,16 @@ AUTHORIZED_OBSERVATION_KINDS = frozenset(
         ObservationKind.REPORTED_PER_SHARE,
     }
 )
+_UNIT_ALIASES = {
+    "bps": "basis points",
+    "basis point": "basis points",
+    "%": "percent",
+}
+_RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
+_PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v1",
+    "version": "positive-bindings-v2-atomic-assertions",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -79,6 +87,10 @@ BINDING_CONTRACT_SPEC = {
     "disallowed_prefix_pattern": _DISALLOWED_PREFIX.pattern,
     "before_metric_temporal_gap_pattern": _BEFORE_METRIC_TEMPORAL_GAP.pattern,
     "after_value_temporal_gap_pattern": _AFTER_VALUE_TEMPORAL_GAP.pattern,
+    "post_value_tail": (
+        "only terminal punctuation after the value or its bound trailing temporal anchor"
+    ),
+    "unresolved_predicate_detection": "known positive connector with nonempty predicate",
     "unknown_syntax": "reject",
     "compound_numeric_observation": "reject",
 }
@@ -87,11 +99,7 @@ NUMERIC_CONTRACT_SPEC = {
     "version": "fixed-point-source-digits-v1",
     "numeric_pattern": _NUMERIC.pattern,
     "canonicalization": "strip_integer_leading_zeros_and_fractional_trailing_zeros",
-    "unit_aliases": {
-        "bps": "basis points",
-        "basis point": "basis points",
-        "%": "percent",
-    },
+    "unit_aliases": _UNIT_ALIASES,
     "unit_conversion": "forbidden",
     "arithmetic": "none",
 }
@@ -147,11 +155,7 @@ def canonical_decimal_digits(number: str) -> str:
 
 def canonical_numeric_signature(signature: NumericSignature) -> NumericSignature:
     sign, currency, number, unit = signature
-    canonical_unit = {
-        "bps": "basis points",
-        "basis point": "basis points",
-        "%": "percent",
-    }.get(unit, unit)
+    canonical_unit = _UNIT_ALIASES.get(unit, unit)
     return sign, currency, canonical_decimal_digits(number), canonical_unit
 
 
@@ -189,6 +193,25 @@ def numeric_value_candidates(text: str) -> tuple[tuple[str, Span], ...]:
     return tuple(
         (match.group().strip(), (match.start(), match.end())) for match in _NUMERIC.finditer(text)
     )
+
+
+def has_unresolved_metric_predicate(metric_anchor: str, assertion: str) -> bool:
+    """Detect a known positive predicate shape whose qualitative value is unresolved.
+
+    This deliberately reuses only the closed binding connectors. A bare mention such as
+    ``Total headcount - source quote`` is not evidence, while ``Credit rating was stable``
+    must prevent an authoritative absence conclusion even though no numeric candidate exists.
+    """
+
+    normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
+    normalized_metric = normalize_evidence_text(metric_anchor)[0].casefold()
+    for _start, end in word_phrase_spans(normalized_metric, normalized_assertion):
+        suffix = normalized_assertion[end:]
+        for connector in (_COPULA, _REPORTED, _COLON):
+            match = connector.match(suffix)
+            if match and _WORD.search(suffix[match.end() :]):
+                return True
+    return False
 
 
 def _profile_for_between(between: str) -> BindingProfile | None:
@@ -245,11 +268,11 @@ def _kind_accepts_signature(kind: ObservationKind, value: str) -> bool:
         return False
     unit = signatures[0][3] if signatures else ""
     if kind == ObservationKind.REPORTED_RATE:
-        return unit in {"basis point", "basis points", "bps", "percent", "%"}
+        return unit in _RATE_UNITS
     if kind == ObservationKind.REPORTED_PER_SHARE:
-        return unit == "per share"
+        return unit in _PER_SHARE_UNITS
     if kind == ObservationKind.REPORTED_LEVEL:
-        return unit not in {"basis point", "basis points", "bps", "percent", "%", "per share"}
+        return unit not in (_RATE_UNITS | _PER_SHARE_UNITS)
     return False
 
 
@@ -275,6 +298,24 @@ def _temporal_span(
             if _AFTER_VALUE_TEMPORAL_GAP.fullmatch(gap):
                 return span
     return None
+
+
+def _post_value_tail_is_authorized(
+    assertion: str,
+    value_span: Span,
+    temporal_span: Span | None,
+) -> bool:
+    """Require the selected assertion to end with the proved value relationship.
+
+    A trailing temporal anchor may complete that relationship. Any other suffix is
+    unknown syntax and fails closed, including targets, forecasts, bounds, components,
+    deltas, and negations written after an otherwise valid metric/value prefix.
+    """
+
+    relationship_end = value_span[1]
+    if temporal_span is not None and temporal_span[0] >= value_span[1]:
+        relationship_end = temporal_span[1]
+    return bool(_TERMINAL_ASSERTION_TAIL.fullmatch(assertion[relationship_end:]))
 
 
 def bind_observation(
@@ -323,6 +364,12 @@ def bind_observation(
                 between,
             )
             if normalized_temporal and temporal_span is None:
+                continue
+            if not _post_value_tail_is_authorized(
+                normalized_assertion,
+                value_span,
+                temporal_span,
+            ):
                 continue
             if normalized_temporal and temporal_span and temporal_span[1] <= metric_span[0]:
                 profile = BindingProfile.DATED_DIRECT

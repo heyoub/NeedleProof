@@ -139,7 +139,12 @@ def test_shared_reference_is_bound_independently_for_each_observation(corpus):
         "Fee-related earnings were $345 million, up 25 percent, with the FRE margin "
         "improving to 50 percent from 48 percent."
     )
-    shared = reference(MEMO_CHUNK, quote, "Fee-related earnings", assertion=quote)
+    shared = reference(
+        MEMO_CHUNK,
+        quote,
+        "Fee-related earnings",
+        assertion="Fee-related earnings were $345 million",
+    )
     verified = EvidenceVerifier(corpus).verify_claim(
         claim(
             "Fee-related earnings",
@@ -187,6 +192,13 @@ def test_non_supporting_evidence_cannot_authorize_observation(corpus, relation):
         "Revenue increased by $2 million.",
         "Revenue was flat after operating expenses reached $2 million.",
         "Revenue was flat or operating expenses reached $2 million.",
+        "Revenue: $2 million forecast.",
+        "Revenue: $2 million target.",
+        "Revenue was $2 million expected.",
+        "Revenue was $2 million projected.",
+        "Revenue was $2 million maximum.",
+        "Revenue was $2 million, forecast.",
+        "Revenue was $2 million, not the reported actual.",
     ],
 )
 def test_unknown_negated_modal_component_delta_and_competing_subject_forms_fail_closed(quote):
@@ -206,6 +218,18 @@ def test_unknown_negated_modal_component_delta_and_competing_subject_forms_fail_
 )
 def test_closed_positive_level_profiles_are_accepted(quote):
     assert reported_value_linked_to_metric("$2 million", "Revenue", quote) is not None
+
+
+def test_trailing_temporal_anchor_is_part_of_the_same_atomic_binding():
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            "Revenue was $2 million as of 31 December 2025.",
+            temporal_anchor="31 December 2025",
+        )
+        is not None
+    )
 
 
 def test_compound_metric_anchor_is_not_split_at_and():
@@ -253,8 +277,21 @@ def test_seeded_aum_values_are_date_variants(corpus):
         "up about $4 billion or 3 percent against the prior year even though it is down "
         "against December."
     )
-    first = reference(MEMO_CHUNK, quote, "Assets under management")
-    second = reference(MEMO_CHUNK, quote, "Assets under management")
+    first = reference(
+        MEMO_CHUNK,
+        quote,
+        "Assets under management",
+        assertion="Assets under management were $146.1 billion as of 31 December 2025.",
+    )
+    second = reference(
+        MEMO_CHUNK,
+        quote,
+        "Assets under management",
+        assertion=(
+            "Assets under management were $146.1 billion as of 31 December 2025. "
+            "By the fiscal year end on 31 March 2026 the figure was $142 billion"
+        ),
+    )
     verified = EvidenceVerifier(corpus).verify_claim(
         claim(
             "Assets under management",
@@ -275,8 +312,21 @@ def test_seeded_fee_aum_source_characterization_is_conflict(corpus):
         "which cannot be right alongside the $82 billion figure above, and I have not "
         "been able to work out which of my two sources introduced the error."
     )
-    first = reference(MEMO_CHUNK, first_quote, "Fee-earning AUM")
-    second = reference(MEMO_CONTINUATION_CHUNK, second_quote, "fee-earning AUM")
+    first = reference(
+        MEMO_CHUNK,
+        first_quote,
+        "Fee-earning AUM",
+        assertion=(
+            "Fee-earning AUM is the number that actually matters for revenue and it ended "
+            "the year at $82 billion"
+        ),
+    )
+    second = reference(
+        MEMO_CONTINUATION_CHUNK,
+        second_quote,
+        "fee-earning AUM",
+        assertion=("First, my note from the February call has fee-earning AUM at $8.2 billion"),
+    )
     verified = EvidenceVerifier(corpus).verify_claim(
         claim(
             "Fee-earning AUM",
@@ -316,9 +366,16 @@ def test_decimal_digit_canonicalization_is_context_independent():
         setcontext(original)
 
 
-@given(integer=st.integers(min_value=0, max_value=10**200 - 2))
-def test_adjacent_200_digit_integers_never_collapse(integer):
+def test_two_hundred_digit_adjacent_integers_never_collapse():
+    integer = 10**199
     assert canonical_decimal_digits(str(integer)) != canonical_decimal_digits(str(integer + 1))
+
+
+@given(integer=st.integers(min_value=10**199, max_value=10**200 - 2))
+def test_adjacent_200_digit_integers_never_collapse(integer):
+    padded = f"000{integer}.000"
+    adjacent = f"000{integer + 1}.000"
+    assert canonical_decimal_digits(padded) != canonical_decimal_digits(adjacent)
 
 
 @given(

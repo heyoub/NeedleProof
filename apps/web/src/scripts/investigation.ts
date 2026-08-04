@@ -2,11 +2,28 @@ import { SSE, type SSEMessage } from '@czap/web';
 import { Millis } from '@czap/core';
 import { Effect, Fiber } from 'effect';
 import type {
+  BindingProfile,
   Evidence,
   LedgerEvent,
   RunEnvelope,
   RunStatus,
 } from '@needleproof/contracts';
+
+const bindingProfileLabels: Record<BindingProfile, string> = {
+  direct_copula: 'direct statement',
+  direct_reported: 'reported value',
+  colon: 'labelled value',
+  dated_direct: 'dated statement',
+  same_sentence_anaphoric: 'same-sentence reference',
+  next_sentence_anaphoric: 'following-sentence reference',
+};
+const bindingFailureLabels: Record<string, string> = {
+  metric_anchor_not_in_assertion: 'metric absent from the exact assertion',
+  value_text_not_in_assertion: 'value absent from the exact assertion',
+  value_role_not_authorized: 'value role is not authorized',
+  no_positive_binding_profile: 'no authorized metric/value binding',
+  metric_anchor_does_not_match_canonical_metric: 'metric anchor does not match the claim',
+};
 
 const terminalEvents = new Set([
   'run.completed',
@@ -309,10 +326,16 @@ function openEvidence(evidence: Evidence, trigger: HTMLElement): void {
   el<HTMLElement>('evidence-chunk').textContent = `chunk ${evidence.chunk_id}`;
   el<HTMLElement>('evidence-quote').textContent = evidence.quote;
   el<HTMLElement>('evidence-quote-match').textContent = evidence.quote_found ? 'Verified exact match' : 'Rejected';
+  const profileLabel = evidence.binding_profile
+    ? (bindingProfileLabels[evidence.binding_profile] ?? evidence.binding_profile)
+    : 'verified profile';
+  const failureLabel = evidence.binding_failure_reason
+    ? (bindingFailureLabels[evidence.binding_failure_reason] ?? evidence.binding_failure_reason)
+    : null;
   el<HTMLElement>('evidence-value-match').textContent =
     evidence.value_text_found && evidence.metric_value_bound && evidence.value_role_authorized
-      ? `Bound to metric · ${evidence.binding_profile ?? 'verified profile'}`
-      : `Rejected${evidence.binding_failure_reason ? ` · ${evidence.binding_failure_reason}` : ''}`;
+      ? `Bound to metric · ${profileLabel}`
+      : `Rejected${failureLabel ? ` · ${failureLabel}` : ''}`;
   el<HTMLElement>('evidence-sha').textContent = evidence.chunk_sha256;
   el<HTMLIFrameElement>('evidence-pdf').src = evidence.source_url;
   evidenceDialog.showModal();

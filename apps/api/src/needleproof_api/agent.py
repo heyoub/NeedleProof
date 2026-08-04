@@ -66,6 +66,9 @@ millions, billions, or basis points.
 For every evidence reference, copy an exact metric_anchor and the smallest exact_assertion that
 contains the complete metric/value relationship from the same exact_quote. The canonical
 metric must match that anchor after capitalization, punctuation, and spacing are normalized. For
+an authoritative reported value, end exact_assertion immediately after the value, terminal
+punctuation, or a trailing temporal anchor bound to that value; keep later commentary in
+exact_quote rather than appending it to exact_assertion. For
 coordinated or modified metric names, include the complete metric phrase (for example, "Revenue
 from products and services") rather than shortening it to an ambiguous head noun. For
 every typed observation, classify its kind and copy an exact temporal_anchor when the assertion

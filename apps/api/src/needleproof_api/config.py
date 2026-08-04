@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     corpus_source: Path = Path("data/corpus-source.json")
     top_k: int = Field(default=8, ge=1, le=20)
-    max_top_k: int = Field(default=20, ge=1, le=20)
+    max_top_k: int = Field(default=20, ge=8, le=20)
     max_turns: int = 6
     max_tool_calls: int = 12
     max_searches: int = 4

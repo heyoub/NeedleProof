@@ -9,10 +9,21 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.config import Settings
 from needleproof_api.db import AppDatabase
 from needleproof_api.main import create_run
-from needleproof_api.models import ClaimStatus, RunCreateRequest, RunStatus, VerifiedClaim
+from needleproof_api.models import (
+    ClaimStatus,
+    DraftClaim,
+    DraftObservation,
+    EvidenceReference,
+    EvidenceRelation,
+    ObservationKind,
+    RunCreateRequest,
+    RunStatus,
+    VerifiedClaim,
+)
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.service import (
     InvestigationService,
@@ -20,6 +31,7 @@ from needleproof_api.service import (
     SessionLiveRunError,
 )
 from needleproof_api.util import canonical_json, sha256_text
+from needleproof_api.verification import EvidenceVerifier
 
 
 def reseal_receipt(receipt):
@@ -75,6 +87,90 @@ async def test_rehearsal_replays_and_seals_without_model_access(tmp_path):
         "absence_probe.started",
         "absence_probe.completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_rehearsal_preserves_context_evidence_needed_for_conflict(tmp_path):
+    shutil.copytree(Path("data/corpora"), tmp_path / "corpora")
+    (tmp_path / "rehearsal").mkdir()
+    source = json.loads(Path("data/rehearsal/featured.json").read_text(encoding="utf-8"))
+    settings = Settings(data_dir=tmp_path)
+    corpus = CorpusStore(settings)
+    first_quote = (
+        "Fee-earning AUM is the number that actually matters for revenue and it ended "
+        "the year at $82 billion, up $9 billion or 13 percent."
+    )
+    second_quote = (
+        "First, my note from the February call has fee-earning AUM at $8.2 billion, "
+        "which cannot be right alongside the $82 billion figure above, and I have not "
+        "been able to work out which of my two sources introduced the error."
+    )
+    first_reference = EvidenceReference(
+        chunk_id=chunk_id_from_uint64(2565635019366042796),
+        metric_anchor="Fee-earning AUM",
+        exact_quote=first_quote,
+        exact_assertion=(
+            "Fee-earning AUM is the number that actually matters for revenue and it ended "
+            "the year at $82 billion"
+        ),
+    )
+    second_reference = EvidenceReference(
+        chunk_id=chunk_id_from_uint64(6812131146285660789),
+        metric_anchor="Fee-earning AUM",
+        exact_quote=second_quote,
+        exact_assertion=(
+            "First, my note from the February call has fee-earning AUM at $8.2 billion"
+        ),
+    )
+    context_reference = EvidenceReference(
+        chunk_id=chunk_id_from_uint64(6812131146285660789),
+        metric_anchor="Fee-earning AUM",
+        exact_quote=second_quote,
+        exact_assertion=second_quote,
+        relation=EvidenceRelation.SUPPORTS,
+    )
+    draft = DraftClaim(
+        metric="Fee-earning AUM",
+        observations=[
+            DraftObservation(
+                kind=ObservationKind.REPORTED_LEVEL,
+                value_text="$82 billion",
+                evidence=[first_reference],
+            ),
+            DraftObservation(
+                kind=ObservationKind.REPORTED_LEVEL,
+                value_text="$8.2 billion",
+                evidence=[second_reference],
+            ),
+        ],
+        context_evidence=[context_reference],
+    )
+    verified = EvidenceVerifier(corpus).verify_claim(draft)
+    assert verified.status == ClaimStatus.CONFLICT
+    conflict_index = next(
+        index for index, claim in enumerate(source["claims"]) if claim["status"] == "conflict"
+    )
+    source["claims"][conflict_index] = verified.model_dump(mode="json")
+    reseal_receipt(source)
+    rehearsal_path = tmp_path / "rehearsal" / "featured.json"
+    rehearsal_path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+
+    database = AppDatabase(settings.app_db_path)
+    await database.initialize()
+    service = InvestigationService(settings, database, corpus)
+    created = await service.create_run(
+        RunCreateRequest(question="Replay the context-backed conflict", rehearsal=True),
+        session_id="test-session",
+    )
+    await service._tasks[created.run_id]
+
+    envelope = await database.get_envelope(created.run_id)
+    assert envelope is not None
+    assert envelope.status == RunStatus.COMPLETED
+    replayed_conflict = next(
+        claim for claim in envelope.claims if claim.status == ClaimStatus.CONFLICT
+    )
+    assert replayed_conflict.context_evidence == [context_reference]
 
 
 @pytest.mark.asyncio

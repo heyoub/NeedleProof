@@ -77,11 +77,45 @@ export interface DraftObservation {
   evidence: EvidenceReference[];
 }
 
-export interface AbsenceProbe {
+export interface CompletedSearchRecord {
+  query: string;
+  normalized_query: string;
+  metric: string | null;
+  mode: 'dense' | 'lexical' | 'hybrid';
+  top_k: number;
+  document_ids: string[];
+  date_from: string | null;
+  date_to: string | null;
+  signature: string;
+  result_chunk_ids: string[];
+  result_count: number;
+  exact_metric_hit_count: number;
+  completion_status: 'completed' | 'failed';
+}
+
+export interface MetricOccurrence {
+  chunk_id: string;
+  sentence: string;
+  span: [number, number];
+}
+
+export interface ValueCandidate {
+  chunk_id: string;
+  metric_anchor: string;
+  value_text: string;
+  binding_profile: BindingProfile | null;
+  binding_failure_reason: string | null;
+}
+
+export interface AbsenceProbeResult {
   protocol_version: string;
   metric: string;
+  searches: CompletedSearchRecord[];
   unique_candidate_chunk_ids: string[];
   opened_chunk_ids: string[];
+  exact_metric_occurrences: MetricOccurrence[];
+  unresolved_predicate_occurrences: MetricOccurrence[];
+  supporting_value_candidates: ValueCandidate[];
   conclusion: 'not_found_in_probe' | 'evidence_requires_review' | 'incomplete_probe';
 }
 
@@ -90,8 +124,9 @@ export interface VerifiedClaim {
   metric: string;
   status: ClaimStatus;
   observations: DraftObservation[];
+  context_evidence: EvidenceReference[];
   evidence: Evidence[];
-  absence_probe: AbsenceProbe | null;
+  absence_probe: AbsenceProbeResult | null;
   verification_notes: string[];
 }
 

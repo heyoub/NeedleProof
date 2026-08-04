@@ -22,6 +22,7 @@ from .models import (
     ClaimStatus,
     DraftClaim,
     DraftObservation,
+    EvidenceReference,
     RunCreateRequest,
     RunCreateResponse,
     RunEnvelope,
@@ -521,7 +522,7 @@ class InvestigationService:
             raise ValueError(
                 "Rehearsal receipt failed integrity validation: " + "; ".join(validation_errors)
             )
-        if receipt.get("schema_version") != "1.3":
+        if receipt.get("schema_version") != "1.4":
             raise ValueError("Rehearsal receipt uses an unsupported schema version")
         if receipt.get("status") != RunStatus.COMPLETED.value:
             raise ValueError("Rehearsal source receipt must be completed")
@@ -558,10 +559,17 @@ class InvestigationService:
             observations = [
                 DraftObservation.model_validate(observation) for observation in source_observations
             ]
+            source_context_evidence = source_claim.get("context_evidence", [])
+            if not isinstance(source_context_evidence, list):
+                raise TypeError("Rehearsal source claim has invalid context evidence")
+            context_evidence = [
+                EvidenceReference.model_validate(reference) for reference in source_context_evidence
+            ]
             draft_claims.append(
                 DraftClaim(
                     metric=source_claim["metric"],
                     observations=observations,
+                    context_evidence=context_evidence,
                     request_absence_probe=source_status == ClaimStatus.NOT_FOUND.value,
                 )
             )

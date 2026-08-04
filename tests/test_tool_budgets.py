@@ -139,3 +139,5 @@ def test_top_k_configuration_cannot_exceed_public_tool_contract():
         Settings(max_top_k=21)
     with pytest.raises(ValidationError):
         Settings(top_k=9, max_top_k=8)
+    with pytest.raises(ValidationError):
+        Settings(top_k=4, max_top_k=4)

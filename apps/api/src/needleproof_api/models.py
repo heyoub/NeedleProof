@@ -139,13 +139,6 @@ class DraftObservation(BaseModel):
     temporal_anchor: NonEmptyText | None = None
     evidence: list[EvidenceReference] = Field(min_length=1)
 
-    @field_validator("value_text")
-    @classmethod
-    def require_value_text(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("observation value must contain non-whitespace text")
-        return value
-
 
 class DraftClaim(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -208,6 +201,7 @@ class AbsenceProbeResult(BaseModel):
     unique_candidate_chunk_ids: list[ChunkId]
     opened_chunk_ids: list[ChunkId]
     exact_metric_occurrences: list[MetricOccurrence]
+    unresolved_predicate_occurrences: list[MetricOccurrence]
     supporting_value_candidates: list[ValueCandidate]
     conclusion: AbsenceConclusion
 
@@ -249,6 +243,7 @@ class VerifiedClaim(BaseModel):
     metric: str
     status: ClaimStatus
     observations: list[DraftObservation] = Field(default_factory=list)
+    context_evidence: list[EvidenceReference] = Field(default_factory=list)
     evidence: list[VerifiedEvidence] = Field(default_factory=list)
     absence_probe: AbsenceProbeResult | None = None
     verification_notes: list[str] = Field(default_factory=list)

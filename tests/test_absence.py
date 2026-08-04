@@ -85,6 +85,8 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
     )
 
     class Corpus:
+        corpus_version = "v_0000000000000001"
+
         async def search(self, query, *, mode, top_k, recorder=None):
             del recorder
             return SearchResult(
@@ -107,10 +109,108 @@ async def test_unrecognized_metric_adjacent_number_requires_review():
                 ][:top_k],
             )
 
-        def get_chunks(self, chunk_ids):
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
             return [chunk] if chunk_id in chunk_ids else []
 
-    probe = await probe_metric_absence(Corpus(), "total headcount")  # type: ignore[arg-type]
+    probe = await probe_metric_absence(Corpus(), "total headcount")
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert probe.supporting_value_candidates[0].binding_profile is None
     assert probe.supporting_value_candidates[0].binding_failure_reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Credit rating was stable.",
+        "Credit rating: stable.",
+        "Credit rating reached stable.",
+    ],
+)
+async def test_exact_metric_with_qualitative_predicate_requires_review(sentence):
+    chunk_id = chunk_id_from_uint64(2**63 + 23)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_absence_qualitative",
+        document_name="Qualitative absence fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=sentence,
+        normalized_text=sentence,
+        sha256="c" * 64,
+        token_estimate=5,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000002"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="d" * 64,
+                results=[
+                    SearchHit(
+                        chunk_id=chunk_id,
+                        score=1.0,
+                        lexical_score=1.0,
+                        lexical_rank=1,
+                        retrieval_mode=mode,
+                        document_id=chunk.document_id,
+                        document_name=chunk.document_name,
+                        physical_page_index=1,
+                        preview=chunk.text,
+                        sha256=chunk.sha256,
+                    )
+                ][:top_k],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+    probe = await probe_metric_absence(Corpus(), "Credit rating")
+    verified = EvidenceVerifier(Corpus()).verify_claim(
+        DraftClaim(metric="Credit rating", request_absence_probe=True),
+        absence_probe=probe,
+    )
+
+    assert probe.exact_metric_occurrences
+    assert probe.unresolved_predicate_occurrences
+    assert not probe.supporting_value_candidates
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_failed_search_makes_absence_probe_incomplete():
+    class Corpus:
+        corpus_version = "v_0000000000000003"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            if "fiscal year" in query:
+                raise RuntimeError("injected search failure")
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="e" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del chunk_ids, neighbor_radius
+            return []
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Total headcount")
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="Total headcount", request_absence_probe=True),
+        absence_probe=probe,
+    )
+
+    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert sum(search.completion_status == "completed" for search in probe.searches) == 3
+    assert verified.status == ClaimStatus.UNVERIFIED
