@@ -8,6 +8,7 @@ from hypothesis import strategies as st
 from needleproof_api.absence import (
     _metric_context_numeric_candidates,
     derive_absence_conclusion,
+    derive_absence_conclusion_against_corpus,
     probe_metric_absence,
 )
 from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
@@ -558,7 +559,18 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
 
 
 @pytest.mark.asyncio
-async def test_open_anaphoric_continuation_extends_into_linked_chunk():
+@pytest.mark.parametrize(
+    ("local_text", "linked_text", "expected_value"),
+    [
+        ("Fee-earning AUM. It remained at", "$82 billion.", "$82 billion"),
+        ("Fee-earning AUM. It was", "500 dollars.", "500"),
+    ],
+)
+async def test_open_anaphoric_continuation_extends_into_linked_chunk(
+    local_text,
+    linked_text,
+    expected_value,
+):
     metric_id = chunk_id_from_uint64(2**63 + 41)
     value_id = chunk_id_from_uint64(2**63 + 42)
     metric_chunk = ChunkRecord(
@@ -567,8 +579,8 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk():
         document_name="Split anaphor fixture",
         physical_page_index=1,
         chunk_position=0,
-        text="Fee-earning AUM. It remained at",
-        normalized_text="Fee-earning AUM. It remained at",
+        text=local_text,
+        normalized_text=local_text,
         next_chunk_id=value_id,
         sha256="4" * 64,
         token_estimate=6,
@@ -579,8 +591,8 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk():
         document_name="Split anaphor fixture",
         physical_page_index=1,
         chunk_position=1,
-        text="$82 billion.",
-        normalized_text="$82 billion.",
+        text=linked_text,
+        normalized_text=linked_text,
         previous_chunk_id=metric_id,
         sha256="5" * 64,
         token_estimate=3,
@@ -599,10 +611,12 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk():
             )
 
         def get_chunks(self, chunk_ids, neighbor_radius=0):
-            del neighbor_radius
-            if metric_id not in chunk_ids:
-                return []
-            return [metric_chunk, value_chunk]
+            chunks = []
+            if metric_id in chunk_ids:
+                chunks.append(metric_chunk)
+            if value_id in chunk_ids or (neighbor_radius and metric_id in chunk_ids):
+                chunks.append(value_chunk)
+            return chunks
 
         def find_exact_metric_chunks(self, metric):
             assert metric == "Fee-earning AUM"
@@ -613,7 +627,11 @@ async def test_open_anaphoric_continuation_extends_into_linked_chunk():
 
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert any(
-        candidate.value_text == "$82 billion" for candidate in probe.supporting_value_candidates
+        candidate.value_text == expected_value for candidate in probe.supporting_value_candidates
+    )
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     )
     forged = probe.model_copy(
         update={
