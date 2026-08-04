@@ -258,6 +258,34 @@ def test_bound_leading_temporal_anchor_may_precede_complete_metric(quote, tempor
     )
 
 
+@given(
+    prefix=st.from_regex(r"[A-Za-z]{1,24}", fullmatch=True).filter(
+        lambda value: value.casefold() != "the"
+    )
+)
+def test_unknown_pre_metric_prefix_always_fails_closed(prefix):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            f"{prefix} Revenue was $2 million.",
+        )
+        is None
+    )
+
+
+@given(suffix=st.from_regex(r"[A-Za-z]{1,24}", fullmatch=True))
+def test_unknown_post_value_suffix_always_fails_closed(suffix):
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            "Revenue",
+            f"Revenue was $2 million {suffix}.",
+        )
+        is None
+    )
+
+
 def test_compound_metric_anchor_is_not_split_at_and():
     metric = "Research and development expenses"
     quote = f"{metric} were $2 million."
