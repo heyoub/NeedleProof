@@ -51,6 +51,16 @@ _BOUND_CONFLICT_RELATION = re.compile(
 )
 _TEMPORAL_LEAD = re.compile(r"^(?:as\s+of|at|by|during|for|in|on|through)\s+", re.IGNORECASE)
 _QUARTER_NUMBERS = {"first": "1", "second": "2", "third": "3", "fourth": "4"}
+_CONFLICT_BRIDGE_LEFT_GAP = re.compile(r"\s*,?\s*(?:which\s+)?", re.IGNORECASE)
+_CONFLICT_BRIDGE_RIGHT_GAP = re.compile(r"\s*(?:the\s*)?", re.IGNORECASE)
+_CONFLICT_COLLECTIVE_LEAD_GAP = re.compile(
+    r"\s*[,;:]?\s*(?:(?:and|but)\s+)?(?:the\s+)?",
+    re.IGNORECASE,
+)
+_CONFLICT_COLLECTIVE_TAIL = re.compile(
+    r"\s*(?:with\s+(?:one\s+another|each\s+other))?\s*[.!?]?\s*",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +267,7 @@ def _compatible_measurements(
 
 
 def _relation_binds_distinct_measurements(
+    sentence: str,
     relation: re.Match[str],
     measurements: list[tuple[tuple[str, str, str, str], tuple[int, int]]],
     authorized_values: set[tuple[str, str, str, str]],
@@ -266,12 +277,22 @@ def _relation_binds_distinct_measurements(
         after = [item for item in measurements if item[1][0] >= relation.end()]
         if not before or not after:
             return False
-        candidates = (before[-1][0], after[0][0])
+        left, right = before[-1], after[0]
+        if not _CONFLICT_BRIDGE_LEFT_GAP.fullmatch(sentence[left[1][1] : relation.start()]):
+            return False
+        if not _CONFLICT_BRIDGE_RIGHT_GAP.fullmatch(sentence[relation.end() : right[1][0]]):
+            return False
+        candidates = (left[0], right[0])
         return len(set(candidates)) >= 2 and any(value in candidates for value in authorized_values)
-    observed_authorized = {
-        signature for signature, _span in measurements if signature in authorized_values
-    }
-    return len(observed_authorized) >= 2
+    observed_authorized = [item for item in measurements if item[0] in authorized_values]
+    if len({signature for signature, _span in observed_authorized}) < 2:
+        return False
+    last_value_end = observed_authorized[-1][1][1]
+    return bool(
+        last_value_end <= relation.start()
+        and _CONFLICT_COLLECTIVE_LEAD_GAP.fullmatch(sentence[last_value_end : relation.start()])
+        and _CONFLICT_COLLECTIVE_TAIL.fullmatch(sentence[relation.end() :])
+    )
 
 
 def _has_explicit_conflict(
@@ -302,6 +323,7 @@ def _has_explicit_conflict(
                 continue
             measurements = _compatible_measurements(sentence, authorized_values)
             if _relation_binds_distinct_measurements(
+                sentence,
                 relation,
                 measurements,
                 authorized_values,
@@ -346,7 +368,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v10-local-conflicts-and-periods"
+    version = "deterministic-verifier-v11-local-conflict-spans"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

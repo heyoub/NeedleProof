@@ -56,8 +56,10 @@ values with distinct valid temporal signatures become date variants; equivalent 
 month spellings are canonicalized before comparison. Values tied to one common period or explicitly
 characterized by the source as incompatible become conflicts. Explicit conflict is itself a closed
 positive profile: the canonical metric, conflict relationship, and two distinct compatible
-measurements must occur in the same local sentence. Merely finding a word such as `incompatible`
-elsewhere in the enclosing quotation proves nothing. Recognized same-metric conflict evidence
+measurements must occur in the same local sentence. A direct bridge must sit immediately between
+the two values; a collective characterization must immediately follow two authorized values and
+end the sentence. Merely finding a word such as `incompatible` elsewhere in the enclosing
+quotation proves nothing. Recognized same-metric conflict evidence
 prevents a lone reported value from becoming authoritative, regardless of the model-supplied
 evidence relation. Unresolved relationships never enter authoritative prose.
 

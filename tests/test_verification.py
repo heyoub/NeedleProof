@@ -680,6 +680,91 @@ def test_year_is_not_mistaken_for_second_unitless_conflict_value():
     assert verified.status == ClaimStatus.VERIFIED
 
 
+@pytest.mark.parametrize(
+    "quote",
+    [
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025; "
+            "operating expense figures are incompatible."
+        ),
+        (
+            "Revenue was $2 million in 2024. Revenue was $3 million in 2025; "
+            "the reports are incompatible with our software."
+        ),
+    ],
+)
+def test_collective_conflict_profile_rejects_competing_subjects_and_tails(quote):
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 905),
+        document_id="doc_collective_conflict_scope",
+        document_name="Collective conflict scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="5" * 64,
+        token_estimate=16,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million in 2024.",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $3 million in 2025",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("$2 million", first, temporal_anchor="2024"),
+            observation("$3 million", second, temporal_anchor="2025"),
+        )
+    )
+
+    assert verified.status == ClaimStatus.DATE_VARIANT
+
+
+def test_conflict_bridge_cannot_borrow_competing_metric_value():
+    quote = (
+        "Revenue was $2 million, which cannot be right alongside operating expenses of $3 million."
+    )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 906),
+        document_id="doc_bridge_conflict_scope",
+        document_name="Bridge conflict scope fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="4" * 64,
+        token_estimate=14,
+    )
+    value_evidence = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+    )
+    context = reference(
+        chunk.chunk_id,
+        quote,
+        "Revenue",
+        assertion="Revenue was $2 million",
+        relation=EvidenceRelation.CONTEXTUALIZES,
+    )
+    draft = claim("Revenue", observation("$2 million", value_evidence))
+    draft.context_evidence.append(context)
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(draft)
+
+    assert verified.status == ClaimStatus.VERIFIED
+
+
 def test_equivalent_quarter_anchors_classify_distinct_values_as_conflict():
     quote = "Revenue was $2 million in Q1 2025. Revenue was $3 million in first quarter 2025."
     chunk = ChunkRecord(
