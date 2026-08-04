@@ -15,6 +15,7 @@ from .binding import (
     Span,
     bind_observation,
     canonical_numeric_signature,
+    canonical_word_phrase,
     has_positive_anaphoric_numeric_followup,
     is_authorized_temporal_anchor,
     numeric_signature_sequence,
@@ -225,7 +226,7 @@ def _canonical_value(value: str) -> str:
     signatures = numeric_signature_sequence(value)
     if signatures:
         return repr(tuple(canonical_numeric_signature(signature) for signature in signatures))
-    return normalize_evidence_text(value)[0].casefold()
+    return canonical_word_phrase(value)
 
 
 def _distinct_values(observations: Iterable[DraftObservation]) -> set[str]:
@@ -497,7 +498,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v20-contiguous-metric-phrases"
+    version = "deterministic-verifier-v21-canonical-word-phrases"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

@@ -21,6 +21,8 @@ An authoritative observation must prove all of these facts:
   so those terms cannot disappear from the authoritative metric;
 - the exact value occurs in the assertion;
 - one closed positive binding profile connects that metric span to that value span;
+- nonnumeric value identity uses the same normalized, case-folded word-token sequence as the
+  binder, so permitted punctuation and formatting cannot manufacture distinct values;
 - the exact assertion ends at the value or its bound trailing temporal anchor, apart from terminal
   punctuation, so a later target, forecast, bound, component, delta, or negation cannot change the
   value role after the matched prefix;

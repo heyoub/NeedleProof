@@ -139,7 +139,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v10-contiguous-metric-phrases",
+    "version": "positive-bindings-v11-canonical-word-phrases",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -172,6 +172,7 @@ BINDING_CONTRACT_SPEC = {
     "metric_phrase_separator_policy": (
         "bounded_formatting_or_multi_initial_abbreviation_never_clause_punctuation"
     ),
+    "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
     "intra_phrase_formatting_pattern": _INTRA_PHRASE_FORMATTING.pattern,
     "unresolved_predicate_detection": (
         "known positive connector after at most eight punctuation-free qualifier words "
@@ -248,6 +249,13 @@ def canonical_numeric_signature(signature: NumericSignature) -> NumericSignature
     sign, currency, number, unit = signature
     canonical_unit = _UNIT_ALIASES.get(unit, unit)
     return sign, currency, canonical_decimal_digits(number), canonical_unit
+
+
+def canonical_word_phrase(value: str) -> str:
+    """Return the binder's punctuation-independent word-token identity."""
+
+    normalized = normalize_evidence_text(value)[0].casefold()
+    return " ".join(match.group() for match in _WORD.finditer(normalized))
 
 
 def word_phrase_spans(needle: str, haystack: str) -> list[Span]:

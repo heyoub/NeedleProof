@@ -118,7 +118,19 @@ async def test_retained_schema_1_2_run_envelope_is_adapted_read_only(
 
 
 @pytest.mark.asyncio
-async def test_terminal_recovery_adapts_schema_1_2_claims_before_validation(tmp_path):
+@pytest.mark.parametrize(
+    "legacy_exact_quotes",
+    [
+        ["Revenue was $2 million."],
+        [""],
+        ["  \t"],
+        ["", "Revenue was $2 million."],
+    ],
+)
+async def test_terminal_recovery_adapts_schema_1_2_claims_before_validation(
+    tmp_path,
+    legacy_exact_quotes,
+):
     run_id = "run_" + "5" * 32
     corpus_version = "v_" + "6" * 16
     legacy_receipt = {
@@ -143,9 +155,10 @@ async def test_terminal_recovery_adapts_schema_1_2_claims_before_validation(tmp_
                             {
                                 "chunk_id": "chk_8000000000000001",
                                 "metric_anchor": "Revenue",
-                                "exact_quote": "Revenue was $2 million.",
+                                "exact_quote": legacy_exact_quote,
                                 "relation": "supports",
                             }
+                            for legacy_exact_quote in legacy_exact_quotes
                         ],
                     }
                 ],
@@ -237,6 +250,17 @@ async def test_terminal_recovery_adapts_schema_1_2_claims_before_validation(tmp_
     assert envelope is not None
     assert envelope.status == RunStatus.COMPLETED
     assert envelope.claims[0].status == ClaimStatus.POSSIBLE_CONFLICT
-    assert envelope.claims[0].observations[0].value_text == "$2 million"
-    assert envelope.claims[0].observations[0].temporal_anchor is None
-    assert "schema-1.2" in envelope.claims[0].verification_notes[-1]
+    valid_quotes = [quote for quote in legacy_exact_quotes if quote.strip()]
+    if valid_quotes:
+        assert envelope.claims[0].observations[0].value_text == "$2 million"
+        assert envelope.claims[0].observations[0].temporal_anchor is None
+        assert len(envelope.claims[0].observations[0].evidence) == len(valid_quotes)
+    else:
+        assert envelope.claims[0].observations == []
+        assert any(
+            "Omitted 1 legacy observation" in note for note in envelope.claims[0].verification_notes
+        )
+    assert any("schema-1.2" in note for note in envelope.claims[0].verification_notes)
+    assert sum(
+        "empty legacy evidence" in note for note in envelope.claims[0].verification_notes
+    ) == (1 if len(valid_quotes) != len(legacy_exact_quotes) else 0)

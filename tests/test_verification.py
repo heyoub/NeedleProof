@@ -1322,6 +1322,48 @@ def test_rate_and_percentage_are_not_silently_rescaled():
     assert len(_distinct_values(values)) == 2
 
 
+@given(suffix=st.text(alphabet=".,!?;:", min_size=1, max_size=8))
+def test_qualitative_value_identity_ignores_binder_equivalent_terminal_punctuation(suffix):
+    evidence = reference(MEMO_CHUNK, "Revenue was stable.", "Revenue")
+    values = [observation("stable", evidence), observation(f"stable{suffix}", evidence)]
+
+    assert len(_distinct_values(values)) == 1
+
+
+def test_distinct_qualitative_words_remain_distinct():
+    evidence = reference(MEMO_CHUNK, "Revenue was stable.", "Revenue")
+    values = [observation("stable", evidence), observation("unstable", evidence)]
+
+    assert len(_distinct_values(values)) == 2
+
+
+def test_equivalent_qualitative_formatting_cannot_create_false_conflict():
+    quote = "Revenue was stable."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 921),
+        document_id="doc_qualitative_identity",
+        document_name="Qualitative identity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="9" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, quote, "Revenue")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Revenue",
+            observation("stable", evidence),
+            observation("stable.", evidence),
+        )
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.statement == "Revenue: stable"
+
+
 def test_model_contract_has_observations_but_no_publishable_answer_or_status():
     claim_properties = DraftClaim.model_json_schema()["properties"]
     assert "observations" in claim_properties

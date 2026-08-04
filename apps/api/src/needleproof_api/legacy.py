@@ -151,13 +151,31 @@ def _legacy_optional_temporal_anchor(value: str | None) -> str | None:
     return normalized or None
 
 
-def _adapt_reference(reference: LegacyEvidenceReferenceV12) -> EvidenceReference:
+def _adapt_reference(reference: LegacyEvidenceReferenceV12) -> EvidenceReference | None:
+    if not reference.exact_quote.strip():
+        return None
     return EvidenceReference(
         chunk_id=reference.chunk_id,
         metric_anchor=reference.metric_anchor,
         exact_quote=reference.exact_quote,
         exact_assertion=reference.exact_quote,
         relation=reference.relation,
+    )
+
+
+def _adapt_reported_value(reported: LegacyReportedValueV12) -> DraftObservation | None:
+    references = [
+        adapted
+        for reference in reported.evidence
+        if (adapted := _adapt_reference(reference)) is not None
+    ]
+    if not reported.value.strip() or not references:
+        return None
+    return DraftObservation(
+        kind=_legacy_observation_kind(reported.value),
+        value_text=reported.value,
+        temporal_anchor=_legacy_optional_temporal_anchor(reported.temporal_anchor),
+        evidence=references,
     )
 
 
@@ -208,14 +226,29 @@ def adapt_legacy_run_envelope(value: Any) -> RunEnvelope:
     claims = []
     for claim in legacy.claims:
         observations = [
-            DraftObservation(
-                kind=_legacy_observation_kind(reported.value),
-                value_text=reported.value,
-                temporal_anchor=_legacy_optional_temporal_anchor(reported.temporal_anchor),
-                evidence=[_adapt_reference(reference) for reference in reported.evidence],
-            )
+            adapted
             for reported in claim.values
+            if (adapted := _adapt_reported_value(reported)) is not None
         ]
+        omitted_references = sum(
+            not reference.exact_quote.strip()
+            for reported in claim.values
+            for reference in reported.evidence
+        )
+        omitted_observations = len(claim.values) - len(observations)
+        compatibility_notes = [
+            "Read-only result adapted from the schema-1.2 evidence-location contract."
+        ]
+        if omitted_references:
+            compatibility_notes.append(
+                f"Omitted {omitted_references} empty legacy evidence reference(s) that cannot "
+                "satisfy the current typed evidence contract."
+            )
+        if omitted_observations:
+            compatibility_notes.append(
+                f"Omitted {omitted_observations} legacy observation(s) left without usable "
+                "evidence or value."
+            )
         claims.append(
             VerifiedClaim(
                 statement=claim.statement,
@@ -227,7 +260,7 @@ def adapt_legacy_run_envelope(value: Any) -> RunEnvelope:
                 absence_probe=None,
                 verification_notes=[
                     *claim.verification_notes,
-                    "Read-only result adapted from the schema-1.2 evidence-location contract.",
+                    *compatibility_notes,
                 ],
             )
         )
