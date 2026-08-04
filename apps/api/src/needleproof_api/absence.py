@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v20-temporal-anaphoric-state-machine"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v21-structural-anaphoric-state-machine"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 _VALUE_FIRST_METRIC_BRIDGE = re.compile(
@@ -303,10 +303,13 @@ def _join_source_fragments(left: str, right: str) -> str:
     return f"{left}{separator}{right}"
 
 
-_ANAPHORIC_SENTENCE_LEAD = re.compile(
+_POTENTIAL_ANAPHORIC_PREDICATE_LEAD = re.compile(
     r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
     r"(?:(?:it|they|this|that|these|those)\b|"
-    r"(?:the|these|those)\s+(?:figures?|values?|amounts?|numbers?)\b)",
+    r"(?:the|these|those)\s+(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,3}))"
+    r"\s+(?:is|are|was|were|remained(?:\s+at)?|stayed(?:\s+at)?|"
+    r"reached|stood\s+at|amounted\s+to|reported(?:\s+at)?|"
+    r"totaled|totalled|ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at)\b",
     re.IGNORECASE,
 )
 
@@ -330,7 +333,7 @@ def _linked_following_fragment(
         # immediately following anaphoric sentence may still belong to the
         # metric assertion, so omitting it cannot prove absence. Keep that
         # shape deliberately unsupported and fail closed.
-        complete = _ANAPHORIC_SENTENCE_LEAD.match(remainder) is None
+        complete = _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(remainder) is None
         if complete and not remainder.strip() and following.next_chunk_id is not None:
             # The probe opens one source neighbor. If the consumed sentence
             # ends exactly at that boundary, a further linked anaphor cannot
@@ -382,7 +385,7 @@ def _metric_occurrence_with_open_neighbors(
     if following_boundary:
         after = after[: following_boundary[1]]
         remainder = chunk.normalized_text[metric_end + following_boundary[1] :]
-        if _ANAPHORIC_SENTENCE_LEAD.match(remainder):
+        if _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(remainder):
             anaphoric_boundaries = punctuation_boundaries(remainder)
             after = _join_source_fragments(
                 after,
@@ -390,14 +393,14 @@ def _metric_occurrence_with_open_neighbors(
             )
             if anaphoric_boundaries:
                 trailing = remainder[anaphoric_boundaries[0][1] :]
-                if _ANAPHORIC_SENTENCE_LEAD.match(trailing):
+                if _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(trailing):
                     # One anaphoric continuation is the maximum supported proof
                     # profile. A second coreferential sentence may still own a
                     # value for the metric, so excluding it cannot prove absence.
                     complete = False
                 elif not trailing.strip() and chunk.next_chunk_id is not None:
                     following = chunks_by_id.get(chunk.next_chunk_id)
-                    if following is None or _ANAPHORIC_SENTENCE_LEAD.match(
+                    if following is None or _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(
                         following.normalized_text
                     ):
                         complete = False
@@ -412,7 +415,7 @@ def _metric_occurrence_with_open_neighbors(
             following = chunks_by_id.get(chunk.next_chunk_id)
             if following is None:
                 complete = False
-            elif _ANAPHORIC_SENTENCE_LEAD.match(following.normalized_text):
+            elif _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(following.normalized_text):
                 following_fragment, following_complete = _linked_following_fragment(
                     chunk,
                     chunks_by_id,
