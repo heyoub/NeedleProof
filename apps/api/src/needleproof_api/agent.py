@@ -42,7 +42,13 @@ from .models import (
 )
 from .receipt import RunLedger
 from .retrieval import CorpusStore
-from .util import canonical_json, normalize_evidence_text, sha256_text, utc_now_iso
+from .util import (
+    canonical_json,
+    canonical_metric_key,
+    normalize_evidence_text,
+    sha256_text,
+    utc_now_iso,
+)
 from .verification import EvidenceVerifier
 
 
@@ -202,7 +208,12 @@ class InvestigationContext:
                 result_chunk_ids=[hit.chunk_id for hit in result.results],
                 result_count=len(result.results),
                 exact_metric_hit_count=sum(
-                    bool(word_phrase_spans(arguments["metric"], chunk.normalized_text))
+                    bool(
+                        word_phrase_spans(
+                            canonical_metric_key(arguments["metric"]),
+                            chunk.normalized_text,
+                        )
+                    )
                     for chunk in result_chunks
                 )
                 if arguments.get("metric")

@@ -5,7 +5,7 @@ import threading
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from needleproof_api.absence import probe_metric_absence
+from needleproof_api.absence import derive_absence_conclusion, probe_metric_absence
 from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.models import (
@@ -38,6 +38,48 @@ async def test_bounded_absence_probe_authorizes_seeded_missing_metric(corpus):
     answer = compose_authoritative_answer([verified], 2, corpus.corpus_version)
     assert "Not found after 4 searches" in str(answer)
     assert "Not found after 2 searches" not in str(answer)
+
+
+@pytest.mark.asyncio
+async def test_verifier_recomputes_absence_proof_instead_of_trusting_conclusion(corpus):
+    complete = await probe_metric_absence(corpus, "total headcount")
+    assert derive_absence_conclusion(complete) == AbsenceConclusion.NOT_FOUND_IN_PROBE
+
+    mutations = [
+        complete.model_copy(update={"searches": []}),
+        complete.model_copy(update={"exact_metric_scan_completed": False}),
+        complete.model_copy(update={"opened_chunk_ids": []}),
+        complete.model_copy(update={"protocol_version": "fabricated-protocol"}),
+    ]
+    for mutated in mutations:
+        forged = mutated.model_copy(update={"conclusion": AbsenceConclusion.NOT_FOUND_IN_PROBE})
+        verified = EvidenceVerifier(corpus).verify_claim(
+            DraftClaim(metric="total headcount", request_absence_probe=True),
+            absence_probe=forged,
+        )
+
+        assert derive_absence_conclusion(forged) != AbsenceConclusion.NOT_FOUND_IN_PROBE
+        assert verified.status == ClaimStatus.UNVERIFIED
+
+
+@pytest.mark.asyncio
+async def test_recomputed_absence_detects_omitted_reviewable_candidates(corpus):
+    reviewable = await probe_metric_absence(corpus, "Fee-related earnings")
+    forged = reviewable.model_copy(
+        update={
+            "supporting_value_candidates": [],
+            "unresolved_predicate_occurrences": [],
+            "conclusion": AbsenceConclusion.NOT_FOUND_IN_PROBE,
+        }
+    )
+
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="Fee-related earnings", request_absence_probe=True),
+        absence_probe=forged,
+    )
+
+    assert derive_absence_conclusion(forged) == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert verified.status == ClaimStatus.UNVERIFIED
 
 
 @pytest.mark.asyncio

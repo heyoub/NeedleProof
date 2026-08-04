@@ -79,7 +79,9 @@ qualifier words between the exact metric and a closed positive connector, so `Cr
 period was stable` cannot authorize absence. A bare rubric or instruction mention does not by
 itself claim a value and therefore does not block the bounded conclusion. The conclusion remains
 bounded to the recorded probe and exact corpus version; it never claims that the corpus proves
-nonexistence.
+nonexistence. The verifier independently re-derives that conclusion from the typed search records,
+signatures, exact-scan state, candidate/opened ID coverage, and metric occurrences; it never trusts
+the producer's stored conclusion field by itself.
 
 ## Numeric integrity
 

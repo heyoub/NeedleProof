@@ -142,6 +142,59 @@ def test_chunk_lookup_batches_sqlite_parameters_and_preserves_order(haystack_sto
     assert [str(chunk.chunk_id) for chunk in chunks] == chunk_ids
 
 
+def test_chunk_lookup_preserves_order_across_real_sqlite_batch_boundary(tmp_path):
+    db_path = tmp_path / "batch-boundary.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE chunks (
+                internal_id INTEGER PRIMARY KEY,
+                chunk_external_id TEXT NOT NULL UNIQUE,
+                document_id TEXT NOT NULL,
+                document_name TEXT NOT NULL,
+                physical_page_index INTEGER NOT NULL,
+                printed_page_label TEXT,
+                chunk_position INTEGER NOT NULL,
+                raw_text TEXT NOT NULL,
+                normalized_text TEXT NOT NULL,
+                previous_chunk_id TEXT,
+                next_chunk_id TEXT,
+                sha256 TEXT NOT NULL,
+                token_estimate INTEGER NOT NULL
+            )
+            """
+        )
+        rows = [
+            (
+                index,
+                f"chk_{index:016x}",
+                "doc_batch",
+                "Batch boundary",
+                1,
+                "1",
+                index,
+                f"Chunk {index}",
+                f"Chunk {index}",
+                None,
+                None,
+                f"{index:064x}",
+                2,
+            )
+            for index in range(1, 502)
+        ]
+        connection.executemany(
+            "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+        )
+    store = object.__new__(CorpusStore)
+    store.db_path = db_path
+    requested = [row[1] for row in reversed(rows)]
+
+    chunks = store.get_chunks(requested)
+
+    assert len(chunks) == 501
+    assert [str(chunk.chunk_id) for chunk in chunks] == requested
+
+
 @pytest.mark.asyncio
 async def test_dense_lexical_and_hybrid_rank_needles_inside_real_haystack(haystack_store):
     store = haystack_store

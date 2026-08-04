@@ -93,4 +93,8 @@ async def test_retained_schema_1_2_run_envelope_is_adapted_read_only(tmp_path):
     assert envelope.claims[0].observations[0].evidence[0].exact_assertion == (
         "Revenue was $2 million."
     )
+    adapted_evidence = envelope.claims[0].evidence[0]
+    assert adapted_evidence.temporal_anchor is None
+    assert adapted_evidence.temporal_value_bound is False
+    assert adapted_evidence.binding_profile is None
     assert "schema-1.2" in envelope.claims[0].verification_notes[-1]

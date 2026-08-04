@@ -22,8 +22,9 @@ from .models import (
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v6-qualified-predicate-windows"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v7-recomputed-proof"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
+ABSENCE_MIN_TOP_K = 8
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -34,7 +35,7 @@ ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
 ABSENCE_PROTOCOL_SPEC = {
     "version": ABSENCE_PROTOCOL_VERSION,
     "minimum_searches": 4,
-    "minimum_top_k": 8,
+    "minimum_top_k": ABSENCE_MIN_TOP_K,
     "requires_exact_lexical_probe": True,
     "requires_exhaustive_exact_metric_scan": True,
     "exact_metric_scan": {
@@ -113,6 +114,76 @@ def search_signature(
     )
 
 
+def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
+    """Recompute the bounded conclusion from the complete typed proof record."""
+
+    expected_probes = tuple(
+        (template.format(metric=probe.metric), mode) for template, mode in ABSENCE_PROBE_TEMPLATES
+    )
+    if probe.protocol_version != ABSENCE_PROTOCOL_VERSION or len(probe.searches) != len(
+        expected_probes
+    ):
+        return AbsenceConclusion.INCOMPLETE_PROBE
+    for search, (expected_query, expected_mode) in zip(
+        probe.searches,
+        expected_probes,
+        strict=True,
+    ):
+        if (
+            search.completion_status != "completed"
+            or search.mode != expected_mode
+            or search.normalized_query != _normalized_query(expected_query)
+            or canonical_metric_key(search.metric or "") != canonical_metric_key(probe.metric)
+            or search.top_k < ABSENCE_MIN_TOP_K
+            or search.document_ids
+            or search.date_from is not None
+            or search.date_to is not None
+            or search.result_count != len(search.result_chunk_ids)
+            or len(set(search.result_chunk_ids)) != len(search.result_chunk_ids)
+            or search.signature
+            != search_signature(
+                query=expected_query,
+                metric=probe.metric,
+                mode=expected_mode,
+                top_k=search.top_k,
+            )
+        ):
+            return AbsenceConclusion.INCOMPLETE_PROBE
+
+    candidate_ids = probe.unique_candidate_chunk_ids
+    opened_ids = probe.opened_chunk_ids
+    candidate_set = set(candidate_ids)
+    opened_set = set(opened_ids)
+    occurrence_ids = {occurrence.chunk_id for occurrence in probe.exact_metric_occurrences}
+    result_ids = {chunk_id for search in probe.searches for chunk_id in search.result_chunk_ids}
+    exact_scan_ids = set(probe.exact_metric_scan_chunk_ids)
+    if (
+        not probe.exact_metric_scan_completed
+        or probe.exact_metric_scan_error is not None
+        or len(candidate_set) != len(candidate_ids)
+        or len(opened_set) != len(opened_ids)
+        or candidate_set != opened_set
+        or not result_ids.issubset(candidate_set)
+        or not exact_scan_ids.issubset(candidate_set)
+        or not exact_scan_ids.issubset(occurrence_ids)
+        or not occurrence_ids.issubset(opened_set)
+    ):
+        return AbsenceConclusion.INCOMPLETE_PROBE
+
+    reviewable_occurrence = any(
+        has_unresolved_metric_predicate(probe.metric, occurrence.sentence)
+        or bool(numeric_value_candidates(occurrence.sentence))
+        for occurrence in probe.exact_metric_occurrences
+    )
+    if (
+        probe.unresolved_predicate_occurrences
+        or probe.supporting_value_candidates
+        or reviewable_occurrence
+    ):
+        return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    return AbsenceConclusion.NOT_FOUND_IN_PROBE
+
+
 async def probe_metric_absence(
     corpus: AbsenceCorpus,
     metric: str,
@@ -122,7 +193,7 @@ async def probe_metric_absence(
 ) -> AbsenceProbeResult:
     """Run a server-owned bounded probe; never infer absence from model omissions."""
 
-    top_k = max(8, min(top_k, 20))
+    top_k = max(ABSENCE_MIN_TOP_K, min(top_k, 20))
     metric_phrase = canonical_metric_key(metric)
     probes = tuple(
         (template.format(metric=metric), mode) for template, mode in ABSENCE_PROBE_TEMPLATES
@@ -237,23 +308,7 @@ async def probe_metric_absence(
                     )
                 )
 
-    completed = [search for search in searches if search.completion_status == "completed"]
-    has_exact_lexical = any(
-        search.mode == "lexical" and search.normalized_query == _normalized_query(metric)
-        for search in completed
-    )
-    if (
-        len(completed) < 4
-        or not has_exact_lexical
-        or not exact_metric_scan_completed
-        or len(chunks) != len(unique_ids)
-    ):
-        conclusion = AbsenceConclusion.INCOMPLETE_PROBE
-    elif unresolved_predicates or value_candidates:
-        conclusion = AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
-    else:
-        conclusion = AbsenceConclusion.NOT_FOUND_IN_PROBE
-    return AbsenceProbeResult(
+    probe = AbsenceProbeResult(
         protocol_version=ABSENCE_PROTOCOL_VERSION,
         metric=metric,
         searches=searches,
@@ -265,5 +320,6 @@ async def probe_metric_absence(
         exact_metric_occurrences=occurrences,
         unresolved_predicate_occurrences=unresolved_predicates,
         supporting_value_candidates=value_candidates,
-        conclusion=conclusion,
+        conclusion=AbsenceConclusion.INCOMPLETE_PROBE,
     )
+    return probe.model_copy(update={"conclusion": derive_absence_conclusion(probe)})

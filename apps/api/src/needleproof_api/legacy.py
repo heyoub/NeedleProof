@@ -127,6 +127,8 @@ class LegacyRunEnvelopeV12(BaseModel):
 
 
 def _legacy_observation_kind(value: str) -> ObservationKind:
+    # Keep this frozen classifier independent from the live binding contract. It adapts
+    # retained schema-1.2 results without retroactively regrading historical receipts.
     normalized = " ".join(value.casefold().split())
     if "per share" in normalized:
         return ObservationKind.REPORTED_PER_SHARE
@@ -166,7 +168,7 @@ def _adapt_verified_evidence(evidence: LegacyVerifiedEvidenceV12) -> VerifiedEvi
         assertion=evidence.quote,
         assertion_found=evidence.quote_found,
         temporal_anchor=temporal_anchor,
-        temporal_value_bound=evidence.temporal_anchors_found,
+        temporal_value_bound=bool(temporal_anchor) and evidence.temporal_anchors_found,
         observation_kind=None,
         value_text=None,
         quote=evidence.quote,

@@ -837,6 +837,8 @@ def test_equivalent_date_formats_have_one_signature():
         ("year", "calendar year"),
         ("February 2025", "February 2025 month"),
         ("February 2025", "in February 2025"),
+        ("at year end", "year end"),
+        ("during the fiscal quarter", "the fiscal quarter"),
     ],
 )
 def test_equivalent_named_periods_have_one_signature(left, right):

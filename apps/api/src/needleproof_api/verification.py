@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol
 
+from .absence import derive_absence_conclusion
 from .binding import (
     BINDING_CONTRACT_SHA256,
     BindingMatch,
@@ -220,7 +221,7 @@ def _temporal_signature(value: str) -> str | None:
         month_name, year_text, event = month_event.groups()
         return f"event:{event}:{year_text or 'unspecified'}-{_MONTHS[month_name]:02d}"
     if is_authorized_temporal_anchor(value):
-        return f"period:{normalized}"
+        return f"period:{core}"
     return None
 
 
@@ -370,7 +371,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v12-local-conflict-spans"
+    version = "deterministic-verifier-v13-recomputed-absence-proof"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -571,7 +572,12 @@ class EvidenceVerifier:
             if claim.observations or references:
                 status = ClaimStatus.UNVERIFIED
                 notes.append("An absence request cannot also propose observations or evidence.")
-            elif absence_probe and absence_probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE:
+            elif (
+                absence_probe
+                and _canonical_metric(absence_probe.metric) == _canonical_metric(claim.metric)
+                and absence_probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+                and derive_absence_conclusion(absence_probe) == AbsenceConclusion.NOT_FOUND_IN_PROBE
+            ):
                 status = ClaimStatus.NOT_FOUND
                 notes.append(
                     f"Not found after {len(absence_probe.searches)} searches and "

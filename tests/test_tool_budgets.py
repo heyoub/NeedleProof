@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from needleproof_api.agent import InvestigationContext, build_agent
 from needleproof_api.config import Settings
-from needleproof_api.models import ClaimStatus, DraftClaim, SearchResult
+from needleproof_api.models import ClaimStatus, DraftClaim, SearchHit, SearchResult
 from needleproof_api.verification import EvidenceVerifier
 from pydantic import ValidationError
 
@@ -127,6 +127,36 @@ def test_scoped_searches_do_not_authorize_corpus_wide_not_found(corpus):
         completed_search_records=state.completed_search_records,
     )
     assert verified.status == ClaimStatus.UNVERIFIED
+
+
+def test_search_diagnostics_normalize_line_broken_metric(corpus):
+    state = context(Settings(max_searches=4), corpus)
+    chunk = corpus.find_exact_metric_chunks("Fee-related earnings")[0]
+    arguments = search_arguments("fee related earnings")
+    arguments["metric"] = "Fee-related   earn-\nings"
+    state.complete_search(
+        arguments,
+        SearchResult(
+            query=str(arguments["query"]),
+            mode="hybrid",
+            results=[
+                SearchHit(
+                    chunk_id=chunk.chunk_id,
+                    score=1.0,
+                    retrieval_mode="hybrid",
+                    document_id=chunk.document_id,
+                    document_name=chunk.document_name,
+                    physical_page_index=chunk.physical_page_index,
+                    printed_page_label=chunk.printed_page_label,
+                    preview=chunk.normalized_text[:280],
+                    sha256=chunk.sha256,
+                )
+            ],
+            corpus_manifest_sha256=corpus.manifest_sha256,
+        ),
+    )
+
+    assert state.completed_search_records[-1].exact_metric_hit_count == 1
 
 
 def test_agent_enforces_configured_output_token_cap():
