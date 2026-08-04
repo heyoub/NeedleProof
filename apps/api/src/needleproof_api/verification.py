@@ -571,7 +571,14 @@ def _qualitative_conflict_candidates(
     candidates: set[tuple[str, Span]] = set()
     for identity, value_texts in authorized_texts.items():
         for value_text in value_texts:
-            candidates.update((identity, span) for span in word_phrase_spans(value_text, sentence))
+            candidates.update(
+                (identity, span)
+                for span in word_phrase_spans(
+                    value_text,
+                    sentence,
+                    preserve_token_kind=False,
+                )
+            )
     return sorted(candidates, key=lambda candidate: candidate[1])
 
 
@@ -758,7 +765,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v31-fail-closed-linked-anaphoric-chain"
+    version = "deterministic-verifier-v32-separated-metric-value-conflict-identity"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

@@ -1375,6 +1375,43 @@ def test_qualitative_conflict_characterization_binds_local_distinct_values():
     assert verified.status == ClaimStatus.CONFLICT
 
 
+def test_qualitative_conflict_uses_the_same_casefolded_value_identity_as_binding():
+    quote = "Credit rating was AA; Credit rating was BBB; the values are conflicting."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 932),
+        document_id="doc_casefolded_qualitative_conflict",
+        document_name="Casefolded qualitative conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="d" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was AA",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was BBB",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Credit rating",
+            observation("aa", first),
+            observation("bbb", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
 def test_qualitative_conflict_does_not_borrow_a_competing_metrics_value():
     chunk_text = (
         "Credit rating was stable. Credit rating was negative. "

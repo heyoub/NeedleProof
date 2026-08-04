@@ -103,7 +103,10 @@ invariant = "Qualitative values use case-folded word identity without weakening 
 finding = "The qualitative value AA was misclassified as an initialism and failed to bind to aa."
 disposition = "fixed"
 owner = "binding"
-tests = ["test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity"]
+tests = [
+  "test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity",
+  "test_qualitative_conflict_uses_the_same_casefolded_value_identity_as_binding",
+]
 
 [[invariant]]
 id = "INV-PROCESS-001"
