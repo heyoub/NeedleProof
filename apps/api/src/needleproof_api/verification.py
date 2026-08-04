@@ -45,7 +45,8 @@ _SUBJECT_ANAPHORA = re.compile(r"\b(?:the\s+figure|it|this|that)\b")
 # Candidate boundaries are filtered structurally below so an elided predicate such as
 # ``but still reached`` keeps the preceding subject.
 _PREDICATE_CLAUSE_BOUNDARY = re.compile(
-    r"\s*(?P<boundary>;|[—–]|\b(?:while|whereas|although|though|because|since|but)\b)\s*"
+    r"\s*(?P<boundary>;|[—–]|\b(?:after|although|before|because|but|if|nor|once|or|"
+    r"since|though|unless|until|when|whenever|whereas|while|yet)\b)\s*"
 )
 _VALUE_ASSOCIATION_SEPARATOR = re.compile(r"[,:]|\band\b")
 _PARENTHETICAL_MODIFIER = re.compile(
@@ -54,11 +55,6 @@ _PARENTHETICAL_MODIFIER = re.compile(
 )
 _PARENTHETICAL_SPAN = re.compile(r"\((?P<body>[^()]*)\)")
 _WORD = re.compile(r"[^\W_]+")
-_COORDINATED_MODIFIER_PREPOSITIONS = frozenset(
-    {"across", "among", "by", "for", "from", "in", "of", "through", "with", "without"}
-)
-_SINGULAR_SUBJECT_PREDICATES = frozenset({"has", "is", "was"})
-_PLURAL_SUBJECT_PREDICATES = frozenset({"are", "have", "were"})
 _PARTICIPIAL_CONTINUATIONS = frozenset(
     {
         "decreasing",
@@ -76,6 +72,7 @@ _PARTICIPIAL_CONTINUATIONS = frozenset(
         "totalling",
     }
 )
+_PARTICIPIAL_ADVERBS = frozenset({"thereby"})
 _SUBJECT_CONTINUATIONS = frozenset(
     {
         "about",
@@ -272,12 +269,15 @@ def _tail_introduces_competing_subject(text: str, value_end: int, metric: str) -
 
     tail = text[value_end:].strip(" \t,:;()-")
     tail = re.sub(r"^(?:and|but)\s+", "", tail)
-    if (
-        not tail
-        or _POST_VALUE_ANAPHORA.match(tail)
-        or _POST_VALUE_CONTEXT.match(tail)
-        or _subject_refers_to_metric(tail, metric)
-    ):
+    while _POST_VALUE_CONTEXT.match(tail):
+        # A comparison is contextual, but text after its comma still belongs to
+        # the assertion and may introduce a different metric. Strip only the
+        # comparison segment, then keep checking the remainder.
+        _context, separator, remainder = tail.partition(",")
+        if not separator:
+            return False
+        tail = remainder.strip(" \t,:;()-")
+    if not tail or _POST_VALUE_ANAPHORA.match(tail) or _subject_refers_to_metric(tail, metric):
         return False
     # A value-first continuation has already supplied its value. Any remaining
     # unrecognized noun phrase is therefore a new explicit subject regardless
@@ -291,58 +291,22 @@ def _continues_metric_subject(value: str) -> bool:
     if _ANAPHORIC_METRIC.match(normalized):
         return True
     words = _WORD.findall(normalized)
+    predicate_words = words
+    while predicate_words and (
+        predicate_words[0].endswith("ly") or predicate_words[0] in _PARTICIPIAL_ADVERBS
+    ):
+        predicate_words = predicate_words[1:]
     return (
         not words
         or (
-            words[0] in _PARTICIPIAL_CONTINUATIONS
-            and not any(index > 1 and word in _PREDICATE_VERBS for index, word in enumerate(words))
+            bool(predicate_words)
+            and predicate_words[0] in _PARTICIPIAL_CONTINUATIONS
+            and not any(
+                index > 1 and word in _PREDICATE_VERBS for index, word in enumerate(predicate_words)
+            )
         )
         or all(word in _SUBJECT_CONTINUATIONS for word in words)
     )
-
-
-def _metric_is_grammatically_plural(metric: str) -> bool:
-    words = _WORD.findall(metric.casefold())
-    return bool(words and words[-1].endswith("s") and words[-1] not in {"business"})
-
-
-def _continues_coordinated_modifier(preceding: str, value: str, metric: str) -> bool:
-    """Accept parallel prepositional objects whose predicate agrees with the metric."""
-
-    if _continues_metric_subject(value):
-        return True
-    preceding_words = _WORD.findall(preceding.strip().casefold())
-    words = _WORD.findall(value.strip().casefold())
-    preposition_indexes = [
-        index
-        for index, word in enumerate(preceding_words)
-        if word in _COORDINATED_MODIFIER_PREPOSITIONS
-    ]
-    predicate_index = next(
-        (index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS),
-        None,
-    )
-    if not preposition_indexes or predicate_index is None:
-        return False
-    left_modifier = preceding_words[preposition_indexes[-1] + 1 :]
-    right_modifier = words[:predicate_index]
-    if not left_modifier or len(left_modifier) != len(right_modifier):
-        return False
-    predicate = words[predicate_index]
-    metric_is_plural = _metric_is_grammatically_plural(metric)
-    if predicate in _SINGULAR_SUBJECT_PREDICATES:
-        return not metric_is_plural
-    if predicate in _PLURAL_SUBJECT_PREDICATES:
-        return metric_is_plural
-    return True
-
-
-def _is_coordinated_subject_with_shared_predicate(value: str) -> bool:
-    words = _WORD.findall(value.strip().casefold())
-    predicate_indexes = [
-        index for index, word in enumerate(words) if index > 0 and word in _PREDICATE_VERBS
-    ]
-    return len(predicate_indexes) == 1 and predicate_indexes[0] >= 2
 
 
 def _predicate_clause_boundaries(sentence: str) -> list[re.Match[str]]:
@@ -433,23 +397,8 @@ def _value_retains_metric_subject(
     for index, separator in enumerate(separators):
         if index in ignored_parenthetical_separators:
             continue
-        previous_end = separators[index - 1].end() if index > 0 else 0
         next_start = separators[index + 1].start() if index + 1 < len(separators) else len(between)
-        preceding = between[previous_end : separator.start()]
         segment = between[separator.end() : next_start]
-        preceding_words = set(_WORD.findall(preceding.casefold()))
-        coordinated_subject = (
-            separator.group() == "and"
-            and not preceding_words
-            and _is_coordinated_subject_with_shared_predicate(segment)
-        )
-        if coordinated_subject or (
-            separator.group() == "and"
-            and preceding_words & _COORDINATED_MODIFIER_PREPOSITIONS
-            and not preceding_words & _PREDICATE_VERBS
-            and _continues_coordinated_modifier(preceding, segment, metric)
-        ):
-            continue
         if not _continues_metric_subject(segment):
             return False
     return True

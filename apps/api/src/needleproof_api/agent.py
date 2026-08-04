@@ -4,14 +4,16 @@ import json
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from agents import (
     Agent,
+    FunctionTool,
     ModelSettings,
     RunConfig,
     RunContextWrapper,
     Runner,
+    Tool,
     function_tool,
     gen_trace_id,
 )
@@ -54,6 +56,8 @@ millions, billions, or basis points.
 
 For every evidence reference, copy an exact metric_anchor from the same quotation. The canonical
 metric must match that anchor after capitalization, punctuation, and spacing are normalized. For
+coordinated or modified metric names, include the complete metric phrase (for example, "Revenue
+from products and services") rather than shortening it to an ambiguous head noun. For
 every reported value, copy an exact temporal_anchor when the quotation ties it to a date or period;
 do not infer a date that is absent from that quotation. Each value must carry its own evidence.
 Use supports only when that quotation independently supports the value. Use contradicts or
@@ -380,7 +384,7 @@ async def verify_evidence(
     return result.model_dump(mode="json")
 
 
-TOOLS = [search_corpus, read_chunks, inspect_document, verify_evidence]
+TOOLS: list[FunctionTool] = [search_corpus, read_chunks, inspect_document, verify_evidence]
 TOOL_SCHEMA_HASH = sha256_text(
     canonical_json(
         [
@@ -467,11 +471,11 @@ class InvestigationOutcome:
 
 
 def build_agent(settings: Settings) -> Agent[InvestigationContext]:
-    return Agent(
+    return Agent[InvestigationContext](
         name="NeedleProof Corpus Investigator",
         model=settings.model,
         instructions=AGENT_INSTRUCTIONS,
-        tools=TOOLS,
+        tools=cast(list[Tool], TOOLS),
         output_type=AgentDraft,
         model_settings=ModelSettings(
             reasoning=Reasoning(effort=settings.reasoning_effort),

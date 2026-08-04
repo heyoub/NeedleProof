@@ -300,7 +300,12 @@ def receipt_html(receipt: dict[str, Any]) -> str:
 <h2>Execution ledger</h2><ol>{events}</ol></body></html>"""
 
 
-def validate_receipt(receipt: dict[str, Any]) -> list[str]:
+def validate_receipt(receipt: object) -> list[str]:
+    """Validate arbitrary decoded JSON without leaking shape exceptions."""
+
+    if not isinstance(receipt, dict):
+        return ["Receipt contract violation at root: input must be an object."]
+
     errors: list[str] = []
     try:
         ReceiptContract.model_validate(receipt)
@@ -315,8 +320,16 @@ def validate_receipt(receipt: dict[str, Any]) -> list[str]:
     if expected_digest != actual_digest:
         errors.append("Receipt digest does not match canonical content.")
 
+    events = receipt.get("events")
+    if not isinstance(events, list):
+        errors.append("Receipt contract violation at events: input must be an array.")
+        return errors
+
     previous_hash = "0" * 64
-    for event in receipt.get("events", []):
+    for event in events:
+        if not isinstance(event, dict):
+            errors.append("Receipt contract violation at events: every event must be an object.")
+            break
         if event.get("previous_hash") != previous_hash:
             errors.append(f"Event {event.get('sequence')} has a broken previous-hash link.")
             break
@@ -334,6 +347,9 @@ def validate_receipt(receipt: dict[str, Any]) -> list[str]:
             break
         previous_hash = event_hash
 
-    if receipt.get("provenance", {}).get("event_chain_head") != previous_hash:
+    provenance = receipt.get("provenance")
+    if not isinstance(provenance, dict):
+        errors.append("Receipt contract violation at provenance: input must be an object.")
+    elif provenance.get("event_chain_head") != previous_hash:
         errors.append("Provenance event-chain head does not match the final ledger event.")
     return errors

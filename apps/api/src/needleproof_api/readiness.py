@@ -5,6 +5,7 @@ import os
 import time
 
 from openai import AsyncOpenAI
+from openai.types.shared_params import Reasoning
 
 from .config import Settings
 
@@ -34,7 +35,7 @@ class ModelAvailability:
                     await client.responses.create(
                         model=self.settings.model,
                         input="Reply with OK.",
-                        reasoning={"effort": self.settings.reasoning_effort},
+                        reasoning=Reasoning(effort=self.settings.reasoning_effort),
                         max_output_tokens=16,
                         store=False,
                     )

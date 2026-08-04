@@ -3,6 +3,7 @@ from __future__ import annotations
 from ipaddress import ip_network
 from pathlib import Path
 
+from openai.types.shared import ReasoningEffort
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     model: str = "gpt-5.6-terra"
-    reasoning_effort: str = "medium"
+    reasoning_effort: ReasoningEffort = "medium"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 768
     data_dir: Path = Path("data")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from needleproof_api.receipt import _git_sha, receipt_contract_schema, validate_receipt
 
 
@@ -29,6 +30,25 @@ def test_receipt_contract_rejects_unknown_top_level_fields(settings):
     receipt = json.loads(settings.rehearsal_path.read_text(encoding="utf-8"))
     receipt["surprise"] = "not part of the contract"
     assert any("Extra inputs" in error for error in validate_receipt(receipt))
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        None,
+        [],
+        "receipt",
+        7,
+        {"events": None},
+        {"events": [None]},
+        {"events": [], "provenance": None},
+    ],
+)
+def test_receipt_validation_is_total_for_arbitrary_json(receipt):
+    errors = validate_receipt(receipt)
+
+    assert errors
+    assert all(isinstance(error, str) for error in errors)
 
 
 def test_git_sha_is_optional_when_git_executable_is_missing(monkeypatch):

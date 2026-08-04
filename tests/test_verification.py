@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from needleproof_api.agent import AGENT_INSTRUCTIONS
 from needleproof_api.chunk_ids import ChunkId, chunk_id_from_uint64
 from needleproof_api.models import (
@@ -331,43 +333,64 @@ def test_elided_subject_remains_linked_across_contrasting_predicate():
 
 
 def test_coordinated_metric_modifier_remains_linked():
-    assert reported_value_linked_to_metric(
+    quote = "Revenue from products and services was $2 million."
+
+    assert not reported_value_linked_to_metric(
         "$2 million",
         "Revenue",
-        "Revenue from products and services was $2 million.",
+        quote,
+    )
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue from products and services",
+        quote,
     )
 
 
 @pytest.mark.parametrize("predicate", ["reached", "totaled", "amounted to"])
-def test_coordinated_metric_modifier_supports_non_copular_predicates(predicate):
-    assert reported_value_linked_to_metric(
+def test_number_neutral_coordinated_modifier_requires_complete_metric_anchor(predicate):
+    quote = f"Revenue from products and services {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric(
         "$2 million",
         "Revenue",
-        f"Revenue from products and services {predicate} $2 million.",
+        quote,
+    )
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue from products and services",
+        quote,
     )
 
 
 def test_multiword_coordinated_metric_modifiers_remain_linked():
+    quote = "Revenue from product sales and service fees was $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
     assert reported_value_linked_to_metric(
         "$2 million",
-        "Revenue",
-        "Revenue from product sales and service fees was $2 million.",
+        "Revenue from product sales and service fees",
+        quote,
     )
 
 
 def test_plural_metric_agreement_preserves_coordinated_modifier():
+    quote = "Assets from products and services were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Assets", quote)
     assert reported_value_linked_to_metric(
         "$2 million",
-        "Assets",
-        "Assets from products and services were $2 million.",
+        "Assets from products and services",
+        quote,
     )
 
 
 def test_coordinated_metric_subjects_share_predicate_and_value():
     quote = "Revenue and operating income each reached $2 million."
 
-    assert reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
     assert reported_value_linked_to_metric("$2 million", "operating income", quote)
+    assert reported_value_linked_to_metric("$2 million", "Revenue and operating income", quote)
 
 
 @pytest.mark.parametrize(
@@ -387,6 +410,15 @@ def test_participial_continuation_remains_linked():
         "$2 million",
         "Revenue",
         "Revenue increased year over year, reaching $2 million.",
+    )
+
+
+@pytest.mark.parametrize("adverb", ["eventually", "ultimately", "thereby"])
+def test_adverb_before_participial_continuation_remains_linked(adverb):
+    assert reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        f"Revenue increased year over year, {adverb} reaching $2 million.",
     )
 
 
@@ -677,6 +709,31 @@ def test_comparison_skip_cannot_cross_competing_subject():
     assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
 
 
+def test_value_first_comparison_context_cannot_hide_competing_subject():
+    quote = "Revenue was flat. At $2 million, up from $1 million, operating expenses were stable."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+
+
+@pytest.mark.parametrize(
+    "linker",
+    ["after", "although", "because", "before", "if", "or", "unless", "until", "when", "yet"],
+)
+@pytest.mark.parametrize("predicate", ["equaled", "reached", "remained at", "will be"])
+def test_clause_linker_matrix_never_transfers_competing_metric_value(linker, predicate):
+    quote = f"Revenue was flat {linker} operating expenses {predicate} $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Revenue", quote)
+    assert reported_value_linked_to_metric("$2 million", "operating expenses", quote)
+
+
+def test_singular_s_ending_metric_does_not_authorize_ambiguous_coordination():
+    quote = "Loss from products and costs were $2 million."
+
+    assert not reported_value_linked_to_metric("$2 million", "Loss", quote)
+    assert reported_value_linked_to_metric("$2 million", "Loss from products and costs", quote)
+
+
 def test_cross_sentence_anaphora_uses_subject_from_causal_clause():
     quote = "Revenue was flat because operating expenses rose. It was $2 million."
 
@@ -884,6 +941,53 @@ def test_duplicate_numeric_formatting_is_not_a_distinct_value():
         ReportedValue(value="$82 billion", evidence=[evidence]),
         ReportedValue(value="$82.0 billion", evidence=[evidence]),
     ]
+    assert len(_distinct_values(values)) == 1
+
+
+def test_financial_value_grouping_uses_exact_decimal_digits():
+    quote = "Revenue was $9,007,199,254,740,993 million."
+    evidence = reference(MEMO_CHUNK, quote, "Revenue")
+
+    equivalent = [
+        ReportedValue(value="$9,007,199,254,740,993.00 million", evidence=[evidence]),
+        ReportedValue(value="$9007199254740993 million", evidence=[evidence]),
+    ]
+    distinct = [
+        *equivalent,
+        ReportedValue(value="$9007199254740992 million", evidence=[evidence]),
+    ]
+
+    assert len(_distinct_values(equivalent)) == 1
+    assert len(_distinct_values(distinct)) == 2
+
+
+def test_basis_points_and_percentages_are_never_silently_rescaled():
+    quote = "The fee rate was 67 basis points."
+    evidence = reference(MEMO_CHUNK, quote, "fee rate")
+    values = [
+        ReportedValue(value="67 basis points", evidence=[evidence]),
+        ReportedValue(value="0.67 percent", evidence=[evidence]),
+    ]
+
+    assert len(_distinct_values(values)) == 2
+
+
+@given(
+    integer=st.integers(min_value=0, max_value=10**30),
+    trailing_zeros=st.integers(min_value=1, max_value=6),
+    unit=st.sampled_from(["billion", "million", "basis points", "percent"]),
+)
+def test_numeric_grouping_never_round_trips_through_binary_float(integer, trailing_zeros, unit):
+    plain = f"{integer} {unit}"
+    formatted = f"{integer:,}.{'0' * trailing_zeros} {unit}"
+    quote = f"Metric was {formatted}."
+    evidence = reference(MEMO_CHUNK, quote, "Metric")
+
+    values = [
+        ReportedValue(value=plain, evidence=[evidence]),
+        ReportedValue(value=formatted, evidence=[evidence]),
+    ]
+
     assert len(_distinct_values(values)) == 1
 
 

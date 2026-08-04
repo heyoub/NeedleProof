@@ -80,7 +80,7 @@ The longer diagram and trust boundaries are in [docs/architecture.md](docs/archi
 
 ## Verification model
 
-The model produces structured evidence components rather than a publishable proposition. It must copy a canonical metric anchor, exact value, optional exact temporal anchor, evidence relation, and contiguous quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from those verified fields; the model's draft prose is never published.
+The model produces structured evidence components rather than a publishable proposition. It must copy a canonical metric anchor, exact value, optional exact temporal anchor, evidence relation, and contiguous quotation. The server reruns the deterministic verifier after the agent finishes and constructs displayed claim prose from those verified fields; the model's draft prose is never published. The verifier checks source integrity and a conservative lexical binding contract—not arbitrary English entailment—and leaves ambiguous syntax unverified. See [the verification boundary](docs/verification-boundary.md).
 
 Verification checks include:
 
