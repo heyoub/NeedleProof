@@ -37,7 +37,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v22-full-opened-source-context"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v23-full-context-qualitative-chains"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 ABSENCE_CONTEXT_MAX_OPENED_CHUNKS = 50
@@ -55,6 +55,7 @@ _POTENTIAL_ANAPHORIC_PREDICATE_LEAD = re.compile(
     r"totaled|totalled|ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at)\b",
     re.IGNORECASE,
 )
+_QUALITATIVE_WORD = re.compile(r"[^\W\d_]+")
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -210,6 +211,7 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
     exact_scan_ids = set(probe.exact_metric_scan_chunk_ids)
     reviewable_occurrence = any(
         has_unresolved_metric_predicate(probe.metric, occurrence.sentence)
+        or _has_structural_anaphoric_qualitative_predicate(occurrence)
         or bool(_metric_context_numeric_candidates(occurrence))
         for occurrence in probe.exact_metric_occurrences
     )
@@ -237,12 +239,12 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
     return AbsenceConclusion.NOT_FOUND_IN_PROBE
 
 
-def _metric_context_numeric_candidates(
+def _structural_anaphoric_context(
     occurrence: MetricOccurrence,
-) -> list[tuple[str, tuple[int, int]]]:
-    """Return same-assertion, structural-anaphoric, and closed value-first values."""
+) -> tuple[int, tuple[tuple[int, int], ...]]:
+    """Return the metric sentence end and its contiguous structural reference chain."""
 
-    metric_start, metric_end = occurrence.span
+    _metric_start, metric_end = occurrence.span
     boundaries = punctuation_boundaries(occurrence.sentence)
     metric_sentence_end = next(
         (end for start, end in boundaries if start >= metric_end),
@@ -259,6 +261,30 @@ def _metric_context_numeric_candidates(
             break
         anaphoric_sentence_spans.append((sentence_start, sentence_end))
         sentence_start = sentence_end
+    return metric_sentence_end, tuple(anaphoric_sentence_spans)
+
+
+def _has_structural_anaphoric_qualitative_predicate(
+    occurrence: MetricOccurrence,
+) -> bool:
+    """Detect a qualitative value in the same structural chain used for numbers."""
+
+    _metric_sentence_end, anaphoric_sentence_spans = _structural_anaphoric_context(occurrence)
+    for start, end in anaphoric_sentence_spans:
+        sentence = occurrence.sentence[start:end]
+        relationship = _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(sentence)
+        if relationship is not None and _QUALITATIVE_WORD.search(sentence[relationship.end() :]):
+            return True
+    return False
+
+
+def _metric_context_numeric_candidates(
+    occurrence: MetricOccurrence,
+) -> list[tuple[str, tuple[int, int]]]:
+    """Return same-assertion, structural-anaphoric, and closed value-first values."""
+
+    metric_start, metric_end = occurrence.span
+    metric_sentence_end, anaphoric_sentence_spans = _structural_anaphoric_context(occurrence)
 
     candidates = []
     for value_text, value_span in numeric_value_candidates(occurrence.sentence):
@@ -314,6 +340,7 @@ def derive_absence_conclusion_against_corpus(
                     probe.metric,
                     analyzed.proof_occurrence.sentence,
                 )
+                or _has_structural_anaphoric_qualitative_predicate(analyzed.proof_occurrence)
                 or bool(_metric_context_numeric_candidates(analyzed.proof_occurrence))
             )
 
@@ -562,7 +589,10 @@ async def probe_metric_absence(
             )
             missing_open_edge_neighbor = missing_open_edge_neighbor or not analyzed.complete
             occurrences.append(analyzed.display_occurrence)
-            if has_unresolved_metric_predicate(metric, analyzed.proof_occurrence.sentence):
+            if has_unresolved_metric_predicate(
+                metric,
+                analyzed.proof_occurrence.sentence,
+            ) or _has_structural_anaphoric_qualitative_predicate(analyzed.proof_occurrence):
                 unresolved_predicates.append(analyzed.display_occurrence)
             for value_text, _span in _metric_context_numeric_candidates(analyzed.proof_occurrence):
                 candidate_key = (chunk.chunk_id, value_text)

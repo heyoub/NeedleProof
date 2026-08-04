@@ -781,6 +781,79 @@ async def test_metric_at_chunk_end_follows_linked_anaphoric_value(linked_text):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "linked_text",
+    [
+        "It remained stable.",
+        "They were unchanged.",
+        "During the period, it was stable.",
+        "The reported metric was stable.",
+    ],
+)
+async def test_linked_anaphoric_qualitative_predicate_blocks_absence(linked_text):
+    metric_id = chunk_id_from_uint64(2**63 + 52)
+    value_id = chunk_id_from_uint64(2**63 + 53)
+    metric_chunk = ChunkRecord(
+        chunk_id=metric_id,
+        document_id="doc_qualitative_anaphor",
+        document_name="Qualitative anaphor fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text="Credit rating.",
+        normalized_text="Credit rating.",
+        next_chunk_id=value_id,
+        sha256="4" * 64,
+        token_estimate=3,
+    )
+    value_chunk = ChunkRecord(
+        chunk_id=value_id,
+        document_id="doc_qualitative_anaphor",
+        document_name="Qualitative anaphor fixture",
+        physical_page_index=1,
+        chunk_position=1,
+        text=linked_text,
+        normalized_text=linked_text,
+        previous_chunk_id=metric_id,
+        sha256="5" * 64,
+        token_estimate=5,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000052"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del query, recorder, top_k
+            return SearchResult(
+                query="Credit rating",
+                mode=mode,
+                corpus_manifest_sha256="6" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            chunks = []
+            if metric_id in chunk_ids:
+                chunks.append(metric_chunk)
+            if value_id in chunk_ids or (neighbor_radius and metric_id in chunk_ids):
+                chunks.append(value_chunk)
+            return chunks
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "Credit rating"
+            return exact_scan(metric_chunk)
+
+    corpus = Corpus()
+    probe = await probe_metric_absence(corpus, "Credit rating")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert probe.unresolved_predicate_occurrences
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "second_lead",
     [
         "It was",
@@ -969,7 +1042,7 @@ async def test_completed_local_anaphor_includes_linked_coreferential_value(
 
 
 @pytest.mark.asyncio
-async def test_linked_anaphoric_chain_beyond_opened_neighbor_is_incomplete():
+async def test_linked_anaphoric_chain_beyond_opened_neighbor_never_authorizes_absence():
     metric_id = chunk_id_from_uint64(2**63 + 49)
     first_anaphor_id = chunk_id_from_uint64(2**63 + 50)
     hidden_value_id = chunk_id_from_uint64(2**63 + 51)
@@ -1026,10 +1099,11 @@ async def test_linked_anaphoric_chain_beyond_opened_neighbor_is_incomplete():
     corpus = Corpus()
     probe = await probe_metric_absence(corpus, "Fee-earning AUM")
 
-    assert probe.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert probe.exact_metric_scan_error == "NeighborChunkMissing"
     assert (
         derive_absence_conclusion_against_corpus(probe, corpus)
-        == AbsenceConclusion.INCOMPLETE_PROBE
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     )
 
 

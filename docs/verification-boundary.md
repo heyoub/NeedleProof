@@ -137,8 +137,9 @@ Failed probes, a failed or over-broad exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
 predicate requires review. Qualitative predicate detection permits at most eight punctuation-free
-qualifier words between the exact metric and a closed positive connector, so `Credit rating for the
-period was stable` cannot authorize absence. A bare rubric or instruction mention does not by
+qualifier words between the exact metric and a closed positive connector and follows the same
+contiguous structural-reference chain as numeric candidates, so both `Credit rating for the period
+was stable` and `Credit rating. It remained stable.` cannot authorize absence. A bare rubric or instruction mention does not by
 itself claim a value and therefore does not block the bounded conclusion. The conclusion remains
 bounded to the recorded probe and exact corpus version. Complete metric context is inspected in
 both directions so value-first and metric-first source shapes both fail closed; the result never
