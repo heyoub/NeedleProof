@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import needleproof_api.main as main_module
 import pytest
 from fastapi import HTTPException
 from needleproof_api.config import Settings
@@ -14,7 +15,7 @@ from needleproof_api.models import RunCreateRequest, RunStatus
 from needleproof_api.receipt import RunLedger
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.security import PublicUsageLimiter
-from needleproof_api.service import InvestigationService
+from needleproof_api.service import InvestigationService, ReceiptRecoveryOutcome
 from needleproof_api.util import new_run_id, utc_now_iso
 
 
@@ -465,6 +466,111 @@ async def test_terminal_sse_retries_transient_receipt_reconciliation_on_same_con
     recovered = await database.get_run_row(created.run_id)
     assert recovered is not None
     assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_terminal_sse_retries_transient_receipt_read_on_same_connection(
+    tmp_path, monkeypatch
+):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    original_commit = service._commit_terminal
+    failed_commit = False
+
+    async def fail_initial_commit(envelope, receipt_path, error):
+        nonlocal failed_commit
+        if not failed_commit:
+            failed_commit = True
+            raise OSError("injected initial terminal persistence failure")
+        await original_commit(envelope, receipt_path, error)
+
+    monkeypatch.setattr(service, "_commit_terminal", fail_initial_commit)
+    created = await service.create_run(
+        RunCreateRequest(question="Retry transient receipt reads", rehearsal=True),
+        session_id="alice",
+    )
+    await service._tasks[created.run_id]
+    interrupted = await database.get_run_row(created.run_id)
+    assert interrupted is not None
+    assert interrupted["status"] == RunStatus.INTERRUPTED.value
+
+    original_integrity_check = main_module._integrity_checked_receipt
+    integrity_attempts = 0
+
+    def fail_first_integrity_read(row):
+        nonlocal integrity_attempts
+        integrity_attempts += 1
+        if integrity_attempts == 1:
+            raise OSError("injected transient receipt read failure")
+        return original_integrity_check(row)
+
+    monkeypatch.setattr(main_module, "_integrity_checked_receipt", fail_first_integrity_read)
+
+    async def connected() -> bool:
+        return False
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(database=database, corpus=service.corpus, service=service)
+        ),
+        state=SimpleNamespace(session_id="alice"),
+        is_disconnected=connected,
+    )
+    response = await run_events(request, created.run_id, None, None)
+
+    async def read_terminal_event() -> str:
+        async for chunk in response.body_iterator:
+            if "run.completed" in chunk:
+                return chunk
+        raise AssertionError("SSE stream closed after a transient receipt read failure")
+
+    terminal_chunk = await asyncio.wait_for(read_terminal_event(), timeout=2)
+
+    assert "run.interrupted" not in terminal_chunk
+    assert integrity_attempts >= 2
+    recovered = await database.get_run_row(created.run_id)
+    assert recovered is not None
+    assert recovered["status"] == RunStatus.COMPLETED.value
+
+
+@pytest.mark.asyncio
+async def test_receipt_recovery_rejects_receipt_from_another_run(tmp_path):
+    service, database, _settings = lifecycle_service(tmp_path)
+    await database.initialize()
+    first = await service.create_run(
+        RunCreateRequest(question="First sealed result", rehearsal=True),
+        session_id="alice",
+    )
+    second = await service.create_run(
+        RunCreateRequest(question="Second sealed result", rehearsal=True),
+        session_id="bob",
+    )
+    await asyncio.gather(service._tasks[first.run_id], service._tasks[second.run_id])
+    first_row = await database.get_run_row(first.run_id)
+    second_row = await database.get_run_row(second.run_id)
+    assert first_row is not None
+    assert second_row is not None
+    first_receipt = Path(str(first_row["receipt_path"]))
+    second_receipt = Path(str(second_row["receipt_path"]))
+    await database.update_run(
+        first.run_id,
+        status=RunStatus.INTERRUPTED,
+        answer=None,
+        result_json=None,
+        receipt_sha256=None,
+    )
+    first_receipt.write_bytes(second_receipt.read_bytes())
+
+    outcome = await service.reconcile_pending_receipt(first.run_id)
+
+    assert outcome == ReceiptRecoveryOutcome.UNRECOVERABLE
+    rejected = await database.get_run_row(first.run_id)
+    assert rejected is not None
+    assert rejected["status"] == RunStatus.INTERRUPTED.value
+    assert rejected["answer"] is None
+    assert rejected["result_json"] is None
+    assert not first_receipt.exists()
+    assert second_receipt.exists()
 
 
 @pytest.mark.asyncio

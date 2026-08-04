@@ -233,6 +233,20 @@ class InvestigationService:
             errors = validate_receipt(receipt)
             if errors:
                 raise ValueError("; ".join(errors))
+            expected_identity = {
+                "run_id": run_id,
+                "corpus_id": str(row["corpus_id"]),
+                "corpus_version": str(row["corpus_version"]),
+                "corpus_manifest_sha256": str(row["corpus_manifest_sha256"]),
+            }
+            if any(receipt.get(key) != value for key, value in expected_identity.items()):
+                raise ValueError("Sealed receipt does not belong to this persisted run")
+            expected_receipt_sha256 = row.get("receipt_sha256")
+            if (
+                expected_receipt_sha256 is not None
+                and receipt.get("receipt_sha256") != expected_receipt_sha256
+            ):
+                raise ValueError("Sealed receipt digest does not match the persisted receipt")
             envelope = RunEnvelope(
                 run_id=run_id,
                 status=RunStatus(receipt["status"]),

@@ -55,7 +55,7 @@ TERMINAL_EVENTS_BY_STATUS = {
     RunStatus.FAILED: {"run.failed"},
     RunStatus.INTERRUPTED: {"run.interrupted"},
 }
-ReceiptReconciliationState = Literal["ready", "pending", "invalid"]
+ReceiptReconciliationState = Literal["ready", "pending", "retryable", "invalid"]
 
 
 def document_media_type(path: Path) -> str:
@@ -277,6 +277,16 @@ async def run_events(
         quiet_polls = 0
         reconciliation_failures = 0
         next_reconciliation_at = 0.0
+
+        def defer_reconciliation(now: float) -> None:
+            nonlocal reconciliation_failures, next_reconciliation_at
+            reconciliation_failures = min(reconciliation_failures + 1, 6)
+            retry_delay = min(
+                0.1 * (2 ** (reconciliation_failures - 1)),
+                2.0,
+            )
+            next_reconciliation_at = now + retry_delay
+
         while True:
             if await request.is_disconnected():
                 break
@@ -295,34 +305,30 @@ async def run_events(
                             # Keep the cursor before this event so reconnect/replay
                             # cannot observe completion ahead of durable state.
                             break
+                        now = asyncio.get_running_loop().time()
+                        if now < next_reconciliation_at:
+                            break
                         receipt_state = _receipt_reconciliation_state(row)
+                        if receipt_state == "retryable":
+                            defer_reconciliation(now)
+                            break
                         if receipt_state == "pending":
                             # A valid receipt with a mismatched status can still be
                             # reconciled without losing the intended terminal event.
-                            now = asyncio.get_running_loop().time()
-                            if now >= next_reconciliation_at:
-                                outcome = await service.reconcile_pending_receipt(run_id)
-                                match outcome:
-                                    case ReceiptRecoveryOutcome.UNRECOVERABLE:
-                                        return
-                                    case ReceiptRecoveryOutcome.RETRYABLE:
-                                        reconciliation_failures = min(
-                                            reconciliation_failures + 1,
-                                            6,
-                                        )
-                                        retry_delay = min(
-                                            0.1 * (2 ** (reconciliation_failures - 1)),
-                                            2.0,
-                                        )
-                                        next_reconciliation_at = now + retry_delay
-                                    case (
-                                        ReceiptRecoveryOutcome.RECOVERED
-                                        | ReceiptRecoveryOutcome.NOT_PENDING
-                                    ):
-                                        reconciliation_failures = 0
-                                        next_reconciliation_at = 0.0
-                                    case _ as unreachable:
-                                        assert_never(unreachable)
+                            outcome = await service.reconcile_pending_receipt(run_id)
+                            match outcome:
+                                case ReceiptRecoveryOutcome.UNRECOVERABLE:
+                                    return
+                                case ReceiptRecoveryOutcome.RETRYABLE:
+                                    defer_reconciliation(now)
+                                case (
+                                    ReceiptRecoveryOutcome.RECOVERED
+                                    | ReceiptRecoveryOutcome.NOT_PENDING
+                                ):
+                                    reconciliation_failures = 0
+                                    next_reconciliation_at = 0.0
+                                case _ as unreachable:
+                                    assert_never(unreachable)
                             break
                         if receipt_state == "invalid":
                             # Permanent receipt corruption is not startup-recoverable
@@ -411,7 +417,9 @@ def _validated_receipt(row: dict[str, object]) -> tuple[Path, dict[str, object]]
 def _receipt_reconciliation_state(row: dict[str, object]) -> ReceiptReconciliationState:
     try:
         _, receipt = _integrity_checked_receipt(row)
-    except (HTTPException, OSError, UnicodeError, json.JSONDecodeError):
+    except OSError:
+        return "retryable"
+    except (HTTPException, UnicodeError, json.JSONDecodeError):
         return "invalid"
     return "ready" if receipt.get("status") == row.get("status") else "pending"
 
