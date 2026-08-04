@@ -26,9 +26,12 @@ An authoritative observation must prove all of these facts:
 - at least one independently sufficient evidence item has the `supports` relation.
 
 The authorized profiles are deliberately narrow: direct copula levels, direct reported levels,
-colon-delimited values, dated direct values, and bounded same/next-sentence anaphora. Unknown
-syntax fails closed. Negation, modality, forecasts, targets, components, bounds, ranges, and deltas
-cannot become ordinary reported levels merely because the same number appears after the metric.
+colon-delimited values, dated direct values, and bounded same/next-sentence anaphora. Anaphora must
+follow one closed positive antecedent shape; next-sentence anaphora must occur in the immediately
+following sentence, and any leading temporal phrase must contain the observation's bound temporal
+anchor. Unknown syntax fails closed. Negation, modality, forecasts, targets, components, bounds,
+ranges, and deltas cannot become ordinary reported levels merely because the same number appears
+after the metric.
 
 This inversion is the core safety property:
 
@@ -55,14 +58,14 @@ relationships never enter authoritative prose.
 four corpus-wide ranked probes, then separately performs an exhaustive FTS phrase scan for the
 complete normalized metric. The exhaustive scan has no top-k cutoff and is filtered again by the
 same complete-word matcher used by verification. The protocol records both result sets, opens every
-unique candidate, and finds complete-word metric occurrences and nearby numeric candidates across
-the metric sentence and its immediate successor. Failed probes, a failed exact scan, scoped
-searches, duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot
-authorize absence. An exact metric occurrence with a numeric candidate or known positive
-qualitative predicate requires review. A bare rubric or instruction mention does not by itself
-claim a value and therefore does not block the bounded conclusion. The conclusion remains bounded
-to the recorded probe and exact corpus version; it never claims that the corpus proves
-nonexistence.
+unique candidate, and inspects a fixed 384-character forward context from every complete metric
+occurrence. This does not attempt sentence parsing, so punctuation inside abbreviations such as
+“U.S.” cannot hide a metric/value candidate. Failed probes, a failed exact scan, scoped searches,
+duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
+absence. An exact metric occurrence with a numeric candidate or known positive qualitative
+predicate requires review. A bare rubric or instruction mention does not by itself claim a value
+and therefore does not block the bounded conclusion. The conclusion remains bounded to the
+recorded probe and exact corpus version; it never claims that the corpus proves nonexistence.
 
 ## Numeric integrity
 

@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 
 from .binding import (
-    bind_observation,
     has_unresolved_metric_predicate,
     numeric_value_candidates,
     word_phrase_spans,
@@ -17,13 +16,13 @@ from .models import (
     ChunkRecord,
     CompletedSearchRecord,
     MetricOccurrence,
-    ObservationKind,
     SearchResult,
     ValueCandidate,
 )
 from .util import canonical_json, canonical_metric_key, normalize_evidence_text, sha256_text
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v4-exhaustive-exact-metric"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v5-normalized-metric-windows"
+ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -48,6 +47,8 @@ ABSENCE_PROTOCOL_SPEC = {
     "probe_templates": ABSENCE_PROBE_TEMPLATES,
     "numeric_candidate_policy": "requires_review_even_without_positive_binding",
     "qualitative_predicate_policy": "known_positive_connector_requires_review",
+    "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
+    "metric_context_policy": "forward_window_from_complete_metric_without_sentence_parsing",
     "conclusion": "bounded_not_global",
 }
 ABSENCE_PROTOCOL_SHA256 = sha256_text(canonical_json(ABSENCE_PROTOCOL_SPEC))
@@ -107,29 +108,6 @@ def search_signature(
             }
         )
     )
-
-
-def _sentences(text: str) -> list[tuple[str, int, int]]:
-    output: list[tuple[str, int, int]] = []
-
-    def append_sentence(raw_start: int, raw_end: int) -> None:
-        start = raw_start
-        end = raw_end
-        while start < end and text[start].isspace():
-            start += 1
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        if start < end:
-            output.append((text[start:end], start, end))
-
-    start = 0
-    for index, character in enumerate(text):
-        if character not in ".!?" or index + 1 < len(text) and not text[index + 1].isspace():
-            continue
-        append_sentence(start, index + 1)
-        start = index + 1
-    append_sentence(start, len(text))
-    return output
 
 
 async def probe_metric_absence(
@@ -220,62 +198,31 @@ async def probe_metric_absence(
     unresolved_predicates: list[MetricOccurrence] = []
     value_candidates: list[ValueCandidate] = []
     for chunk in chunks:
-        sentences = _sentences(chunk.normalized_text)
-        for sentence_index, (sentence, sentence_start, sentence_end) in enumerate(sentences):
-            metric_spans = word_phrase_spans(metric_phrase, sentence)
-            if not metric_spans:
-                continue
-            assertion_end = (
-                sentences[sentence_index + 1][2]
-                if sentence_index + 1 < len(sentences)
-                else sentence_end
+        for metric_start, metric_end in word_phrase_spans(metric_phrase, chunk.normalized_text):
+            context_end = min(
+                len(chunk.normalized_text),
+                metric_end + ABSENCE_METRIC_CONTEXT_CHARACTERS,
             )
-            assertion = chunk.normalized_text[sentence_start:assertion_end]
-            sentence_occurrences = [
-                MetricOccurrence(
-                    chunk_id=chunk.chunk_id,
-                    sentence=sentence,
-                    span=(sentence_start + start, sentence_start + end),
-                )
-                for start, end in metric_spans
-            ]
-            occurrences.extend(sentence_occurrences)
-            if has_unresolved_metric_predicate(metric_phrase, assertion):
-                unresolved_predicates.extend(sentence_occurrences)
-            for value_text, _span in numeric_value_candidates(assertion):
-                found_binding = False
-                for kind in (
-                    ObservationKind.REPORTED_LEVEL,
-                    ObservationKind.REPORTED_RATE,
-                    ObservationKind.REPORTED_PER_SHARE,
-                ):
-                    binding = bind_observation(
+            context = chunk.normalized_text[metric_start:context_end]
+            occurrence = MetricOccurrence(
+                chunk_id=chunk.chunk_id,
+                sentence=context,
+                span=(metric_start, metric_end),
+            )
+            occurrences.append(occurrence)
+            if has_unresolved_metric_predicate(metric_phrase, context):
+                unresolved_predicates.append(occurrence)
+            for value_text, _span in numeric_value_candidates(context):
+                value_candidates.append(
+                    ValueCandidate(
+                        chunk_id=chunk.chunk_id,
                         metric_anchor=metric,
                         value_text=value_text,
-                        kind=kind,
-                        temporal_anchor=None,
-                        assertion=assertion,
-                    ).match
-                    if binding:
-                        value_candidates.append(
-                            ValueCandidate(
-                                chunk_id=chunk.chunk_id,
-                                metric_anchor=metric,
-                                value_text=value_text,
-                                binding_profile=binding.profile,
-                            )
-                        )
-                        found_binding = True
-                        break
-                if not found_binding:
-                    value_candidates.append(
-                        ValueCandidate(
-                            chunk_id=chunk.chunk_id,
-                            metric_anchor=metric,
-                            value_text=value_text,
-                            binding_failure_reason="numeric_candidate_near_metric_requires_review",
-                        )
+                        binding_failure_reason=(
+                            "numeric_candidate_in_metric_context_requires_review"
+                        ),
                     )
+                )
 
     completed = [search for search in searches if search.completion_status == "completed"]
     has_exact_lexical = any(

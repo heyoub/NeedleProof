@@ -293,6 +293,63 @@ def test_compound_metric_anchor_is_not_split_at_and():
     assert reported_value_linked_to_metric("$2 million", "Research", quote) is None
 
 
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("Revenue was not reported and it was $5.", "$5"),
+        ("Revenue was $2 million forecast. It was $5 million.", "$5 million"),
+        (
+            "Revenue was stable. In the next paragraph, operating income was discussed. It was $2 million.",
+            "$2 million",
+        ),
+    ],
+)
+def test_anaphoric_binding_requires_immediate_positive_antecedent(quote, value):
+    assert reported_value_linked_to_metric(value, "Revenue", quote) is None
+
+
+@pytest.mark.parametrize(
+    "quote,value",
+    [
+        ("Revenue was reported and it was $5.", "$5"),
+        ("Revenue was stable. It remained at $2 million.", "$2 million"),
+    ],
+)
+def test_anaphoric_binding_accepts_closed_positive_profiles(quote, value):
+    assert reported_value_linked_to_metric(value, "Revenue", quote) is not None
+
+
+def test_next_sentence_temporal_lead_cannot_hide_competing_subject():
+    quote = (
+        "Revenue was $2 million as of 2024. "
+        "In 2025 operating income was discussed, and it was $5 million."
+    )
+
+    assert (
+        reported_value_linked_to_metric(
+            "$5 million",
+            "Revenue",
+            quote,
+            temporal_anchor="2025",
+        )
+        is None
+    )
+
+
+@given(
+    intervening_words=st.lists(
+        st.from_regex(r"[A-Za-z]{2,12}", fullmatch=True),
+        min_size=1,
+        max_size=8,
+    )
+)
+def test_any_intervening_sentence_breaks_next_sentence_anaphora(intervening_words):
+    intervening = " ".join(intervening_words)
+    quote = f"Revenue was stable. {intervening}. It was $2 million."
+
+    assert reported_value_linked_to_metric("$2 million", "Revenue", quote) is None
+
+
 @pytest.mark.parametrize("separator", [",", ":"])
 def test_qualitative_predicate_does_not_leak_across_metrics(separator):
     quote = f"Revenue was flat{separator} operating expenses were stable."

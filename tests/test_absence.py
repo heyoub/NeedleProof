@@ -388,8 +388,51 @@ async def test_probe_uses_normalized_metric_and_next_sentence_binding():
     probe = await probe_metric_absence(Corpus(), "Fee-earn-\ning AUM")
 
     assert probe.exact_metric_occurrences
-    assert any(
-        candidate.binding_profile == "next_sentence_anaphoric"
+    assert probe.supporting_value_candidates
+    assert all(
+        candidate.binding_failure_reason == "numeric_candidate_in_metric_context_requires_review"
         for candidate in probe.supporting_value_candidates
     )
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_abbreviated_metric_survives_absence_context_scanning():
+    chunk_id = chunk_id_from_uint64(2**63 + 800)
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_abbreviation",
+        document_name="Abbreviated metric",
+        physical_page_index=1,
+        chunk_position=0,
+        text="U.S. revenue was $2 million.",
+        normalized_text="U.S. revenue was $2 million.",
+        sha256="5" * 64,
+        token_estimate=6,
+    )
+
+    class Corpus:
+        corpus_version = "v_0000000000000007"
+
+        async def search(self, query, *, mode, top_k, recorder=None):
+            del recorder, top_k
+            return SearchResult(
+                query=query,
+                mode=mode,
+                corpus_manifest_sha256="6" * 64,
+                results=[],
+            )
+
+        def get_chunks(self, chunk_ids, neighbor_radius=0):
+            del neighbor_radius
+            return [chunk] if chunk_id in chunk_ids else []
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == "U.S. revenue"
+            return [chunk]
+
+    probe = await probe_metric_absence(Corpus(), "U.S. revenue")
+
+    assert probe.exact_metric_occurrences
+    assert probe.supporting_value_candidates
     assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW

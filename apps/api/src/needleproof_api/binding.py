@@ -32,19 +32,35 @@ _ANAPHORIC_CONNECTOR = (
     r"(?:is|was|remained\s+at|reached|stood\s+at|"
     r"ended(?:\s+the\s+(?:year|quarter|month|period))?\s+at)"
 )
+_POSITIVE_ANAPHORIC_STATE = (
+    r"(?:is|are|was|were)\s+(?:available|disclosed|reported|stable|stated|unchanged)"
+)
+_POSITIVE_ANAPHORIC_DESCRIPTOR = (
+    r"(?:is|are|was|were)\s+the\s+(?:figure|metric|number)\s+that\s+"
+    r"(?:actually\s+)?matters(?:\s+for\s+[^\W\d_]+){0,4}"
+)
+_POSITIVE_ANAPHORIC_ANTECEDENT = (
+    rf"(?:{_POSITIVE_ANAPHORIC_STATE}|{_POSITIVE_ANAPHORIC_DESCRIPTOR})"
+)
 _SAME_SENTENCE_BINDING_PATTERN = (
-    rf"(?P<prefix>[^,;:.!?\d]*?)\band\s+{_ANAPHOR}\s+{_ANAPHORIC_CONNECTOR}\s*"
+    rf"\s*{_POSITIVE_ANAPHORIC_ANTECEDENT}\s+"
+    rf"and\s+{_ANAPHOR}\s+{_ANAPHORIC_CONNECTOR}\s*"
 )
 _NEXT_SENTENCE_BINDING_PATTERN = (
-    rf"(?P<prefix>[^.;!?\d]*)\.\s*{_ANAPHOR}\s+{_ANAPHORIC_CONNECTOR}\s*"
-)
-_FOLLOWING_SENTENCE_ANAPHORIC_PATTERN = (
-    rf"(?:(?:by|at|as\s+of|on|for|in|during|through)\b.*?)?"
+    rf"\s*{_POSITIVE_ANAPHORIC_ANTECEDENT}\s*\.\s*"
     rf"{_ANAPHOR}\s+{_ANAPHORIC_CONNECTOR}\s*"
 )
-_DISALLOWED_PREFIX = re.compile(
-    r"\b(?:after|although|and|because|before|but|if|nor|or|so|unless|until|when|"
-    r"whereas|while|yet)\b",
+_IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN = (
+    rf"\s*(?:(?P<lead>(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?)\s+)?"
+    rf"{_ANAPHOR}\s+{_ANAPHORIC_CONNECTOR}\s*"
+)
+_ANAPHORIC_NUMERIC_TEMPORAL_TAIL = re.compile(
+    r"\s*(?:(?:as\s+of|at|during|for|in|on|through)\s+[^.!?]+)?\s*",
+    re.IGNORECASE,
+)
+_ANAPHORIC_TEMPORAL_LEAD_PREFIX = re.compile(
+    r"\s*(?:by|at|as\s+of|on|for|in|during|through)\s+"
+    r"(?:(?:the|fiscal|calendar|year|quarter|month|period|end|ending|ended|as|of|on)\s+)*",
     re.IGNORECASE,
 )
 _AFTER_VALUE_TEMPORAL_GAP = re.compile(
@@ -78,7 +94,7 @@ _RATE_UNITS = frozenset({"basis point", "basis points", "bps", "percent", "%"})
 _PER_SHARE_UNITS = frozenset({"per share"})
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v3-atomic-subjects",
+    "version": "positive-bindings-v4-bounded-positive-anaphora",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -86,10 +102,12 @@ BINDING_CONTRACT_SPEC = {
     "colon_pattern": _COLON.pattern,
     "anaphor_pattern": _ANAPHOR,
     "anaphoric_connector_pattern": _ANAPHORIC_CONNECTOR,
+    "positive_anaphoric_antecedent_pattern": _POSITIVE_ANAPHORIC_ANTECEDENT,
     "same_sentence_binding_pattern": _SAME_SENTENCE_BINDING_PATTERN,
     "next_sentence_binding_pattern": _NEXT_SENTENCE_BINDING_PATTERN,
-    "following_sentence_anaphoric_pattern": _FOLLOWING_SENTENCE_ANAPHORIC_PATTERN,
-    "disallowed_prefix_pattern": _DISALLOWED_PREFIX.pattern,
+    "immediate_following_anaphoric_pattern": _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
+    "anaphoric_numeric_temporal_tail_pattern": _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.pattern,
+    "anaphoric_temporal_lead_prefix_pattern": _ANAPHORIC_TEMPORAL_LEAD_PREFIX.pattern,
     "before_metric_temporal_gap_pattern": _BEFORE_METRIC_TEMPORAL_GAP.pattern,
     "after_value_temporal_gap_pattern": _AFTER_VALUE_TEMPORAL_GAP.pattern,
     "post_value_tail": (
@@ -235,7 +253,7 @@ def _profile_for_between(between: str) -> BindingProfile | None:
         between,
         flags=re.IGNORECASE,
     )
-    if same_sentence and not _DISALLOWED_PREFIX.search(same_sentence.group("prefix")):
+    if same_sentence:
         return BindingProfile.SAME_SENTENCE_ANAPHORIC
 
     next_sentence = re.fullmatch(
@@ -243,31 +261,64 @@ def _profile_for_between(between: str) -> BindingProfile | None:
         between,
         flags=re.IGNORECASE,
     )
-    if next_sentence and not _DISALLOWED_PREFIX.search(next_sentence.group("prefix")):
+    if next_sentence:
         return BindingProfile.NEXT_SENTENCE_ANAPHORIC
     return None
 
 
-def _next_sentence_anaphoric_profile(
+def _positive_anaphoric_antecedent(predicate: str) -> bool:
+    if re.fullmatch(_POSITIVE_ANAPHORIC_ANTECEDENT, predicate, flags=re.IGNORECASE):
+        return True
+    for connector in (_COPULA, _REPORTED, _COLON):
+        match = connector.match(predicate)
+        if match is None:
+            continue
+        numeric = _NUMERIC.match(predicate, match.end())
+        return bool(
+            numeric and _ANAPHORIC_NUMERIC_TEMPORAL_TAIL.fullmatch(predicate[numeric.end() :])
+        )
+    return False
+
+
+def _lead_binds_temporal_anchor(lead: str, temporal_anchor: str | None) -> bool:
+    if temporal_anchor is None:
+        return False
+    for start, end in word_phrase_spans(temporal_anchor, lead):
+        if _ANAPHORIC_TEMPORAL_LEAD_PREFIX.fullmatch(lead[:start]) and re.fullmatch(
+            r"\s*,?\s*", lead[end:]
+        ):
+            return True
+    return False
+
+
+def _immediate_next_sentence_anaphoric_profile(
     assertion: str,
     metric_span: Span,
     value_span: Span,
+    temporal_anchor: str | None,
 ) -> bool:
-    metric_sentence_end_match = re.search(r"[.!?]\s+", assertion[metric_span[1] :])
-    if metric_sentence_end_match is None:
+    """Prove one positive antecedent and one immediately following pronoun sentence."""
+
+    boundary = re.search(r"[.!?]\s+", assertion[metric_span[1] :])
+    if boundary is None:
         return False
-    boundary_start = metric_span[1] + metric_sentence_end_match.start()
-    next_start = metric_span[1] + metric_sentence_end_match.end()
+    boundary_start = metric_span[1] + boundary.start()
+    next_start = metric_span[1] + boundary.end()
     if not (boundary_start < value_span[0]):
         return False
+    antecedent = assertion[metric_span[1] : boundary_start]
+    if not _positive_anaphoric_antecedent(antecedent):
+        return False
     candidate = assertion[next_start : value_span[0]]
-    return bool(
-        re.fullmatch(
-            _FOLLOWING_SENTENCE_ANAPHORIC_PATTERN,
-            candidate,
-            flags=re.IGNORECASE,
-        )
+    match = re.fullmatch(
+        _IMMEDIATE_FOLLOWING_ANAPHORIC_PATTERN,
+        candidate,
+        flags=re.IGNORECASE,
     )
+    if match is None:
+        return False
+    lead = match.group("lead")
+    return not lead or _lead_binds_temporal_anchor(lead, temporal_anchor)
 
 
 def _kind_accepts_signature(kind: ObservationKind, value: str) -> bool:
@@ -375,8 +426,11 @@ def bind_observation(
                 continue
             between = normalized_assertion[metric_span[1] : value_span[0]]
             profile = _profile_for_between(between)
-            if profile is None and _next_sentence_anaphoric_profile(
-                normalized_assertion, metric_span, value_span
+            if profile is None and _immediate_next_sentence_anaphoric_profile(
+                normalized_assertion,
+                metric_span,
+                value_span,
+                normalized_temporal,
             ):
                 profile = BindingProfile.NEXT_SENTENCE_ANAPHORIC
             if profile is None:
