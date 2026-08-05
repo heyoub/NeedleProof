@@ -66,6 +66,24 @@ class AbsenceConclusion(StrEnum):
     INCOMPLETE_PROBE = "incomplete_probe"
 
 
+class BenignMentionProfile(StrEnum):
+    QUESTION = "question"
+    SOURCE_LABEL = "source_label"
+    RUBRIC_REFERENCE = "rubric_reference"
+    STANDALONE_LABEL = "standalone_label"
+
+
+class MetricEvidenceReason(StrEnum):
+    NUMERIC_CANDIDATE = "numeric_candidate"
+    QUALITATIVE_PREDICATE = "qualitative_predicate"
+    UNRESOLVED_PREDICATE = "unresolved_predicate"
+
+
+class UnknownOccurrenceReason(StrEnum):
+    UNCLASSIFIED_METRIC_CONTEXT = "unclassified_metric_context"
+    UNKNOWN_STRUCTURAL_CONTINUATION = "unknown_structural_continuation"
+
+
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
@@ -190,6 +208,36 @@ class ValueCandidate(BaseModel):
     value_text: str
     binding_profile: BindingProfile | None = None
     binding_failure_reason: str | None = None
+
+
+class BenignMetricMention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["benign"] = "benign"
+    occurrence: MetricOccurrence
+    profile: BenignMentionProfile
+
+
+class MetricEvidenceCandidateOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["evidence_candidate"] = "evidence_candidate"
+    occurrence: MetricOccurrence
+    reasons: list[MetricEvidenceReason] = Field(min_length=1)
+
+
+class UnknownMetricOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["unknown"] = "unknown"
+    occurrence: MetricOccurrence
+    reason: UnknownOccurrenceReason
+
+
+MetricOccurrenceAnalysis = Annotated[
+    BenignMetricMention | MetricEvidenceCandidateOccurrence | UnknownMetricOccurrence,
+    Field(discriminator="kind"),
+]
 
 
 class AbsenceProbeResult(BaseModel):

@@ -24,7 +24,14 @@ from needleproof_api.models import (
     VerifiedClaim,
 )
 from needleproof_api.service import compose_authoritative_answer
-from needleproof_api.util import canonical_metric_key, normalize_evidence_text
+from needleproof_api.util import (
+    canonical_metric_key,
+    evidence_text_contains,
+    metric_identity,
+    normalize_evidence_text,
+    resolve_evidence_text_matches,
+    sentence_fragments,
+)
 from needleproof_api.verification import (
     EvidenceVerifier,
     _compatible_measurements,
@@ -96,6 +103,48 @@ def test_normalization_records_pdf_linebreak_and_whitespace_operations():
     normalized, operations = normalize_evidence_text("fee-earn-\ning   assets\tunder management")
     assert normalized == "fee-earning assets under management"
     assert operations == ["pdf_linebreak_dehyphenation", "whitespace_folding"]
+
+
+def test_casefolded_evidence_matches_only_complete_source_character_boundaries():
+    assert evidence_text_contains("STRASSE", "Straße")
+    assert resolve_evidence_text_matches("STRASSE", "Straße")[0].span == (0, 6)
+    assert not evidence_text_contains("s", "ß")
+
+
+def test_casefolded_evidence_enumerates_overlapping_source_occurrences():
+    matches = resolve_evidence_text_matches("aa", "aaa")
+
+    assert [match.span for match in matches] == [(0, 2), (1, 3)]
+
+
+def test_verified_evidence_records_normalization_of_resolved_source_not_draft():
+    source = "Fee-earning AUM was $82 million."
+    draft = "Fee-earn-\ning AUM was $82 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9045),
+        document_id="doc_source_normalization",
+        document_name="Source normalization fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="f" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        draft,
+        "Fee-earning AUM",
+        assertion=draft,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Fee-earning AUM", observation("$82 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].normalization_operations == ["unicode_casefold_comparison"]
 
 
 def test_numeric_value_preserves_full_signature_and_sign():
@@ -731,7 +780,7 @@ def test_metric_phrase_normalizes_compact_and_dotted_initialisms():
 
 @given(
     initialism=st.text(
-        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=6
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=3
     )
 )
 def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism):
@@ -744,10 +793,268 @@ def test_dotted_initialism_shape_preserves_metric_identity_and_spans(initialism)
     assert word_phrase_spans(dotted_metric, f"{compact_metric} was $2 million.")
 
 
+@given(
+    initialism=st.text(
+        alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=2, max_size=3
+    )
+)
+def test_changing_initialism_kind_cannot_preserve_binding_authority(initialism):
+    ordinary_word = initialism.title()
+
+    assert metric_identity(initialism) != metric_identity(ordinary_word)
+    assert (
+        reported_value_linked_to_metric(
+            "$2 million",
+            initialism,
+            f"{ordinary_word} was $2 million.",
+        )
+        is None
+    )
+
+
+@given(
+    word=st.text(alphabet=st.characters(min_codepoint=65, max_codepoint=90), min_size=4, max_size=8)
+)
+def test_longer_uppercase_token_is_case_insensitive_word_typography(word):
+    ordinary_word = word.title()
+
+    assert metric_identity(word) == metric_identity(ordinary_word)
+    assert word_phrase_spans(ordinary_word, f"{word} was $2 million.")
+
+
 def test_initialism_normalization_does_not_cross_spaces_or_sentence_boundaries():
     assert canonical_metric_key("U. S. revenue") != canonical_metric_key("US revenue")
     assert word_phrase_spans("US revenue", "U. S. revenue was $2 million.") == []
     assert word_phrase_spans("US revenue", "US. Revenue was $2 million.") == []
+
+
+def test_sentence_boundaries_do_not_split_dotted_initialism_conflict_context():
+    text = "U.S. revenue was $2 million. The reported figures are conflicting."
+
+    assert sentence_fragments(text) == (
+        "U.S. revenue was $2 million.",
+        " The reported figures are conflicting.",
+    )
+
+
+@pytest.mark.parametrize(
+    ("metric", "ordinary_word"),
+    [("IT", "It"), ("US", "Us"), ("IN", "In"), ("OR", "Or")],
+)
+def test_compact_initialism_never_binds_to_ordinary_word(metric, ordinary_word):
+    assertion = f"{ordinary_word} was $2 million."
+
+    assert metric_identity(metric) != metric_identity(ordinary_word)
+    assert canonical_metric_key(metric) != canonical_metric_key(ordinary_word)
+    assert not word_phrase_spans(metric, assertion)
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
+
+
+@pytest.mark.parametrize(
+    ("metric", "source"),
+    [
+        ("Revenue", "REVENUE"),
+        ("RATE", "Rate"),
+        ("TOTAL HEADCOUNT", "Total Headcount"),
+    ],
+)
+def test_longer_all_caps_word_styling_preserves_ordinary_metric_identity(metric, source):
+    assertion = f"{source} was $2 million."
+
+    assert word_phrase_spans(metric, assertion)
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is not None
+
+
+@pytest.mark.parametrize("source_metric", ["IT", "I.T."])
+def test_compact_and_dotted_initialism_authorize_the_same_exact_metric(source_metric):
+    assertion = f"{source_metric} was $2 million."
+
+    assert metric_identity("IT") == metric_identity(source_metric)
+    assert reported_value_linked_to_metric("$2 million", "IT", assertion) is not None
+
+
+@pytest.mark.parametrize("metric", ["IT", "US", "AUM"])
+def test_bare_compact_initialism_in_all_caps_assertion_fails_closed(metric):
+    assertion = f"{metric} WAS $2 MILLION."
+
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
+
+
+def test_bare_compact_all_caps_ambiguity_cannot_become_authoritative():
+    quote = "IT WAS $2 MILLION."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9040),
+        document_id="doc_all_caps_ambiguity",
+        document_name="All-caps ambiguity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="a" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, quote, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].metric_value_bound
+    assert (
+        verified.evidence[0].binding_failure_reason
+        == "ambiguous_bare_compact_metric_in_all_caps_assertion"
+    )
+
+
+def test_model_supplied_dots_cannot_disambiguate_undotted_all_caps_source():
+    source = "IT WAS $2 MILLION."
+
+    assert reported_value_linked_to_metric("$2 million", "I.T.", source) is None
+
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9044),
+        document_id="doc_source_initialism_ambiguity",
+        document_name="Source initialism ambiguity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="e" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, source, "I.T.")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].metric_value_bound
+    assert (
+        verified.evidence[0].binding_failure_reason
+        == "ambiguous_bare_compact_metric_in_all_caps_assertion"
+    )
+
+
+def test_model_casing_cannot_turn_source_pronoun_into_metric_initialism():
+    source = "It was $2 million."
+    draft = "IT was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9041),
+        document_id="doc_source_casing",
+        document_name="Source casing fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="b" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, draft, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].quote_found
+    assert verified.evidence[0].assertion_found
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == source
+    assert not verified.evidence[0].metric_anchor_found
+    assert not verified.evidence[0].metric_value_bound
+
+
+def test_source_casing_controls_metric_identity_when_draft_changes_case():
+    source = "IT was $2 million."
+    draft = "It was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9042),
+        document_id="doc_source_initialism",
+        document_name="Source initialism fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="c" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, draft, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == source
+    assert verified.evidence[0].metric_value_bound
+
+
+def test_unicode_casefold_length_change_cannot_shift_evidence_boundaries():
+    source = "Straße context. Revenue was $2 million."
+    draft_quote = "STRASSE context. Revenue was $2 million."
+    assertion = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9043),
+        document_id="doc_unicode_offsets",
+        document_name="Unicode offset fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="d" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        draft_quote,
+        "Revenue",
+        assertion=assertion,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == assertion
+    assert verified.evidence[0].metric_value_bound
+
+
+@pytest.mark.parametrize(
+    ("metric", "assertion"),
+    [
+        ("IT", "IT was $2 million."),
+        ("IT", "I.T. WAS $2 MILLION."),
+        ("IT spending", "IT SPENDING WAS $2 MILLION."),
+    ],
+)
+def test_compact_initialism_requires_source_disambiguation_in_all_caps(metric, assertion):
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is not None
+
+
+def test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism():
+    sentence = "It was $2 million."
+    measurements = list(
+        _compatible_measurements(
+            sentence,
+            set(numeric_signature_sequence("$2 million")),
+        )
+    )
+    assert measurements
+
+    assert (
+        _measurements_bound_to_metric(
+            sentence,
+            "IT",
+            measurements,
+            {numeric_signature_sequence("$2 million")[0]: {ObservationKind.REPORTED_LEVEL}},
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(
@@ -804,6 +1111,18 @@ def test_new_bound_period_allows_a_distinct_anaphoric_value():
         "Revenue was $2 million in 2024. In 2025 it was $3 million.",
         temporal_anchor="2025",
     )
+    assert match is not None
+    assert match.temporal_span is not None
+
+
+def test_temporal_anchor_casefolding_does_not_inherit_metric_initialism_identity():
+    match = reported_value_linked_to_metric(
+        "$2 million",
+        "Revenue",
+        "Revenue was $2 million in FY 2025.",
+        temporal_anchor="FY 2025",
+    )
+
     assert match is not None
     assert match.temporal_span is not None
 
@@ -912,6 +1231,12 @@ def test_explicit_qualitative_negation_never_authorizes_a_positive_observation(q
 def test_positive_qualitative_copula_profiles_remain_authorized(value):
     quote = f"Credit rating was {value}."
     assert reported_value_linked_to_metric(value, "Credit rating", quote) is not None
+
+
+@pytest.mark.parametrize("value", ["AA", "aa"])
+def test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity(value):
+    assert reported_value_linked_to_metric(value, "Credit rating", "Credit rating was AA.")
+    assert reported_value_linked_to_metric("$2 million", "IT", "It was $2 million.") is None
 
 
 def test_negated_qualitative_observation_is_unverified_by_public_verifier():
@@ -1251,6 +1576,43 @@ def test_qualitative_conflict_characterization_binds_local_distinct_values():
             "Credit rating",
             observation("stable", first),
             observation("negative", second),
+        )
+    )
+
+    assert verified.status == ClaimStatus.CONFLICT
+
+
+def test_qualitative_conflict_uses_the_same_casefolded_value_identity_as_binding():
+    quote = "Credit rating was AA; Credit rating was BBB; the values are conflicting."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 932),
+        document_id="doc_casefolded_qualitative_conflict",
+        document_name="Casefolded qualitative conflict fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="d" * 64,
+        token_estimate=13,
+    )
+    first = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was AA",
+    )
+    second = reference(
+        chunk.chunk_id,
+        quote,
+        "Credit rating",
+        assertion="Credit rating was BBB",
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim(
+            "Credit rating",
+            observation("aa", first),
+            observation("bbb", second),
         )
     )
 

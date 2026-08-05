@@ -9,6 +9,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,11 @@ _METRIC_TOKEN = re.compile(
 MAX_METRIC_FTS_VARIANTS = 64
 
 
+class MetricTokenKind(StrEnum):
+    WORD = "word"
+    INITIALISM = "initialism"
+
+
 @dataclass(frozen=True, slots=True)
 class MetricToken:
     """One canonical metric token with its exact source span."""
@@ -83,26 +89,133 @@ class MetricToken:
     value: str
     start: int
     end: int
-    is_initialism: bool
+    kind: MetricTokenKind
+
+    @property
+    def is_initialism(self) -> bool:
+        return self.kind is MetricTokenKind.INITIALISM
+
+    @property
+    def identity(self) -> tuple[MetricTokenKind, str]:
+        return self.kind, self.value
+
+
+@dataclass(frozen=True, slots=True)
+class MetricIdentity:
+    """Kind-preserving metric identity; source spans never participate in equality."""
+
+    lexemes: tuple[tuple[MetricTokenKind, str], ...]
+
+    @property
+    def canonical_key(self) -> str:
+        # Uppercase is a stable wire representation of INITIALISM, not the
+        # authority-bearing comparison law. Internal equality uses ``lexemes``.
+        return " ".join(
+            value.upper() if kind is MetricTokenKind.INITIALISM else value
+            for kind, value in self.lexemes
+        )
 
 
 def metric_tokens(value: str) -> tuple[MetricToken, ...]:
-    """Tokenize metric text while treating dotted initialisms as one word."""
+    """Tokenize metric text without collapsing initialisms into ordinary words."""
 
     tokens = []
     for match in _METRIC_TOKEN.finditer(value):
         raw = match.group()
-        is_initialism = match.lastgroup == "initialism"
-        canonical = raw.replace(".", "") if is_initialism else raw
+        dotted_initialism = match.lastgroup == "initialism"
+        compact_initialism = (
+            not dotted_initialism
+            # Compact 2-3 letter forms cover the identity-sensitive corpus
+            # metrics (IT, US, AUM) and their dotted equivalents. Longer
+            # uppercase tokens are treated as ordinary typography so REVENUE,
+            # TOTAL, and RATE remain case-insensitive words. Ambiguous short
+            # forms still fail closed in exhaustive absence scans.
+            and 2 <= len(raw) <= 3
+            and raw.isalpha()
+            and raw.upper() == raw
+            and raw.lower() != raw
+        )
+        kind = (
+            MetricTokenKind.INITIALISM
+            if dotted_initialism or compact_initialism
+            else MetricTokenKind.WORD
+        )
+        canonical = raw.replace(".", "") if dotted_initialism else raw
         tokens.append(
             MetricToken(
                 value=canonical.casefold(),
                 start=match.start(),
                 end=match.end(),
-                is_initialism=is_initialism,
+                kind=kind,
             )
         )
     return tuple(tokens)
+
+
+def metric_identity(value: str) -> MetricIdentity:
+    """Return the kind-preserving identity shared by every authority boundary."""
+
+    normalized, _ = normalize_evidence_text(value)
+    return MetricIdentity(tuple(token.identity for token in metric_tokens(normalized)))
+
+
+def punctuation_boundaries(
+    text: str,
+    *,
+    punctuation: frozenset[str] = frozenset(".!?;"),
+) -> tuple[tuple[int, int], ...]:
+    """Return punctuation spans without splitting inside dotted initialisms."""
+
+    initialism_periods = {
+        offset
+        for token in metric_tokens(text)
+        if token.is_initialism
+        for offset in range(token.start, token.end)
+        if text[offset] == "."
+    }
+    boundaries = []
+    for offset, character in enumerate(text):
+        if character not in punctuation or offset in initialism_periods:
+            continue
+        if character == "." and offset + 1 < len(text):
+            if not text[offset + 1].isspace():
+                continue
+            next_offset = offset + 1
+            while next_offset < len(text) and text[next_offset].isspace():
+                next_offset += 1
+            previous_word = re.search(r"[^\W\d_]+$", text[:offset])
+            next_character = text[next_offset : next_offset + 1]
+            if (
+                next_character.islower()
+                or next_character.isdigit()
+                or (
+                    previous_word
+                    and len(previous_word.group()) <= 4
+                    and previous_word.group()[0].isupper()
+                    and next_character.isupper()
+                )
+            ):
+                # Ambiguous abbreviation punctuation stays open. Expanding the
+                # proof context can cause review, never stronger authority.
+                continue
+        boundaries.append((offset, offset + 1))
+    return tuple(boundaries)
+
+
+def sentence_fragments(text: str) -> tuple[str, ...]:
+    """Split terminal sentences under the same dotted-initialism boundary law."""
+
+    boundaries = punctuation_boundaries(text, punctuation=frozenset(".!?"))
+    if not boundaries:
+        return (text,)
+    fragments = []
+    start = 0
+    for _boundary_start, boundary_end in boundaries:
+        fragments.append(text[start:boundary_end])
+        start = boundary_end
+    if start < len(text):
+        fragments.append(text[start:])
+    return tuple(fragment for fragment in fragments if fragment.strip())
 
 
 def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
@@ -119,11 +232,64 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
     return folded, operations
 
 
-def canonical_metric_key(value: str) -> str:
-    """Return one normalized complete-word key for claim/probe identity."""
+@dataclass(frozen=True, slots=True)
+class EvidenceTextMatch:
+    """A normalized, case-insensitive match expressed in source-text coordinates."""
 
-    normalized, _ = normalize_evidence_text(value)
-    return " ".join(token.value for token in metric_tokens(normalized))
+    text: str
+    span: tuple[int, int]
+
+
+def resolve_evidence_text_matches(needle: str, haystack: str) -> tuple[EvidenceTextMatch, ...]:
+    """Resolve normalized/case-folded evidence back to exact source-cased slices.
+
+    Unicode case-folding can change string length (for example, ``ß`` becomes
+    ``ss``). Matches are therefore accepted only when both folded offsets align to
+    original character boundaries, and every returned span remains in the
+    normalized haystack's coordinate space.
+    """
+
+    normalized_needle, _ = normalize_evidence_text(needle)
+    normalized_haystack, _ = normalize_evidence_text(haystack)
+    folded_needle = normalized_needle.casefold()
+    if not folded_needle:
+        return ()
+
+    folded_parts: list[str] = []
+    folded_boundaries = [0]
+    for character in normalized_haystack:
+        folded_parts.append(character.casefold())
+        folded_boundaries.append(folded_boundaries[-1] + len(folded_parts[-1]))
+    folded_haystack = "".join(folded_parts)
+    source_offset_by_folded = {
+        folded_offset: source_offset
+        for source_offset, folded_offset in enumerate(folded_boundaries)
+    }
+
+    matches: list[EvidenceTextMatch] = []
+    search_start = 0
+    while True:
+        folded_start = folded_haystack.find(folded_needle, search_start)
+        if folded_start < 0:
+            break
+        search_start = folded_start + 1
+        source_start = source_offset_by_folded.get(folded_start)
+        source_end = source_offset_by_folded.get(folded_start + len(folded_needle))
+        if source_start is None or source_end is None:
+            continue
+        matches.append(
+            EvidenceTextMatch(
+                text=normalized_haystack[source_start:source_end],
+                span=(source_start, source_end),
+            )
+        )
+    return tuple(matches)
+
+
+def canonical_metric_key(value: str) -> str:
+    """Serialize the shared typed identity for receipts, signatures, and map keys."""
+
+    return metric_identity(value).canonical_key
 
 
 def metric_fts_phrase_variants(
@@ -142,11 +308,7 @@ def metric_fts_phrase_variants(
     alternatives: list[tuple[str, ...]] = []
     variant_count = 1
     for token in metric_tokens(normalized):
-        raw = normalized[token.start : token.end]
-        looks_compact_initialism = (
-            2 <= len(token.value) <= 8 and raw.isalpha() and raw.upper() == raw
-        )
-        if token.is_initialism or looks_compact_initialism:
+        if token.is_initialism:
             alternatives.append((token.value, " ".join(token.value)))
             variant_count *= 2
         else:
@@ -161,11 +323,7 @@ def metric_fts_phrase_variants(
 def evidence_text_contains(needle: str, haystack: str) -> bool:
     """Apply the canonical evidence normalization and case-folding containment rule."""
 
-    normalized_needle, _ = normalize_evidence_text(needle)
-    if not normalized_needle:
-        return False
-    normalized_haystack, _ = normalize_evidence_text(haystack)
-    return normalized_needle.casefold() in normalized_haystack.casefold()
+    return bool(resolve_evidence_text_matches(needle, haystack))
 
 
 def estimate_tokens(text: str) -> int:

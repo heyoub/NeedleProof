@@ -73,6 +73,11 @@ class ReceiptRecoveryOutcome(StrEnum):
     NOT_PENDING = "not_pending"
 
 
+class ShutdownOutcome(StrEnum):
+    SAFE_TO_CLOSE_CORPUS = "safe_to_close_corpus"
+    PENDING_CORPUS_USERS = "pending_corpus_users"
+
+
 def _run_envelope_from_receipt(run_id: str, receipt: dict[str, Any]) -> RunEnvelope:
     envelope_data = {
         "run_id": run_id,
@@ -157,6 +162,7 @@ class InvestigationService:
         self._admitted_run_ids: set[str] = set()
         self._live_session_by_run: dict[str, str] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._corpus_release_events: dict[str, asyncio.Event] = {}
 
     async def create_run(
         self, request: RunCreateRequest, *, session_id: str, client_ip: str = "unknown"
@@ -191,6 +197,7 @@ class InvestigationService:
                 manifest_sha256=self.corpus.manifest_sha256,
             )
             run_persisted = True
+            self._corpus_release_events[run_id] = asyncio.Event()
             task = asyncio.create_task(self._run_guarded(run_id, request, session_id))
         except BaseException:
             if self.usage_limiter:
@@ -202,6 +209,7 @@ class InvestigationService:
             async with self._admission_lock:
                 self._admitted_run_ids.discard(run_id)
                 self._live_session_by_run.pop(run_id, None)
+                self._corpus_release_events.pop(run_id, None)
             raise
         self._tasks[run_id] = task
         task.add_done_callback(lambda completed: self._finish_task(run_id, completed))
@@ -219,6 +227,9 @@ class InvestigationService:
         with suppress(asyncio.CancelledError):
             task.exception()
         self._tasks.pop(run_id, None)
+        release_event = self._corpus_release_events.pop(run_id, None)
+        if release_event is not None:
+            release_event.set()
         self._admitted_run_ids.discard(run_id)
         self._live_session_by_run.pop(run_id, None)
 
@@ -229,13 +240,39 @@ class InvestigationService:
         task.cancel()
         return True
 
-    async def shutdown(self, grace_seconds: float = 10.0) -> None:
-        tasks = list(self._tasks.values())
+    async def shutdown(self, grace_seconds: float = 10.0) -> ShutdownOutcome:
+        """Cancel active runs and report whether their tasks fully drained.
+
+        Receipt finalization may outlive the bounded grace period, but it no
+        longer needs corpus retrieval or embeddings. Each run explicitly
+        releases that shared dependency before entering its shielded finalizer.
+        Callers may close the corpus only after ``SAFE_TO_CLOSE_CORPUS``.
+        """
+
+        active = list(self._tasks.items())
+        tasks = [task for _run_id, task in active]
+        release_events = [
+            self._corpus_release_events[run_id]
+            for run_id, _task in active
+            if run_id in self._corpus_release_events
+        ]
         for task in tasks:
             task.cancel()
         if not tasks:
-            return
-        done, pending = await asyncio.wait(tasks, timeout=grace_seconds)
+            return ShutdownOutcome.SAFE_TO_CLOSE_CORPUS
+
+        release_waiters = [asyncio.create_task(event.wait()) for event in release_events]
+        done_waiters, pending_waiters = await asyncio.wait(
+            release_waiters,
+            timeout=grace_seconds,
+        )
+        for waiter in pending_waiters:
+            waiter.cancel()
+        if pending_waiters:
+            await asyncio.gather(*pending_waiters, return_exceptions=True)
+
+        done = {task for task in tasks if task.done()}
+        pending = set(tasks) - done
         for task in done:
             with suppress(asyncio.CancelledError):
                 task.exception()
@@ -244,6 +281,16 @@ class InvestigationService:
             task.add_done_callback(
                 lambda completed: completed.exception() if not completed.cancelled() else None
             )
+        all_released = (
+            len(release_events) == len(active)
+            and len(done_waiters) == len(release_waiters)
+            and all(event.is_set() for event in release_events)
+        )
+        return (
+            ShutdownOutcome.SAFE_TO_CLOSE_CORPUS
+            if all_released
+            else ShutdownOutcome.PENDING_CORPUS_USERS
+        )
 
     async def _recover_sealed_receipt(self, row: dict[str, object]) -> ReceiptRecoveryOutcome:
         run_id = str(row["run_id"])
@@ -446,6 +493,9 @@ class InvestigationService:
                     event_payload={**error, "authoritative": False},
                     error=error,
                 )
+            release_event = self._corpus_release_events.get(run_id)
+            if release_event is not None:
+                release_event.set()
             finalizer = asyncio.create_task(self._finalize_run(ledger, state))
             try:
                 await asyncio.shield(finalizer)

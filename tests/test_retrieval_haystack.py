@@ -12,9 +12,15 @@ import numpy as np
 import pytest
 from needleproof_api.absence import probe_metric_absence
 from needleproof_api.binding import word_phrase_spans
+from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
-from needleproof_api.models import AbsenceConclusion
+from needleproof_api.exact_scan import (
+    ExactMetricScanAmbiguous,
+    ExactMetricScanComplete,
+    ExactMetricScanTooBroad,
+)
+from needleproof_api.models import AbsenceConclusion, ChunkRecord
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.util import normalize_evidence_text
 
@@ -117,16 +123,38 @@ def matching_chunk_ids(store: CorpusStore, passage: str) -> set[str]:
         }
 
 
+@pytest.mark.asyncio
+async def test_corpus_store_closes_shared_embedding_client_exactly_once():
+    close_calls = 0
+
+    class Client:
+        async def close(self):
+            nonlocal close_calls
+            close_calls += 1
+
+    store = object.__new__(CorpusStore)
+    store._openai = Client()  # type: ignore[assignment]
+
+    await store.close()
+    await store.close()
+
+    assert close_calls == 1
+    assert store._openai is None
+
+
 def test_exact_metric_scan_is_exhaustive_and_phrase_bound(haystack_store):
     store = haystack_store
     expected = matching_chunk_ids(store, "Fee-related earnings were $345 million")
     assert expected
 
-    chunks = store.find_exact_metric_chunks("Fee-related earnings")
-    returned = {chunk.chunk_id for chunk in chunks}
+    scan = store.find_exact_metric_chunks("Fee-related earnings")
+    assert isinstance(scan, ExactMetricScanComplete)
+    returned = {chunk.chunk_id for chunk in scan.chunks}
 
     assert expected <= returned
-    assert all(word_phrase_spans("fee related earnings", chunk.normalized_text) for chunk in chunks)
+    assert all(
+        word_phrase_spans("Fee related earnings", chunk.normalized_text) for chunk in scan.chunks
+    )
 
 
 def test_exact_metric_scan_fallback_remains_exhaustive_and_phrase_bound(
@@ -137,11 +165,83 @@ def test_exact_metric_scan_fallback_remains_exhaustive_and_phrase_bound(
     assert expected
     monkeypatch.setattr(retrieval_module, "metric_fts_phrase_variants", lambda _metric: None)
 
-    chunks = haystack_store.find_exact_metric_chunks("US revenue")
-    returned = {chunk.chunk_id for chunk in chunks}
+    scan = haystack_store.find_exact_metric_chunks("US revenue")
+    assert isinstance(scan, ExactMetricScanComplete)
+    returned = {chunk.chunk_id for chunk in scan.chunks}
 
     assert expected <= returned
-    assert all(word_phrase_spans("US revenue", chunk.normalized_text) for chunk in chunks)
+    assert all(word_phrase_spans("US revenue", chunk.normalized_text) for chunk in scan.chunks)
+
+
+def test_exact_metric_scan_counts_before_materializing_too_broad_result(
+    haystack_store,
+    monkeypatch,
+):
+    monkeypatch.setattr(retrieval_module, "EXACT_METRIC_SCAN_MAX_CANDIDATES", 1)
+
+    def unexpected_materialization(*_args, **_kwargs):
+        raise AssertionError("too-broad exact scans must not materialize chunks")
+
+    monkeypatch.setattr(haystack_store, "get_chunks", unexpected_materialization)
+
+    scan = haystack_store.find_exact_metric_chunks("revenue")
+
+    assert isinstance(scan, ExactMetricScanTooBroad)
+    assert scan.candidate_count > 1
+
+
+def test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word(
+    haystack_store,
+):
+    scan = haystack_store.find_exact_metric_chunks("IT")
+
+    assert isinstance(scan, ExactMetricScanAmbiguous)
+    assert scan.ambiguous_candidate_count > 0
+
+
+def test_exact_scan_matches_longer_all_caps_word_typography(tmp_path):
+    db_path = tmp_path / "uppercase.sqlite3"
+    chunk_id = chunk_id_from_uint64(2**63 + 1900)
+    text = "REVENUE was $2 million."
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE chunks (internal_id INTEGER PRIMARY KEY, chunk_external_id TEXT, normalized_text TEXT)"
+        )
+        connection.execute(
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_external_id UNINDEXED, document_id UNINDEXED, text)"
+        )
+        connection.execute(
+            "INSERT INTO chunks VALUES (1, ?, ?)",
+            (str(chunk_id), text),
+        )
+        connection.execute(
+            "INSERT INTO chunks_fts(rowid, chunk_external_id, document_id, text) VALUES (1, ?, ?, ?)",
+            (str(chunk_id), "doc_uppercase", text),
+        )
+    chunk = ChunkRecord(
+        chunk_id=chunk_id,
+        document_id="doc_uppercase",
+        document_name="Uppercase",
+        physical_page_index=1,
+        chunk_position=0,
+        text=text,
+        normalized_text=text,
+        sha256="c" * 64,
+        token_estimate=5,
+    )
+    store = object.__new__(CorpusStore)
+    store.db_path = db_path
+
+    def get_chunks(self, chunk_ids, neighbor_radius=0):
+        del self, neighbor_radius
+        return [chunk] if chunk_id in chunk_ids else []
+
+    store.get_chunks = MethodType(get_chunks, store)  # type: ignore[method-assign]
+
+    scan = store.find_exact_metric_chunks("Revenue")
+
+    assert isinstance(scan, ExactMetricScanComplete)
+    assert scan.chunks == (chunk,)
 
 
 @pytest.mark.asyncio
@@ -155,7 +255,8 @@ async def test_real_corpus_store_parenthesized_value_first_evidence_blocks_absen
 
     assert reviewable.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     assert reviewable.supporting_value_candidates
-    assert no_value_control.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+    assert no_value_control.conclusion == AbsenceConclusion.INCOMPLETE_PROBE
+    assert no_value_control.exact_metric_scan_error == "ContextExpansionLimitExceeded"
 
 
 def test_chunk_lookup_batches_sqlite_parameters_and_preserves_order(haystack_store, monkeypatch):

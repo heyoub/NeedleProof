@@ -1,0 +1,274 @@
+# Machine-readable adjudication registry for review-derived authority invariants.
+# P0/P1 findings must be fixed, invalid, or superseded when a pull request is ready.
+
+[[invariant]]
+id = "INV-METRIC-004"
+family = "metric-identity"
+severity = "P1"
+invariant = "Compact initialisms never equal ordinary words; compact and dotted initialisms remain equivalent."
+finding = "The metric IT matched the pronoun It after case folding."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-memo:compact-initialism-identity"
+tests = [
+  "test_compact_initialism_never_binds_to_ordinary_word",
+  "test_compact_and_dotted_initialism_authorize_the_same_exact_metric",
+  "test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism",
+  "test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word",
+]
+
+[[invariant]]
+id = "INV-METRIC-005"
+family = "metric-identity"
+severity = "P1"
+invariant = "Longer all-caps ordinary-word typography remains case-insensitive; ambiguous short forms cannot authorize not-found."
+finding = "REVENUE typography could be post-filtered from a Revenue absence scan while short initialisms still required kind preservation."
+disposition = "fixed"
+owner = "retrieval"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WejxM"
+tests = [
+  "test_longer_all_caps_word_styling_preserves_ordinary_metric_identity",
+  "test_exact_scan_matches_longer_all_caps_word_typography",
+  "test_kind_ambiguous_exact_scan_cannot_authorize_absence",
+]
+
+[[invariant]]
+id = "INV-ABSENCE-007"
+family = "proof-completeness"
+severity = "P1"
+invariant = "Not-found authority requires complete analysis context around every exact metric occurrence."
+finding = "A bounded display excerpt could hide a later value in the same source chunk."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-memo:proof-context-completeness"
+tests = [
+  "test_complete_same_chunk_context_blocks_absence_beyond_display_window",
+  "test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value",
+  "test_absence_probe_handles_metric_values_split_across_chunk_edges",
+  "test_open_anaphoric_continuation_extends_into_linked_chunk",
+  "test_metric_at_chunk_end_follows_linked_anaphoric_value",
+  "test_linked_anaphoric_qualitative_predicate_blocks_absence",
+  "test_second_same_chunk_anaphor_value_requires_review",
+  "test_terminal_unpunctuated_anaphor_is_analyzed_without_crashing",
+  "test_completed_local_anaphor_includes_linked_coreferential_value",
+  "test_linked_anaphoric_chain_beyond_opened_neighbor_never_authorizes_absence",
+  "test_real_corpus_store_parenthesized_value_first_evidence_blocks_absence",
+]
+
+[[invariant]]
+id = "INV-TEMPORAL-010"
+family = "temporal-identity"
+severity = "P2"
+invariant = "Temporal anchors use case-folded word identity without inheriting metric initialism kinds."
+finding = "The temporal anchor FY 2025 failed to bind to its all-caps source spelling."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-memo:temporal-token-kind"
+tests = ["test_temporal_anchor_casefolding_does_not_inherit_metric_initialism_identity"]
+
+[[invariant]]
+id = "INV-ABSENCE-008"
+family = "bounded-work"
+severity = "P2"
+invariant = "An exhaustive exact scan exceeding its breadth budget fails closed without materializing the corpus."
+finding = "A common metric could force an unbounded exact scan."
+disposition = "fixed"
+owner = "retrieval"
+source = "PR4:review-memo:exact-scan-breadth"
+tests = [
+  "test_exact_metric_scan_counts_before_materializing_too_broad_result",
+  "test_too_broad_exact_scan_is_typed_incomplete_not_absence",
+]
+
+[[invariant]]
+id = "INV-CONFLICT-009"
+family = "supported-syntax"
+severity = "P3"
+invariant = "Value-first collective conflict syntax remains unverified unless each operand has a local positive metric binding."
+finding = "A value-first collective conflict phrase is unsupported."
+disposition = "accepted_limitation"
+authority_effect = "false_negative_only"
+owner = "verification"
+source = "PR4:review-memo:value-first-conflict-syntax"
+tests = ["test_collective_conflict_profile_rejects_competing_subjects_and_tails"]
+
+[[invariant]]
+id = "INV-RESOURCE-002"
+family = "resource-lifecycle"
+severity = "P2"
+invariant = "The shared embedding client closes exactly once only after service-owned tasks drain."
+finding = "CorpusStore retained its lazy client, and a bounded shutdown could close it while a run task remained alive."
+disposition = "fixed"
+owner = "retrieval"
+source = "PR4:review-memo:shared-client-lifecycle"
+tests = [
+  "test_corpus_store_closes_shared_embedding_client_exactly_once",
+  "test_shutdown_reports_pending_before_shared_dependencies_may_close",
+  "test_shutdown_reports_drained_when_no_task_can_retain_shared_dependencies",
+  "test_shutdown_may_release_corpus_before_receipt_finalizer_drains",
+  "test_lifespan_never_closes_corpus_retained_by_a_run",
+  "test_golden_cli_closes_temporary_embedding_store",
+]
+
+[[invariant]]
+id = "INV-VALUE-001"
+family = "value-identity"
+severity = "P2"
+invariant = "Qualitative values use case-folded word identity without weakening kind-preserving metric identity."
+finding = "The qualitative value AA was misclassified as an initialism and failed to bind to aa."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WenWA"
+tests = [
+  "test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity",
+  "test_qualitative_conflict_uses_the_same_casefolded_value_identity_as_binding",
+]
+
+[[invariant]]
+id = "INV-PROCESS-001"
+family = "review-process"
+severity = "P1"
+invariant = "Unknown severities and malformed invariant IDs cannot bypass the merge-readiness gate."
+finding = "A severity typo such as P01 was accepted and escaped the open P0/P1 check."
+disposition = "fixed"
+owner = "quality"
+source = "PR4:review-memo:invariant-registry-schema"
+tests = ["test_review_invariant_registry_rejects_schema_typos_that_bypass_policy"]
+
+[[invariant]]
+id = "INV-ABSENCE-009"
+family = "occurrence-classification"
+severity = "P1"
+invariant = "Every exact metric occurrence must be positively classified as benign before it may authorize not-found; unknown syntax fails closed."
+finding = "Unknown structural references such as This value and possessive metric references could hide present evidence behind an authoritative absence conclusion."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Wfpk-"
+tests = [
+  "test_unknown_structural_reference_never_authorizes_absence",
+  "test_unknown_structural_reference_chain_never_becomes_not_found",
+  "test_replacing_known_coreference_with_unknown_never_strengthens_absence",
+  "test_only_named_benign_metric_profiles_can_authorize_absence",
+  "test_unknown_reference_shape_can_never_classify_as_benign",
+]
+
+[[invariant]]
+id = "INV-METRIC-006"
+family = "metric-identity"
+severity = "P1"
+invariant = "A bare compact metric token in an all-caps assertion cannot authorize evidence without a dotted or multi-token disambiguator."
+finding = "In all-caps source typography, IT WAS could mean either the initialism IT or the pronoun It."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-memo:compact-uppercase-ambiguity"
+tests = [
+  "test_bare_compact_initialism_in_all_caps_assertion_fails_closed",
+  "test_bare_compact_all_caps_ambiguity_cannot_become_authoritative",
+  "test_compact_initialism_requires_source_disambiguation_in_all_caps",
+]
+
+[[invariant]]
+id = "INV-RESOURCE-003"
+family = "resource-lifecycle"
+severity = "P2"
+invariant = "Corpus-build embedding calls use an explicitly closed client with hidden retries disabled and truthful retry provenance."
+finding = "CorpusBuilder retained implicit synchronous client ownership while recording an unconfigured retry count of zero."
+disposition = "fixed"
+owner = "corpus"
+source = "PR4:review-memo:builder-client-provenance"
+tests = ["test_corpus_builder_embedding_client_has_explicit_lifetime_and_retry_policy"]
+
+[[invariant]]
+id = "INV-PROCESS-002"
+family = "review-process"
+severity = "P1"
+invariant = "P0 and P1 findings cannot be marked accepted limitations; accepted lower-severity limitations must prove false-negative-only authority."
+finding = "The registry schema permitted a merge-blocking authority defect to be labeled accepted_limitation."
+disposition = "fixed"
+owner = "quality"
+source = "PR4:review-memo:accepted-limitation-policy"
+tests = [
+  "test_merge_blockers_cannot_be_blessed_as_accepted_limitations",
+  "test_accepted_limitations_require_false_negative_only_proof",
+]
+
+[[invariant]]
+id = "INV-METRIC-007"
+family = "source-evidence-identity"
+severity = "P1"
+invariant = "Metric identity, evidence binding, and boundary spans are derived from corpus-resolved source text rather than model-supplied casing or case-folded coordinates."
+finding = "A draft could capitalize the source pronoun It as IT and manufacture an initialism binding; Unicode case-fold expansion could also shift later boundary offsets."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Wgox7"
+tests = [
+  "test_model_casing_cannot_turn_source_pronoun_into_metric_initialism",
+  "test_source_casing_controls_metric_identity_when_draft_changes_case",
+  "test_unicode_casefold_length_change_cannot_shift_evidence_boundaries",
+]
+
+[[invariant]]
+id = "INV-ABSENCE-010"
+family = "scan-completeness"
+severity = "P1"
+invariant = "Authoritative absence independently reruns the exhaustive exact-metric scan against the bound corpus snapshot and requires the complete match set to equal the sealed probe."
+finding = "A probe whose reported complete scan omitted a value-bearing metric chunk could authorize a false not-found conclusion."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-memo:greptile-exact-scan-omission"
+tests = ["test_authorization_revalidates_omitted_exact_scan_matches"]
+
+[[invariant]]
+id = "INV-METRIC-008"
+family = "source-evidence-identity"
+severity = "P1"
+invariant = "Only punctuation present in the corpus-resolved metric span may disambiguate a bare compact initialism in an all-caps assertion."
+finding = "A model-supplied dotted metric anchor could lend punctuation to an undotted all-caps source token and bypass the ambiguity guard."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-thread:model-supplied-dots"
+tests = ["test_model_supplied_dots_cannot_disambiguate_undotted_all_caps_source"]
+
+[[invariant]]
+id = "INV-ABSENCE-011"
+family = "scan-completeness"
+severity = "P1"
+invariant = "An exact metric scan with token-kind ambiguity is a distinct non-complete outcome and can never authorize absence."
+finding = "Authorization-time revalidation treated an ambiguous scan as complete when its candidate arithmetic balanced."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-thread:authorization-scan-ambiguity"
+tests = ["test_authorization_rejects_fresh_exact_scan_token_kind_ambiguity"]
+
+[[invariant]]
+id = "INV-CONFIG-001"
+family = "bounded-runtime"
+severity = "P1"
+invariant = "Soft and hard investigation timeouts are finite positive values, so configured runtime bounds cannot be disabled by NaN or infinity."
+finding = "Pydantic's positive-number constraint still admitted positive infinity for timeout configuration."
+disposition = "fixed"
+owner = "config"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WhcrY"
+tests = ["test_timeout_configuration_must_be_positive_and_finite"]
+
+[[invariant]]
+id = "INV-EVIDENCE-001"
+family = "source-evidence-resolution"
+severity = "P2"
+invariant = "Normalized evidence resolution enumerates every source-aligned occurrence, including overlapping matches."
+finding = "Non-overlapping regex iteration could omit a valid later occurrence and reject otherwise supportable evidence."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Whcri"
+tests = ["test_casefolded_evidence_enumerates_overlapping_source_occurrences"]
+
+[[invariant]]
+id = "INV-RECEIPT-001"
+family = "receipt-provenance"
+severity = "P2"
+invariant = "Evidence normalization operations describe the corpus-resolved quote stored in the receipt, never the model-supplied draft text."
+finding = "A receipt could attribute draft-only normalization operations to a different resolved source quotation."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Whcrk"
+tests = ["test_verified_evidence_records_normalization_of_resolved_source_not_draft"]

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, assert_never
+from typing import Literal, Protocol, assert_never
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
@@ -38,6 +39,7 @@ from .service import (
     ReceiptRecoveryOutcome,
     RunCapacityError,
     SessionLiveRunError,
+    ShutdownOutcome,
 )
 from .util import evidence_text_contains, normalize_evidence_text
 
@@ -57,6 +59,24 @@ TERMINAL_EVENTS_BY_STATUS = {
 }
 ReceiptReconciliationState = Literal["ready", "pending", "retryable", "invalid"]
 TerminalDeliveryState = Literal["uncommitted", "receipt_backed", "receiptless_interruption"]
+logger = logging.getLogger(__name__)
+
+
+class _ClosableCorpus(Protocol):
+    async def close(self) -> None: ...
+
+
+async def _close_corpus_after_shutdown(
+    corpus: _ClosableCorpus,
+    outcome: ShutdownOutcome,
+) -> bool:
+    """Close shared retrieval resources only after every run releases them."""
+
+    if outcome is ShutdownOutcome.SAFE_TO_CLOSE_CORPUS:
+        await corpus.close()
+        return True
+    logger.warning("Leaving the corpus client open because active runs retained it")
+    return False
 
 
 def document_media_type(path: Path) -> str:
@@ -101,12 +121,24 @@ async def lifespan(app: FastAPI):
     await app.state.service.reconcile_abandoned_runs()
     app.state.model_availability = ModelAvailability(settings)
     model_probe = asyncio.create_task(app.state.model_availability.refresh())
-    yield
-    await app.state.service.shutdown()
-    if not model_probe.done():
-        model_probe.cancel()
-    with suppress(asyncio.CancelledError):
-        await model_probe
+    try:
+        yield
+    finally:
+        shutdown_outcome = ShutdownOutcome.PENDING_CORPUS_USERS
+        try:
+            shutdown_outcome = await app.state.service.shutdown()
+        finally:
+            if not model_probe.done():
+                model_probe.cancel()
+            try:
+                with suppress(asyncio.CancelledError):
+                    await model_probe
+            finally:
+                # A cancellation-shielded run may still be sealing its receipt,
+                # but it explicitly releases corpus ownership before doing so.
+                # If a task has not crossed that boundary, process teardown is
+                # safer than racing its client with an explicit close.
+                await _close_corpus_after_shutdown(corpus, shutdown_outcome)
 
 
 _public_demo = application_settings.public_demo
@@ -500,12 +532,17 @@ async def quote_challenge(request: Request, body: QuoteChallengeRequest) -> JSON
     }
     if body.chunk_id not in cited_chunk_ids:
         raise HTTPException(status_code=404, detail="Cited chunk not found in this run")
+    temporary_corpus = current_corpus.corpus_version != body.corpus_version
     corpus = (
         current_corpus
-        if current_corpus.corpus_version == body.corpus_version
+        if not temporary_corpus
         else CorpusStore(request.app.state.settings, body.corpus_version)
     )
-    chunks = corpus.get_chunks([body.chunk_id], neighbor_radius=0)
+    try:
+        chunks = corpus.get_chunks([body.chunk_id], neighbor_radius=0)
+    finally:
+        if temporary_corpus:
+            await corpus.close()
     if not chunks:
         raise HTTPException(status_code=404, detail="Chunk not found")
     normalized_quote, operations = normalize_evidence_text(body.quote)
