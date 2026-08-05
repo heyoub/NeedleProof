@@ -53,6 +53,9 @@ def test_v010_release_contract_and_live_reference_receipt_are_frozen():
     reference = freeze["reference_receipt"]
     receipt = json.loads(Path(reference["path"]).read_text(encoding="utf-8"))
 
+    assert sha256_text(canonical_json(freeze)) == (
+        "c442014e9d307bcaeb94a6573b801a904b219e96af254612149df28440407c3f"
+    )
     assert freeze["release_tag"] == "v0.1.0"
     assert freeze["application_version"] == __version__ == "0.1.0"
     assert authority == {
@@ -64,6 +67,7 @@ def test_v010_release_contract_and_live_reference_receipt_are_frozen():
         "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
     }
     assert validate_receipt(receipt) == []
+    assert receipt["schema_version"] == authority["receipt_schema_version"] == "1.4"
     assert receipt["status"] == "completed"
     assert receipt["receipt_sha256"] == reference["receipt_sha256"]
     assert receipt["run_id"] == reference["run_id"]
