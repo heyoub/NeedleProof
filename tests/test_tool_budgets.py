@@ -198,7 +198,7 @@ def test_top_k_configuration_cannot_exceed_public_tool_contract():
 
 
 @pytest.mark.parametrize("field", ["soft_timeout_seconds", "hard_timeout_seconds"])
-@pytest.mark.parametrize("value", [0, -0.01])
-def test_timeout_configuration_must_be_positive(field, value):
+@pytest.mark.parametrize("value", [0, -0.01, float("inf"), float("-inf"), float("nan")])
+def test_timeout_configuration_must_be_positive_and_finite(field, value):
     with pytest.raises(ValueError):
         Settings(**{field: value})

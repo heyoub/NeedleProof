@@ -267,9 +267,14 @@ def resolve_evidence_text_matches(needle: str, haystack: str) -> tuple[EvidenceT
     }
 
     matches: list[EvidenceTextMatch] = []
-    for occurrence in re.finditer(re.escape(folded_needle), folded_haystack):
-        source_start = source_offset_by_folded.get(occurrence.start())
-        source_end = source_offset_by_folded.get(occurrence.end())
+    search_start = 0
+    while True:
+        folded_start = folded_haystack.find(folded_needle, search_start)
+        if folded_start < 0:
+            break
+        search_start = folded_start + 1
+        source_start = source_offset_by_folded.get(folded_start)
+        source_end = source_offset_by_folded.get(folded_start + len(folded_needle))
         if source_start is None or source_end is None:
             continue
         matches.append(

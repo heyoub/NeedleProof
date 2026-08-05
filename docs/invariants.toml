@@ -239,3 +239,36 @@ disposition = "fixed"
 owner = "absence"
 source = "PR4:review-thread:authorization-scan-ambiguity"
 tests = ["test_authorization_rejects_fresh_exact_scan_token_kind_ambiguity"]
+
+[[invariant]]
+id = "INV-CONFIG-001"
+family = "bounded-runtime"
+severity = "P1"
+invariant = "Soft and hard investigation timeouts are finite positive values, so configured runtime bounds cannot be disabled by NaN or infinity."
+finding = "Pydantic's positive-number constraint still admitted positive infinity for timeout configuration."
+disposition = "fixed"
+owner = "config"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WhcrY"
+tests = ["test_timeout_configuration_must_be_positive_and_finite"]
+
+[[invariant]]
+id = "INV-EVIDENCE-001"
+family = "source-evidence-resolution"
+severity = "P2"
+invariant = "Normalized evidence resolution enumerates every source-aligned occurrence, including overlapping matches."
+finding = "Non-overlapping regex iteration could omit a valid later occurrence and reject otherwise supportable evidence."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Whcri"
+tests = ["test_casefolded_evidence_enumerates_overlapping_source_occurrences"]
+
+[[invariant]]
+id = "INV-RECEIPT-001"
+family = "receipt-provenance"
+severity = "P2"
+invariant = "Evidence normalization operations describe the corpus-resolved quote stored in the receipt, never the model-supplied draft text."
+finding = "A receipt could attribute draft-only normalization operations to a different resolved source quotation."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Whcrk"
+tests = ["test_verified_evidence_records_normalization_of_resolved_source_not_draft"]

@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     max_document_inspections: int = 2
     max_inspection_pages: int = 3
     max_inspection_characters: int = 24_000
-    soft_timeout_seconds: float = Field(default=45.0, gt=0)
-    hard_timeout_seconds: float = Field(default=60.0, gt=0)
+    soft_timeout_seconds: float = Field(default=45.0, gt=0, allow_inf_nan=False)
+    hard_timeout_seconds: float = Field(default=60.0, gt=0, allow_inf_nan=False)
     trace_include_sensitive_data: bool = False
     receipt_retention_days: int = 7
     max_concurrent_runs: int = 5

@@ -111,6 +111,42 @@ def test_casefolded_evidence_matches_only_complete_source_character_boundaries()
     assert not evidence_text_contains("s", "ß")
 
 
+def test_casefolded_evidence_enumerates_overlapping_source_occurrences():
+    matches = resolve_evidence_text_matches("aa", "aaa")
+
+    assert [match.span for match in matches] == [(0, 2), (1, 3)]
+
+
+def test_verified_evidence_records_normalization_of_resolved_source_not_draft():
+    source = "Fee-earning AUM was $82 million."
+    draft = "Fee-earn-\ning AUM was $82 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9045),
+        document_id="doc_source_normalization",
+        document_name="Source normalization fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="f" * 64,
+        token_estimate=6,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        draft,
+        "Fee-earning AUM",
+        assertion=draft,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Fee-earning AUM", observation("$82 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].normalization_operations == ["unicode_casefold_comparison"]
+
+
 def test_numeric_value_preserves_full_signature_and_sign():
     quote = "The loss was ($4 billion), not $4 million."
     assert reported_value_found("($4 billion)", quote)

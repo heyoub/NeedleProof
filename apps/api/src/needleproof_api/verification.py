@@ -776,7 +776,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v43-source-only-metric-identity"
+    version = "deterministic-verifier-v44-source-normalization-provenance"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -845,8 +845,7 @@ class EvidenceVerifier:
             if chunk is None:
                 missing_chunk_ids.add(str(reference.chunk_id))
                 return None
-            draft_normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
-            operations = [*operations, "unicode_casefold_comparison"]
+            draft_normalized_quote = normalize_evidence_text(reference.exact_quote)[0]
             quote_matches = resolve_evidence_text_matches(
                 reference.exact_quote,
                 chunk.normalized_text,
@@ -953,7 +952,8 @@ class EvidenceVerifier:
             ) or (observation is None and failure_reason is not None):
                 assertion_found = False
 
-            normalized_quote = normalize_evidence_text(source_quote)[0]
+            normalized_quote, source_operations = normalize_evidence_text(source_quote)
+            operations = [*source_operations, "unicode_casefold_comparison"]
             metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
                 claim.metric
             )
