@@ -270,7 +270,7 @@ class CorpusStore:
                     candidate_count, character_count = connection.execute(
                         "SELECT COUNT(*), COALESCE(SUM(length(normalized_text)), 0) FROM chunks"
                     ).fetchone()
-                    query: tuple[str, tuple[str, ...]] | None = None
+                    query: str | None = None
                 else:
                     fts_query = " OR ".join(
                         f'"{phrase.replace(chr(34), chr(34) * 2)}"' for phrase in phrases
@@ -283,7 +283,7 @@ class CorpusStore:
                         """,
                         (fts_query,),
                     ).fetchone()
-                    query = (fts_query, phrases)
+                    query = fts_query
                 candidate_count = int(candidate_count)
                 character_count = int(character_count)
                 if (
@@ -303,7 +303,7 @@ class CorpusStore:
                         WHERE chunks_fts MATCH ?
                         ORDER BY rowid
                         """,
-                        (query[0],),
+                        (query,),
                     ).fetchall()
         except sqlite3.Error as error:
             return ExactMetricScanFailed(type(error).__name__)

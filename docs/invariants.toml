@@ -206,3 +206,14 @@ tests = [
   "test_source_casing_controls_metric_identity_when_draft_changes_case",
   "test_unicode_casefold_length_change_cannot_shift_evidence_boundaries",
 ]
+
+[[invariant]]
+id = "INV-ABSENCE-010"
+family = "scan-completeness"
+severity = "P1"
+invariant = "Authoritative absence independently reruns the exhaustive exact-metric scan against the bound corpus snapshot and requires the complete match set to equal the sealed probe."
+finding = "A probe whose reported complete scan omitted a value-bearing metric chunk could authorize a false not-found conclusion."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-memo:greptile-exact-scan-omission"
+tests = ["test_authorization_revalidates_omitted_exact_scan_matches"]

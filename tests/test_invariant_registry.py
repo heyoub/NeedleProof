@@ -91,10 +91,10 @@ def test_review_invariant_registry_rejects_schema_typos_that_bypass_policy():
 
 
 def test_merge_blockers_cannot_be_blessed_as_accepted_limitations():
-    limitation: dict[str, object] = {
+    allowed_limitation: dict[str, object] = {
         "id": "INV-PROCESS-002",
         "family": "review-process",
-        "severity": "P1",
+        "severity": "P3",
         "invariant": "Authority-increasing limitations cannot bypass readiness.",
         "finding": "Mutation fixture.",
         "disposition": "accepted_limitation",
@@ -104,20 +104,27 @@ def test_merge_blockers_cannot_be_blessed_as_accepted_limitations():
         "tests": ["test_merge_blockers_cannot_be_blessed_as_accepted_limitations"],
     }
 
-    assert _registry_errors([limitation], _test_names())
+    assert _registry_errors([allowed_limitation], _test_names()) == []
+    merge_blocker = {**allowed_limitation, "severity": "P1"}
+    assert _registry_errors([merge_blocker], _test_names())
 
 
 def test_accepted_limitations_require_false_negative_only_proof():
-    limitation: dict[str, object] = {
+    allowed_limitation: dict[str, object] = {
         "id": "INV-PROCESS-003",
         "family": "review-process",
         "severity": "P3",
         "invariant": "Accepted syntax limitations cannot increase authority.",
         "finding": "Mutation fixture.",
         "disposition": "accepted_limitation",
+        "authority_effect": "false_negative_only",
         "owner": "quality",
         "source": "PR4:review-memo:authority-effect-mutation",
         "tests": ["test_accepted_limitations_require_false_negative_only_proof"],
     }
 
-    assert _registry_errors([limitation], _test_names())
+    assert _registry_errors([allowed_limitation], _test_names()) == []
+    limitation_without_proof = {
+        key: value for key, value in allowed_limitation.items() if key != "authority_effect"
+    }
+    assert _registry_errors([limitation_without_proof], _test_names())

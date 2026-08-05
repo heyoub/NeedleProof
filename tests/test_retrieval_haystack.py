@@ -175,6 +175,11 @@ def test_exact_metric_scan_counts_before_materializing_too_broad_result(
 ):
     monkeypatch.setattr(retrieval_module, "EXACT_METRIC_SCAN_MAX_CANDIDATES", 1)
 
+    def unexpected_materialization(*_args, **_kwargs):
+        raise AssertionError("too-broad exact scans must not materialize chunks")
+
+    monkeypatch.setattr(haystack_store, "get_chunks", unexpected_materialization)
+
     scan = haystack_store.find_exact_metric_chunks("revenue")
 
     assert isinstance(scan, ExactMetricScanTooBroad)

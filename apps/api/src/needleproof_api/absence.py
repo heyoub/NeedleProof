@@ -44,7 +44,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v24-typed-occurrence-classification"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v25-authorized-scan-revalidation"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 ABSENCE_CONTEXT_MAX_OPENED_CHUNKS = 50
@@ -131,7 +131,9 @@ ABSENCE_PROTOCOL_SPEC = {
     "potential_following_assertion_pattern": _POTENTIAL_FOLLOWING_ASSERTION.pattern,
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
     "metric_context_policy": ("full_opened_source_chain_with_bounded_display_excerpt"),
-    "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
+    "authorization_revalidation": (
+        "rerun_exhaustive_scan_and_rebuild_all_metric_contexts_from_bound_corpus_snapshot"
+    ),
     "neighbor_radius": 1,
     "maximum_context_chunks": ABSENCE_CONTEXT_MAX_OPENED_CHUNKS,
     "cross_chunk_context": (
@@ -170,6 +172,8 @@ class AbsenceContextCorpus(Protocol):
         chunk_ids: list[ChunkId],
         neighbor_radius: int = 0,
     ) -> list[ChunkRecord]: ...
+
+    def find_exact_metric_chunks(self, metric: str) -> ExactMetricScanOutcome: ...
 
 
 def _normalized_query(value: str) -> str:
@@ -428,6 +432,22 @@ def derive_absence_conclusion_against_corpus(
     structural = derive_absence_conclusion(probe)
     if structural is not AbsenceConclusion.NOT_FOUND_IN_PROBE:
         return structural
+    # The sealed probe is untrusted input at authorization time. Re-run the
+    # exhaustive primitive against the bound corpus snapshot and require the
+    # independently returned complete-match set to agree exactly with the
+    # probe. A partial, failed, or over-budget revalidation can never prove
+    # absence.
+    revalidated_scan = corpus.find_exact_metric_chunks(probe.metric)
+    if not isinstance(revalidated_scan, ExactMetricScanComplete):
+        return AbsenceConclusion.INCOMPLETE_PROBE
+    revalidated_scan_ids = [chunk.chunk_id for chunk in revalidated_scan.chunks]
+    if (
+        len(revalidated_scan_ids) != len(set(revalidated_scan_ids))
+        or set(revalidated_scan_ids) != set(probe.exact_metric_scan_chunk_ids)
+        or revalidated_scan.candidate_count
+        < len(revalidated_scan.chunks) + revalidated_scan.ambiguous_candidate_count
+    ):
+        return AbsenceConclusion.INCOMPLETE_PROBE
     # ``opened_chunk_ids`` already includes the neighbors selected by the probe.
     # Expanding radius again would silently change the sealed proof set.
     chunks = corpus.get_chunks(probe.opened_chunk_ids, 0)

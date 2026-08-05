@@ -972,13 +972,13 @@ def test_compact_initialism_requires_source_disambiguation_in_all_caps(metric, a
 
 def test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism():
     sentence = "It was $2 million."
-    measurements = [
-        (signature, span)
-        for signature, span in _compatible_measurements(
+    measurements = list(
+        _compatible_measurements(
             sentence,
             set(numeric_signature_sequence("$2 million")),
         )
-    ]
+    )
+    assert measurements
 
     assert (
         _measurements_bound_to_metric(

@@ -24,6 +24,7 @@ from .binding import (
     word_phrase_spans,
 )
 from .chunk_ids import ChunkId
+from .exact_scan import ExactMetricScanOutcome
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
@@ -134,6 +135,8 @@ class VerificationCorpus(Protocol):
         chunk_ids: list[ChunkId],
         neighbor_radius: int = 0,
     ) -> list[ChunkRecord]: ...
+
+    def find_exact_metric_chunks(self, metric: str) -> ExactMetricScanOutcome: ...
 
 
 def _canonical_metric(value: str) -> str:
@@ -773,7 +776,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v41-source-resolved-evidence"
+    version = "deterministic-verifier-v42-authorized-scan-revalidation"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):

@@ -133,6 +133,46 @@ async def test_verifier_recomputes_absence_proof_instead_of_trusting_conclusion(
 
 
 @pytest.mark.asyncio
+async def test_authorization_revalidates_omitted_exact_scan_matches():
+    class OmittedFirstScanCorpus(AbsenceShapeCorpus):
+        def __init__(self):
+            super().__init__(
+                "Total headcount",
+                "Question: what was Total headcount?",
+                "Total headcount was 500 employees.",
+            )
+            self.chunks = [
+                chunk.model_copy(update={"previous_chunk_id": None, "next_chunk_id": None})
+                for chunk in self.chunks
+            ]
+            self.by_id = {chunk.chunk_id: chunk for chunk in self.chunks}
+            self.scan_calls = 0
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == self.metric
+            self.scan_calls += 1
+            if self.scan_calls == 1:
+                return exact_scan(self.chunks[0])
+            return exact_scan(*self.chunks)
+
+    corpus = OmittedFirstScanCorpus()
+    probe = await probe_metric_absence(corpus, "Total headcount")
+
+    assert probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.INCOMPLETE_PROBE
+    )
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="Total headcount", request_absence_probe=True),
+        absence_probe=probe,
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert corpus.scan_calls == 3
+
+
+@pytest.mark.asyncio
 async def test_recomputed_absence_detects_omitted_reviewable_candidates(corpus):
     reviewable = await probe_metric_absence(corpus, "Fee-related earnings")
     forged = reviewable.model_copy(
