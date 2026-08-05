@@ -20,6 +20,10 @@ Built for the Finance of the Future event at Tactix in Philadelphia on July 29, 
 
 The primary corpus is the supplied Hamilton Lane/Northbank Advisors finance challenge. Its answer-key page is deliberately excluded from indexing.
 
+## Current release
+
+`v0.1.0` freezes the first hardened authority contract. The exact verifier, binding, numeric, absence, and receipt-schema identities are recorded in [the release contract](docs/contracts/v0.1.0.json). A validated receipt from a real capped live investigation is archived as [the v0.1.0 reference specimen](docs/reference-receipts/v0.1.0-fee-related-earnings.json); its human-readable context and scope are in [the release notes](docs/releases/v0.1.0.md).
+
 ## One-command demo
 
 Prerequisites: Linux x86-64, Python 3.11–3.13, [uv](https://docs.astral.sh/uv/), Node 22.13+, pnpm 10.32.1, and an OpenAI-compatible project key with access to `gpt-5.6-terra` plus `text-embedding-3-small`.
@@ -155,7 +159,7 @@ packages/contracts/       browser and canonical receipt contracts
 data/event-pack/          authoritative supplied event materials
 data/corpora/             immutable seeded corpus versions
 data/rehearsal/           featured sealed live receipt
-docs/                     product spec, architecture, demo script
+docs/                     product spec, architecture, release contracts and receipts
 tests/                    deterministic and adapter suite
 ```
 

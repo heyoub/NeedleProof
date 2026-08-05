@@ -1,0 +1,711 @@
+{
+  "schema_version": "1.4",
+  "run_id": "run_300fd7dd63c34542812a37b6393b1e5f",
+  "status": "completed",
+  "question": "What were fee-related earnings for the fiscal year?",
+  "answer": "Fee-related earnings: $345 million.",
+  "corpus_id": "finance-of-the-future-2026",
+  "corpus_version": "v_0a380d3ab8d9570c",
+  "corpus_manifest_sha256": "0a380d3ab8d9570c6686328d5ff6b05b1cac18686d2aa6173e2923b564942d18",
+  "claims": [
+    {
+      "statement": "Fee-related earnings: $345 million",
+      "metric": "Fee-related earnings",
+      "status": "verified",
+      "observations": [
+        {
+          "kind": "reported_level",
+          "value_text": "$345 million",
+          "temporal_anchor": null,
+          "evidence": [
+            {
+              "chunk_id": "chk_239af774f09d8cac",
+              "metric_anchor": "Fee-related earnings",
+              "exact_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+              "exact_assertion": "Fee-related earnings were $345 million",
+              "relation": "supports"
+            }
+          ]
+        }
+      ],
+      "context_evidence": [],
+      "evidence": [
+        {
+          "chunk_id": "chk_239af774f09d8cac",
+          "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+          "document_name": "Northbank Advisors — Hamilton Lane annual review",
+          "physical_page_index": 6,
+          "printed_page_label": "6",
+          "metric_anchor": "Fee-related earnings",
+          "metric_anchor_found": true,
+          "assertion": "Fee-related earnings were $345 million",
+          "assertion_found": true,
+          "temporal_anchor": null,
+          "temporal_value_bound": true,
+          "observation_kind": "reported_level",
+          "value_text": "$345 million",
+          "quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+          "normalized_quote": "Fee-related earnings were $345 million, up 25 percent, with the FRE margin improving to 50 percent from 48 percent.",
+          "normalization_operations": [
+            "unicode_casefold_comparison"
+          ],
+          "relation": "supports",
+          "quote_found": true,
+          "value_text_found": true,
+          "metric_value_bound": true,
+          "value_role_authorized": true,
+          "binding_profile": "direct_copula",
+          "binding_failure_reason": null,
+          "chunk_sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca",
+          "source_url": "/api/corpora/v_0a380d3ab8d9570c/documents/doc_9c1fa8424ce9ec3772bf3625/pdf#page=6"
+        }
+      ],
+      "absence_probe": null,
+      "verification_notes": []
+    }
+  ],
+  "events": [
+    {
+      "sequence": 1,
+      "type": "run.started",
+      "occurred_at": "2026-08-05T04:01:06.073302+00:00",
+      "payload": {
+        "corpus_manifest_sha256": "0a380d3ab8d9570c6686328d5ff6b05b1cac18686d2aa6173e2923b564942d18",
+        "corpus_version": "v_0a380d3ab8d9570c",
+        "question": "What were fee-related earnings for the fiscal year?",
+        "rehearsal": false
+      },
+      "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "event_hash": "11344482effd965f85b77fe3355c35f13966030c3f14280d9106eab9ed5676b0"
+    },
+    {
+      "sequence": 2,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-05T04:01:06.109388+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "11344482effd965f85b77fe3355c35f13966030c3f14280d9106eab9ed5676b0",
+      "event_hash": "26a2979cb23409aa3443de7dccde834e2f9230495723aec770029b0cfc271acf"
+    },
+    {
+      "sequence": 3,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-05T04:01:08.167062+00:00",
+      "payload": {
+        "response_id": "gen-1785902466-PS3UYyuXXZW3VuKwGVVG",
+        "token_usage": {
+          "cache_write_tokens": 14,
+          "cached_tokens": 1808,
+          "input_tokens": 1825,
+          "output_tokens": 68,
+          "reasoning_tokens": 10,
+          "requests": 1,
+          "total_tokens": 1893
+        }
+      },
+      "previous_hash": "26a2979cb23409aa3443de7dccde834e2f9230495723aec770029b0cfc271acf",
+      "event_hash": "ba6da81672a628c556e353240dabaac2d6b4ec06142a5a06d4da7a0afb0b2cfb"
+    },
+    {
+      "sequence": 4,
+      "type": "tool.search.started",
+      "occurred_at": "2026-08-05T04:01:08.175104+00:00",
+      "payload": {
+        "date_from": null,
+        "date_to": null,
+        "document_ids": null,
+        "metric": "fee-related earnings",
+        "mode": "hybrid",
+        "query": "\"fee-related earnings\" fiscal year",
+        "top_k": 10
+      },
+      "previous_hash": "ba6da81672a628c556e353240dabaac2d6b4ec06142a5a06d4da7a0afb0b2cfb",
+      "event_hash": "9306249046d68e61c58b62f58adaf8087a2cb1f301794c5bd266a8c369ccdc25"
+    },
+    {
+      "sequence": 5,
+      "type": "tool.search.completed",
+      "occurred_at": "2026-08-05T04:01:08.643128+00:00",
+      "payload": {
+        "arguments": {
+          "date_from": null,
+          "date_to": null,
+          "document_ids": null,
+          "metric": "fee-related earnings",
+          "mode": "hybrid",
+          "query": "\"fee-related earnings\" fiscal year",
+          "top_k": 10
+        },
+        "attempted_searches": 1,
+        "completed_searches": 1,
+        "duration_ms": 461.613,
+        "results": [
+          {
+            "chunk_id": "chk_239af774f09d8cac",
+            "dense_rank": 1,
+            "dense_score": 0.5478473,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 1,
+            "lexical_score": -0.8428015,
+            "physical_page_index": 6,
+            "preview": "NORTHBANK ADVISORS LLC INTERNAL MEMORANDUM. NOT FOR DISTRIBUTION. To: Investment Committee From: Research desk Date: 24 July 2026 Re: Annual review, Hamilton Lane Incorporated (HLNE), public comparable Ahead of Thursday I have pulled together where HLNE landed for their fiscal…",
+            "printed_page_label": "6",
+            "retrieval_mode": "hybrid",
+            "score": 0.0327869,
+            "sha256": "b92c99bf30b501eb2b2e655ec5ba35e150256c38a0ce2abf1d15fff24c6d0fca"
+          },
+          {
+            "chunk_id": "chk_61eadd23f3ed71bc",
+            "dense_rank": 3,
+            "dense_score": 0.448274,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 2,
+            "lexical_score": -0.6201256,
+            "physical_page_index": 4,
+            "preview": "03 / THE INSTRUCTION Copy this into the top boxComplete and ready to run. No brackets to fill, nothing to decide. Copy every line. You extract reported financial metrics for a public asset manager from an internal review memo. INPUT I will paste an internal memo. It is prose, …",
+            "printed_page_label": "4",
+            "retrieval_mode": "hybrid",
+            "score": 0.032002,
+            "sha256": "cb9de665973d4a7ba926c0dc2ea2f4efb0f709c3e0f29f05e725ff88bcc02852"
+          },
+          {
+            "chunk_id": "chk_5e898d2f71bb3a75",
+            "dense_rank": 2,
+            "dense_score": 0.5165817,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": 3,
+            "lexical_score": -3.4e-06,
+            "physical_page_index": 6,
+            "preview": "$5.92 against $5.41. Adjusted net income was $321 million. On capital returns, the quarterly dividend was $0.54 per share through fiscal 2026, keeping them on the targeted $2.16 for that year, which was a 10 percent increase. Alongside the annual results they declared $0.60 pe…",
+            "printed_page_label": "6",
+            "retrieval_mode": "hybrid",
+            "score": 0.032002,
+            "sha256": "ffb4cc06801880a5e8ffa62ca8cc72fe9c11dfb3dfe7daf03d2a459d92dda224"
+          },
+          {
+            "chunk_id": "chk_eb8e183090199793",
+            "dense_rank": 4,
+            "dense_score": 0.3154364,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": null,
+            "lexical_score": null,
+            "physical_page_index": 5,
+            "preview": "04 / THE DATA Copy this into the bottom boxAn internal memo from Northbank Advisors, written the way real internal memos are written. The numbers are scattered through prose, some are repeated, and one of them is wrong. oneprompt · Finance of the Future · July 29, 2026 5",
+            "printed_page_label": "5",
+            "retrieval_mode": "hybrid",
+            "score": 0.015625,
+            "sha256": "17a2412f5348fc96f7ea475e37a855dc17422414572af9ec4209e8c6f88295a1"
+          },
+          {
+            "chunk_id": "chk_db0629f76cbc19ec",
+            "dense_rank": 5,
+            "dense_score": 0.1811898,
+            "document_id": "doc_9c1fa8424ce9ec3772bf3625",
+            "document_name": "Northbank Advisors — Hamilton Lane annual review",
+            "lexical_rank": null,
+            "lexical_score": null,
+            "physical_page_index": 3,
+            "preview": "TOP BOX · PASTE ONCE, LEAVE IT THERE The instruction Google AI Studio: the panel on the right labelled System instructions. Claude: make a Project, then Project instructions. ChatGPT: make a Project, or a Custom GPT, then Instructions. This is the thing you are building tonigh…",
+            "printed_page_label": "3",
+            "retrieval_mode": "hybrid",
+            "score": 0.0153846,
+            "sha256": "444d7f7bfa43923701e2c1a933f782d230700000a3bdc50636c880240927b689"
+          }
+        ],
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "9306249046d68e61c58b62f58adaf8087a2cb1f301794c5bd266a8c369ccdc25",
+      "event_hash": "625e4e5614c8289ba4fa4bbe894f58327bacce9b02cdb331a14e6c9a3b8aded0"
+    },
+    {
+      "sequence": 6,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-05T04:01:08.662027+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "625e4e5614c8289ba4fa4bbe894f58327bacce9b02cdb331a14e6c9a3b8aded0",
+      "event_hash": "f31b20746fc46222e9c5a2c9ce5fa0c372c2e60e05b6abf2b443912d3bf9c5e6"
+    },
+    {
+      "sequence": 7,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-05T04:01:10.100080+00:00",
+      "payload": {
+        "response_id": "gen-1785902468-hpbNzcOifYFW7GpJw9rr",
+        "token_usage": {
+          "cache_write_tokens": 1322,
+          "cached_tokens": 1822,
+          "input_tokens": 3147,
+          "output_tokens": 63,
+          "reasoning_tokens": 13,
+          "requests": 1,
+          "total_tokens": 3210
+        }
+      },
+      "previous_hash": "f31b20746fc46222e9c5a2c9ce5fa0c372c2e60e05b6abf2b443912d3bf9c5e6",
+      "event_hash": "5392f244154472ac461e9cdd446d8f6cf953f951415ba593f3d8a08de033f250"
+    },
+    {
+      "sequence": 8,
+      "type": "tool.read.started",
+      "occurred_at": "2026-08-05T04:01:10.108469+00:00",
+      "payload": {
+        "chunk_ids": [
+          "chk_239af774f09d8cac",
+          "chk_5e898d2f71bb3a75"
+        ],
+        "neighbor_radius": 1
+      },
+      "previous_hash": "5392f244154472ac461e9cdd446d8f6cf953f951415ba593f3d8a08de033f250",
+      "event_hash": "d5fecc319fa51608d31f3910448ae344a0a0b8ecb7a36f34277a05a3f684d51b"
+    },
+    {
+      "sequence": 9,
+      "type": "tool.read.completed",
+      "occurred_at": "2026-08-05T04:01:10.117395+00:00",
+      "payload": {
+        "chunk_ids": [
+          "chk_239af774f09d8cac",
+          "chk_eb8e183090199793",
+          "chk_5e898d2f71bb3a75"
+        ],
+        "duration_ms": 2.714,
+        "opened_tokens": 987,
+        "unique_opened_chunks": 3
+      },
+      "previous_hash": "d5fecc319fa51608d31f3910448ae344a0a0b8ecb7a36f34277a05a3f684d51b",
+      "event_hash": "f92bf5a5ca9f6cfc1c2f5cae868a3909afd07d26eba7452f6955f5c3d031731d"
+    },
+    {
+      "sequence": 10,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-05T04:01:10.143468+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "f92bf5a5ca9f6cfc1c2f5cae868a3909afd07d26eba7452f6955f5c3d031731d",
+      "event_hash": "4d7debcabe1e31111284e212379f7208a544f45774cbf11210963c02e5ff9b3b"
+    },
+    {
+      "sequence": 11,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-05T04:01:14.599893+00:00",
+      "payload": {
+        "response_id": "gen-1785902470-ZtjtPxiaZiViQQWsL9FA",
+        "token_usage": {
+          "cache_write_tokens": 2643,
+          "cached_tokens": 3144,
+          "input_tokens": 5790,
+          "output_tokens": 306,
+          "reasoning_tokens": 95,
+          "requests": 1,
+          "total_tokens": 6096
+        }
+      },
+      "previous_hash": "4d7debcabe1e31111284e212379f7208a544f45774cbf11210963c02e5ff9b3b",
+      "event_hash": "72bfa564f62b65618f5a2effcd2de7e670992e805f85b9cc7f9d2a045b478feb"
+    },
+    {
+      "sequence": 12,
+      "type": "verification.started",
+      "occurred_at": "2026-08-05T04:01:14.608877+00:00",
+      "payload": {
+        "attempted_searches": 1,
+        "claim_count": 1,
+        "completed_search_records": [
+          {
+            "completion_status": "completed",
+            "date_from": null,
+            "date_to": null,
+            "document_ids": [],
+            "exact_metric_hit_count": 2,
+            "metric": "fee-related earnings",
+            "mode": "hybrid",
+            "normalized_query": "earnings fee fiscal related year",
+            "query": "\"fee-related earnings\" fiscal year",
+            "result_chunk_ids": [
+              "chk_239af774f09d8cac",
+              "chk_61eadd23f3ed71bc",
+              "chk_5e898d2f71bb3a75",
+              "chk_eb8e183090199793",
+              "chk_db0629f76cbc19ec"
+            ],
+            "result_count": 5,
+            "signature": "55c44e8331180e22eea50e08804e795473d8a7357586495e9f26feb3dd22013a",
+            "top_k": 10
+          }
+        ],
+        "completed_searches": 1,
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "72bfa564f62b65618f5a2effcd2de7e670992e805f85b9cc7f9d2a045b478feb",
+      "event_hash": "bc9b567faff46cd0042bc4558ecdddb119b4f705deb6f8d36db0b1893a07d178"
+    },
+    {
+      "sequence": 13,
+      "type": "claim.rejected",
+      "occurred_at": "2026-08-05T04:01:14.624974+00:00",
+      "payload": {
+        "metric": "Fee-related earnings",
+        "statement": "Unverified claim about Fee-related earnings",
+        "status": "unverified"
+      },
+      "previous_hash": "bc9b567faff46cd0042bc4558ecdddb119b4f705deb6f8d36db0b1893a07d178",
+      "event_hash": "ee2d42acc3dea244a692925682fe427cf8b0d75991183032a6af1beb0a3d8f0a"
+    },
+    {
+      "sequence": 14,
+      "type": "verification.completed",
+      "occurred_at": "2026-08-05T04:01:14.630287+00:00",
+      "payload": {
+        "all_claims_authoritative": false,
+        "duration_ms": 14.644,
+        "pending_absence_metrics": []
+      },
+      "previous_hash": "ee2d42acc3dea244a692925682fe427cf8b0d75991183032a6af1beb0a3d8f0a",
+      "event_hash": "8a06af75e374767ce594cafca372e87882c93f0114ee051200d6fd3fdd540795"
+    },
+    {
+      "sequence": 15,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-05T04:01:14.651950+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "8a06af75e374767ce594cafca372e87882c93f0114ee051200d6fd3fdd540795",
+      "event_hash": "5b23cd9486a55a286ffd2bd043e5e5fea51da8712b5ecb9b733795a6768987c2"
+    },
+    {
+      "sequence": 16,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-05T04:01:17.625982+00:00",
+      "payload": {
+        "response_id": "gen-1785902474-Nhz3L0qwWGmkSwg3Kg4Y",
+        "token_usage": {
+          "cache_write_tokens": 1341,
+          "cached_tokens": 5787,
+          "input_tokens": 7131,
+          "output_tokens": 164,
+          "reasoning_tokens": 30,
+          "requests": 1,
+          "total_tokens": 7295
+        }
+      },
+      "previous_hash": "5b23cd9486a55a286ffd2bd043e5e5fea51da8712b5ecb9b733795a6768987c2",
+      "event_hash": "37529ce58f5aa694658dcead49ff530848556928769dcaaefb83463eb9673c82"
+    },
+    {
+      "sequence": 17,
+      "type": "verification.started",
+      "occurred_at": "2026-08-05T04:01:17.634336+00:00",
+      "payload": {
+        "attempted_searches": 1,
+        "claim_count": 1,
+        "completed_search_records": [
+          {
+            "completion_status": "completed",
+            "date_from": null,
+            "date_to": null,
+            "document_ids": [],
+            "exact_metric_hit_count": 2,
+            "metric": "fee-related earnings",
+            "mode": "hybrid",
+            "normalized_query": "earnings fee fiscal related year",
+            "query": "\"fee-related earnings\" fiscal year",
+            "result_chunk_ids": [
+              "chk_239af774f09d8cac",
+              "chk_61eadd23f3ed71bc",
+              "chk_5e898d2f71bb3a75",
+              "chk_eb8e183090199793",
+              "chk_db0629f76cbc19ec"
+            ],
+            "result_count": 5,
+            "signature": "55c44e8331180e22eea50e08804e795473d8a7357586495e9f26feb3dd22013a",
+            "top_k": 10
+          }
+        ],
+        "completed_searches": 1,
+        "unique_completed_searches": 1
+      },
+      "previous_hash": "37529ce58f5aa694658dcead49ff530848556928769dcaaefb83463eb9673c82",
+      "event_hash": "ec848a5841cef01041d9e4dd01a36a4c07dedc89717dbd3446f62b4fe7d47ec4"
+    },
+    {
+      "sequence": 18,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-05T04:01:17.647250+00:00",
+      "payload": {
+        "metric": "Fee-related earnings",
+        "statement": "Fee-related earnings: $345 million",
+        "status": "verified"
+      },
+      "previous_hash": "ec848a5841cef01041d9e4dd01a36a4c07dedc89717dbd3446f62b4fe7d47ec4",
+      "event_hash": "f048392e658c104f6b872bde78fd9bc619c9b93fe59cbc9777d3fc6584c384c7"
+    },
+    {
+      "sequence": 19,
+      "type": "verification.completed",
+      "occurred_at": "2026-08-05T04:01:17.653076+00:00",
+      "payload": {
+        "all_claims_authoritative": true,
+        "duration_ms": 12.631,
+        "pending_absence_metrics": []
+      },
+      "previous_hash": "f048392e658c104f6b872bde78fd9bc619c9b93fe59cbc9777d3fc6584c384c7",
+      "event_hash": "352465bc9395bcc2e1e0d109c13564e235c196c39b284b28f767e6021362652b"
+    },
+    {
+      "sequence": 20,
+      "type": "agent.model.started",
+      "occurred_at": "2026-08-05T04:01:17.670210+00:00",
+      "payload": {
+        "model": "gpt-5.6-terra"
+      },
+      "previous_hash": "352465bc9395bcc2e1e0d109c13564e235c196c39b284b28f767e6021362652b",
+      "event_hash": "06ef8a0cb57e63479db3a7b38909d8e5d30dd40d7873fbce910719465bd438d7"
+    },
+    {
+      "sequence": 21,
+      "type": "agent.model.completed",
+      "occurred_at": "2026-08-05T04:01:19.215308+00:00",
+      "payload": {
+        "response_id": "gen-1785902477-hHxGiOzrKIiR2yGnDEjP",
+        "token_usage": {
+          "cache_write_tokens": 717,
+          "cached_tokens": 7128,
+          "input_tokens": 7848,
+          "output_tokens": 131,
+          "reasoning_tokens": 0,
+          "requests": 1,
+          "total_tokens": 7979
+        }
+      },
+      "previous_hash": "06ef8a0cb57e63479db3a7b38909d8e5d30dd40d7873fbce910719465bd438d7",
+      "event_hash": "7e36b49222b67c3f772ba58d1125c7d1e01eead76f3dd111aff7783874e541b6"
+    },
+    {
+      "sequence": 22,
+      "type": "verification.authoritative_started",
+      "occurred_at": "2026-08-05T04:01:19.246009+00:00",
+      "payload": {},
+      "previous_hash": "7e36b49222b67c3f772ba58d1125c7d1e01eead76f3dd111aff7783874e541b6",
+      "event_hash": "1ea3e9ec4ca73c2ed29dda816100e43177c7f4d918dc72ccc1adb664d38635a7"
+    },
+    {
+      "sequence": 23,
+      "type": "claim.verified",
+      "occurred_at": "2026-08-05T04:01:19.269375+00:00",
+      "payload": {
+        "evidence_count": 1,
+        "statement": "Fee-related earnings: $345 million",
+        "verification_notes": []
+      },
+      "previous_hash": "1ea3e9ec4ca73c2ed29dda816100e43177c7f4d918dc72ccc1adb664d38635a7",
+      "event_hash": "4b0787ffb52347f85202f0a12a07f97114958b684590bfb9bae0405aa395ee4b"
+    },
+    {
+      "sequence": 24,
+      "type": "run.completed",
+      "occurred_at": "2026-08-05T04:01:19.287911+00:00",
+      "payload": {
+        "authoritative": true,
+        "status": "completed",
+        "verified_partial_answer_available": true
+      },
+      "previous_hash": "4b0787ffb52347f85202f0a12a07f97114958b684590bfb9bae0405aa395ee4b",
+      "event_hash": "9e934b73fedb0e3c740d25a2dbf5c70240bec8e1f33a3a2660ecfe8e443d3639"
+    }
+  ],
+  "openai_calls": [
+    {
+      "duration_ms": 2044.363,
+      "ended_at": "2026-08-05T04:01:08.153715+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785902466-PS3UYyuXXZW3VuKwGVVG",
+      "retry_count": 0,
+      "sequence": 1,
+      "started_at": "2026-08-05T04:01:06.109368+00:00",
+      "token_usage": {
+        "cache_write_tokens": 14,
+        "cached_tokens": 1808,
+        "input_tokens": 1825,
+        "output_tokens": 68,
+        "reasoning_tokens": 10,
+        "requests": 1,
+        "total_tokens": 1893
+      }
+    },
+    {
+      "duration_ms": 436.625,
+      "ended_at": "2026-08-05T04:01:08.618133+00:00",
+      "error": null,
+      "model": "text-embedding-3-small",
+      "operation": "embedding",
+      "request_id": null,
+      "response_id": "gen-emb-1785902468-WcefPv6TsgbEj0ZSREdy",
+      "retry_count": 0,
+      "sequence": 2,
+      "started_at": "2026-08-05T04:01:08.181510+00:00",
+      "token_usage": {
+        "cost": 1.4e-07,
+        "cost_details": {
+          "upstream_inference_completions_cost": 0,
+          "upstream_inference_cost": 1.4e-07,
+          "upstream_inference_prompt_cost": 1.4e-07
+        },
+        "is_byok": false,
+        "prompt_tokens": 7,
+        "total_tokens": 7
+      }
+    },
+    {
+      "duration_ms": 1425.067,
+      "ended_at": "2026-08-05T04:01:10.087067+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785902468-hpbNzcOifYFW7GpJw9rr",
+      "retry_count": 0,
+      "sequence": 3,
+      "started_at": "2026-08-05T04:01:08.662014+00:00",
+      "token_usage": {
+        "cache_write_tokens": 1322,
+        "cached_tokens": 1822,
+        "input_tokens": 3147,
+        "output_tokens": 63,
+        "reasoning_tokens": 13,
+        "requests": 1,
+        "total_tokens": 3210
+      }
+    },
+    {
+      "duration_ms": 4443.723,
+      "ended_at": "2026-08-05T04:01:14.587153+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785902470-ZtjtPxiaZiViQQWsL9FA",
+      "retry_count": 0,
+      "sequence": 4,
+      "started_at": "2026-08-05T04:01:10.143446+00:00",
+      "token_usage": {
+        "cache_write_tokens": 2643,
+        "cached_tokens": 3144,
+        "input_tokens": 5790,
+        "output_tokens": 306,
+        "reasoning_tokens": 95,
+        "requests": 1,
+        "total_tokens": 6096
+      }
+    },
+    {
+      "duration_ms": 2960.962,
+      "ended_at": "2026-08-05T04:01:17.612877+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785902474-Nhz3L0qwWGmkSwg3Kg4Y",
+      "retry_count": 0,
+      "sequence": 5,
+      "started_at": "2026-08-05T04:01:14.651930+00:00",
+      "token_usage": {
+        "cache_write_tokens": 1341,
+        "cached_tokens": 5787,
+        "input_tokens": 7131,
+        "output_tokens": 164,
+        "reasoning_tokens": 30,
+        "requests": 1,
+        "total_tokens": 7295
+      }
+    },
+    {
+      "duration_ms": 1531.788,
+      "ended_at": "2026-08-05T04:01:19.201968+00:00",
+      "error": null,
+      "model": "gpt-5.6-terra",
+      "operation": "model",
+      "request_id": null,
+      "response_id": "gen-1785902477-hHxGiOzrKIiR2yGnDEjP",
+      "retry_count": 0,
+      "sequence": 6,
+      "started_at": "2026-08-05T04:01:17.670196+00:00",
+      "token_usage": {
+        "cache_write_tokens": 717,
+        "cached_tokens": 7128,
+        "input_tokens": 7848,
+        "output_tokens": 131,
+        "reasoning_tokens": 0,
+        "requests": 1,
+        "total_tokens": 7979
+      }
+    }
+  ],
+  "configuration": {
+    "model": "gpt-5.6-terra",
+    "reasoning_effort": "medium",
+    "embedding_model": "text-embedding-3-small",
+    "embedding_dimensions": 768,
+    "embedding_l2_normalized": true,
+    "turbovec_version": "0.8.0",
+    "turbovec_bit_width": 4,
+    "retrieval_modes": [
+      "dense",
+      "sqlite_fts5",
+      "rrf_hybrid"
+    ],
+    "parallel_tool_calls": false,
+    "max_turns": 6,
+    "max_tool_calls": 12,
+    "max_searches": 4,
+    "max_top_k": 20,
+    "max_opened_chunks": 50,
+    "max_opened_tokens": 50000,
+    "max_document_inspections": 2,
+    "max_inspection_pages": 3,
+    "max_inspection_characters": 24000,
+    "soft_timeout_seconds": 45.0,
+    "hard_timeout_seconds": 60.0,
+    "max_model_output_tokens_per_call": 8000,
+    "model_token_reservation_per_run": 100000,
+    "trace_include_sensitive_data": false,
+    "openai_client_max_retries": 0,
+    "tool_execution_concurrency": 1
+  },
+  "provenance": {
+    "application_version": "0.1.0",
+    "git_commit_sha": "85a9e3189295fc094229af57f528886a09cb31c5",
+    "dependency_lock_digests": {
+      "uv.lock": "ba5c30c3d8b82f37dd51674b7069f5d1a0257d4deb7dc12742de48bc74eb8689",
+      "pnpm-lock.yaml": "5d09ae7de1f42d59544a0d3ec6a60a99ab94b179e5dc9eacdeac95e00fa9d497"
+    },
+    "agent_instruction_hash": "e9b22e821fcba5dbd50606c09dc2789ac2d03147512c8cafaeabc515038d866c",
+    "tool_schema_hash": "80134495d219d959e237407d97f6c29fb2210e274e0da33fede416c1174075de",
+    "verifier_version": "deterministic-verifier-v44-source-normalization-provenance",
+    "binding_contract_sha256": "eedba0023e2a023bb7b26bf81f356ebde153a1007dcf14db3aa4e9446b6583c1",
+    "numeric_contract_sha256": "2bdae9e1033857a4c55f5512442274170cc6a934c978e9e6628c2fec9c63c56e",
+    "absence_protocol_version": "bounded-absence-v26-categorical-scan-ambiguity",
+    "absence_protocol_sha256": "25e1dde36314fbaeb4ac9cdb7868c5e668d40feb3a3a80da429a6d1f80283da1",
+    "receipt_derivation": "live",
+    "source_receipt_sha256": null,
+    "source_verifier_version": null,
+    "image_revision": null,
+    "trace_id": "trace_a897872f617d469d86d1019f7ad1af33",
+    "sealed_at": "2026-08-05T04:01:19.309222+00:00",
+    "event_chain_head": "9e934b73fedb0e3c740d25a2dbf5c70240bec8e1f33a3a2660ecfe8e443d3639"
+  },
+  "error": null,
+  "rehearsal": null,
+  "receipt_sha256": "2687e6c21ba4a3a1238d975b53b9983950f96eb89bb6080e018810f3da144d9f"
+}
