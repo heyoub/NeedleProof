@@ -79,6 +79,13 @@ _POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD = re.compile(
     r"(?:the\s+)?(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,3})(?:'s|’s)\b)",
     re.IGNORECASE,
 )
+_POTENTIAL_FOLLOWING_ASSERTION = re.compile(
+    r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
+    r"(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,5})\s+"
+    r"(?:is|are|was|were|became|changed|declined|decreased|equaled|equalled|equals|"
+    r"fell|grew|increased|reached|remained|reported|rose|stood|stayed|totaled|totalled)\b",
+    re.IGNORECASE,
+)
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -117,6 +124,11 @@ ABSENCE_PROTOCOL_SPEC = {
         "every_exact_occurrence_must_be_typed_benign;"
         "reviewable_evidence_blocks_absence;unknown_structure_requires_review"
     ),
+    "benign_rubric_reference_pattern": _BENIGN_RUBRIC_REFERENCE.pattern,
+    "benign_source_label_pattern": _BENIGN_SOURCE_LABEL.pattern,
+    "benign_standalone_remainder_pattern": _BENIGN_STANDALONE_REMAINDER.pattern,
+    "potential_unknown_reference_pattern": _POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD.pattern,
+    "potential_following_assertion_pattern": _POTENTIAL_FOLLOWING_ASSERTION.pattern,
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
     "metric_context_policy": ("full_opened_source_chain_with_bounded_display_excerpt"),
     "authorization_revalidation": "rebuild_all_metric_contexts_from_bound_corpus_snapshot",
@@ -281,8 +293,16 @@ def _benign_metric_mention_profile(
     prefix = metric_sentence[:metric_start]
     suffix = metric_sentence[metric_end:]
     following = occurrence.sentence[metric_sentence_end:].strip()
-    if following and _POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD.match(following):
-        return None
+    if following:
+        following_boundaries = punctuation_boundaries(following)
+        following_end = following_boundaries[0][1] if following_boundaries else len(following)
+        following_sentence = following[:following_end]
+        if (
+            _POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD.match(following_sentence)
+            or _POTENTIAL_FOLLOWING_ASSERTION.match(following_sentence)
+            or numeric_value_candidates(following_sentence)
+        ):
+            return None
     if "?" in metric_sentence:
         return BenignMentionProfile.QUESTION
     if _BENIGN_SOURCE_LABEL.match(suffix):
