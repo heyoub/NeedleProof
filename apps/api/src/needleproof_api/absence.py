@@ -15,6 +15,7 @@ from .chunk_ids import ChunkId
 from .exact_scan import (
     EXACT_METRIC_SCAN_MAX_CANDIDATES,
     EXACT_METRIC_SCAN_MAX_CHARACTERS,
+    ExactMetricScanAmbiguous,
     ExactMetricScanComplete,
     ExactMetricScanFailed,
     ExactMetricScanOutcome,
@@ -44,7 +45,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v25-authorized-scan-revalidation"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v26-categorical-scan-ambiguity"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 ABSENCE_CONTEXT_MAX_OPENED_CHUNKS = 50
@@ -444,8 +445,7 @@ def derive_absence_conclusion_against_corpus(
     if (
         len(revalidated_scan_ids) != len(set(revalidated_scan_ids))
         or set(revalidated_scan_ids) != set(probe.exact_metric_scan_chunk_ids)
-        or revalidated_scan.candidate_count
-        < len(revalidated_scan.chunks) + revalidated_scan.ambiguous_candidate_count
+        or revalidated_scan.candidate_count < len(revalidated_scan.chunks)
     ):
         return AbsenceConclusion.INCOMPLETE_PROBE
     # ``opened_chunk_ids`` already includes the neighbors selected by the probe.
@@ -666,16 +666,15 @@ async def probe_metric_absence(
         except Exception as error:  # noqa: BLE001 - absence fails closed on scan failure
             exact_scan = ExactMetricScanFailed(type(error).__name__)
         if isinstance(exact_scan, ExactMetricScanComplete):
-            if exact_scan.ambiguous_candidate_count:
-                exact_metric_scan_error = "MetricTokenKindAmbiguous"
-            else:
-                exact_metric_scan_completed = True
-                exact_metric_scan_chunk_ids = [
-                    chunk.chunk_id
-                    for chunk in exact_scan.chunks
-                    if word_phrase_spans(metric, chunk.normalized_text)
-                ]
-                candidate_ids.extend(exact_metric_scan_chunk_ids)
+            exact_metric_scan_completed = True
+            exact_metric_scan_chunk_ids = [
+                chunk.chunk_id
+                for chunk in exact_scan.chunks
+                if word_phrase_spans(metric, chunk.normalized_text)
+            ]
+            candidate_ids.extend(exact_metric_scan_chunk_ids)
+        elif isinstance(exact_scan, ExactMetricScanAmbiguous):
+            exact_metric_scan_error = "MetricTokenKindAmbiguous"
         elif isinstance(exact_scan, ExactMetricScanTooBroad):
             exact_metric_scan_error = "ExactScanTooBroad"
         else:

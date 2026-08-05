@@ -871,6 +871,36 @@ def test_bare_compact_all_caps_ambiguity_cannot_become_authoritative():
     )
 
 
+def test_model_supplied_dots_cannot_disambiguate_undotted_all_caps_source():
+    source = "IT WAS $2 MILLION."
+
+    assert reported_value_linked_to_metric("$2 million", "I.T.", source) is None
+
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9044),
+        document_id="doc_source_initialism_ambiguity",
+        document_name="Source initialism ambiguity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="e" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, source, "I.T.")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].metric_value_bound
+    assert (
+        verified.evidence[0].binding_failure_reason
+        == "ambiguous_bare_compact_metric_in_all_caps_assertion"
+    )
+
+
 def test_model_casing_cannot_turn_source_pronoun_into_metric_initialism():
     source = "It was $2 million."
     draft = "IT was $2 million."

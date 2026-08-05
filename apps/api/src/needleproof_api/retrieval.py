@@ -26,6 +26,7 @@ from .corpus import (
 from .exact_scan import (
     EXACT_METRIC_SCAN_MAX_CANDIDATES,
     EXACT_METRIC_SCAN_MAX_CHARACTERS,
+    ExactMetricScanAmbiguous,
     ExactMetricScanComplete,
     ExactMetricScanFailed,
     ExactMetricScanOutcome,
@@ -318,12 +319,13 @@ class CorpusStore:
                 preserve_token_kind=False,
             ):
                 ambiguous_candidate_count += 1
-        return ExactMetricScanComplete(
-            tuple(chunks),
-            candidate_count,
-            character_count,
-            ambiguous_candidate_count,
-        )
+        if ambiguous_candidate_count:
+            return ExactMetricScanAmbiguous(
+                candidate_count,
+                character_count,
+                ambiguous_candidate_count,
+            )
+        return ExactMetricScanComplete(tuple(chunks), candidate_count, character_count)
 
     async def search(
         self,

@@ -15,7 +15,11 @@ from needleproof_api.binding import word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
 from needleproof_api.config import Settings
 from needleproof_api.corpus import CorpusBuilder, l2_normalize
-from needleproof_api.exact_scan import ExactMetricScanComplete, ExactMetricScanTooBroad
+from needleproof_api.exact_scan import (
+    ExactMetricScanAmbiguous,
+    ExactMetricScanComplete,
+    ExactMetricScanTooBroad,
+)
 from needleproof_api.models import AbsenceConclusion, ChunkRecord
 from needleproof_api.retrieval import CorpusStore
 from needleproof_api.util import normalize_evidence_text
@@ -191,8 +195,8 @@ def test_exact_scan_post_filter_does_not_confuse_initialism_with_ordinary_word(
 ):
     scan = haystack_store.find_exact_metric_chunks("IT")
 
-    assert isinstance(scan, ExactMetricScanComplete)
-    assert all(word_phrase_spans("IT", chunk.normalized_text) for chunk in scan.chunks)
+    assert isinstance(scan, ExactMetricScanAmbiguous)
+    assert scan.ambiguous_candidate_count > 0
 
 
 def test_exact_scan_matches_longer_all_caps_word_typography(tmp_path):
@@ -238,7 +242,6 @@ def test_exact_scan_matches_longer_all_caps_word_typography(tmp_path):
 
     assert isinstance(scan, ExactMetricScanComplete)
     assert scan.chunks == (chunk,)
-    assert scan.ambiguous_candidate_count == 0
 
 
 @pytest.mark.asyncio

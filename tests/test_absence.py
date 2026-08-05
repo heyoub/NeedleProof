@@ -15,7 +15,11 @@ from needleproof_api.absence import (
 )
 from needleproof_api.binding import has_unresolved_metric_predicate, word_phrase_spans
 from needleproof_api.chunk_ids import chunk_id_from_uint64
-from needleproof_api.exact_scan import ExactMetricScanComplete, ExactMetricScanTooBroad
+from needleproof_api.exact_scan import (
+    ExactMetricScanAmbiguous,
+    ExactMetricScanComplete,
+    ExactMetricScanTooBroad,
+)
 from needleproof_api.models import (
     AbsenceConclusion,
     ChunkRecord,
@@ -165,6 +169,41 @@ async def test_authorization_revalidates_omitted_exact_scan_matches():
     )
     verified = EvidenceVerifier(corpus).verify_claim(
         DraftClaim(metric="Total headcount", request_absence_probe=True),
+        absence_probe=probe,
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert corpus.scan_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_authorization_rejects_fresh_exact_scan_token_kind_ambiguity():
+    class AmbiguousRevalidationCorpus(AbsenceShapeCorpus):
+        def __init__(self):
+            super().__init__("Revenue", "Question: what was Revenue?")
+            self.scan_calls = 0
+
+        def find_exact_metric_chunks(self, metric):
+            assert metric == self.metric
+            self.scan_calls += 1
+            if self.scan_calls == 1:
+                return exact_scan(*self.chunks)
+            return ExactMetricScanAmbiguous(
+                candidate_count=1,
+                character_count=24,
+                ambiguous_candidate_count=1,
+            )
+
+    corpus = AmbiguousRevalidationCorpus()
+    probe = await probe_metric_absence(corpus, "Revenue")
+
+    assert probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.INCOMPLETE_PROBE
+    )
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric="Revenue", request_absence_probe=True),
         absence_probe=probe,
     )
 
@@ -1718,8 +1757,7 @@ async def test_kind_ambiguous_exact_scan_cannot_authorize_absence():
 
         def find_exact_metric_chunks(self, metric):
             del metric
-            return ExactMetricScanComplete(
-                chunks=(),
+            return ExactMetricScanAmbiguous(
                 candidate_count=1,
                 character_count=24,
                 ambiguous_candidate_count=1,

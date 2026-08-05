@@ -217,3 +217,25 @@ disposition = "fixed"
 owner = "absence"
 source = "PR4:review-memo:greptile-exact-scan-omission"
 tests = ["test_authorization_revalidates_omitted_exact_scan_matches"]
+
+[[invariant]]
+id = "INV-METRIC-008"
+family = "source-evidence-identity"
+severity = "P1"
+invariant = "Only punctuation present in the corpus-resolved metric span may disambiguate a bare compact initialism in an all-caps assertion."
+finding = "A model-supplied dotted metric anchor could lend punctuation to an undotted all-caps source token and bypass the ambiguity guard."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-thread:model-supplied-dots"
+tests = ["test_model_supplied_dots_cannot_disambiguate_undotted_all_caps_source"]
+
+[[invariant]]
+id = "INV-ABSENCE-011"
+family = "scan-completeness"
+severity = "P1"
+invariant = "An exact metric scan with token-kind ambiguity is a distinct non-complete outcome and can never authorize absence."
+finding = "Authorization-time revalidation treated an ambiguous scan as complete when its candidate arithmetic balanced."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-thread:authorization-scan-ambiguity"
+tests = ["test_authorization_rejects_fresh_exact_scan_token_kind_ambiguity"]

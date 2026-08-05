@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v17-all-caps-compact-disambiguation",
+    "version": "positive-bindings-v18-source-only-compact-disambiguation",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -587,7 +587,6 @@ def _bare_compact_metric_is_ambiguous_all_caps(
     if (
         len(metric_lexemes) != 1
         or not metric_lexemes[0].is_initialism
-        or "." in metric
         or "." in assertion[metric_span[0] : metric_span[1]]
     ):
         return False

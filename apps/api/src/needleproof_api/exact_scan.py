@@ -14,7 +14,13 @@ class ExactMetricScanComplete:
     chunks: tuple[ChunkRecord, ...]
     candidate_count: int
     character_count: int
-    ambiguous_candidate_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ExactMetricScanAmbiguous:
+    candidate_count: int
+    character_count: int
+    ambiguous_candidate_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,5 +35,8 @@ class ExactMetricScanFailed:
 
 
 ExactMetricScanOutcome: TypeAlias = (
-    ExactMetricScanComplete | ExactMetricScanTooBroad | ExactMetricScanFailed
+    ExactMetricScanComplete
+    | ExactMetricScanAmbiguous
+    | ExactMetricScanTooBroad
+    | ExactMetricScanFailed
 )
