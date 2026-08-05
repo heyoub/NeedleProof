@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "release_tag": "v0.1.0",
+  "application_version": "0.1.0",
+  "source_commit": "85a9e3189295fc094229af57f528886a09cb31c5",
+  "authority_contracts": {
+    "receipt_schema_version": "1.4",
+    "verifier_version": "deterministic-verifier-v44-source-normalization-provenance",
+    "binding_contract_sha256": "eedba0023e2a023bb7b26bf81f356ebde153a1007dcf14db3aa4e9446b6583c1",
+    "numeric_contract_sha256": "2bdae9e1033857a4c55f5512442274170cc6a934c978e9e6628c2fec9c63c56e",
+    "absence_protocol_version": "bounded-absence-v26-categorical-scan-ambiguity",
+    "absence_protocol_sha256": "25e1dde36314fbaeb4ac9cdb7868c5e668d40feb3a3a80da429a6d1f80283da1"
+  },
+  "reference_receipt": {
+    "path": "docs/reference-receipts/v0.1.0-fee-related-earnings.json",
+    "run_id": "run_300fd7dd63c34542812a37b6393b1e5f",
+    "receipt_sha256": "2687e6c21ba4a3a1238d975b53b9983950f96eb89bb6080e018810f3da144d9f",
+    "corpus_version": "v_0a380d3ab8d9570c",
+    "corpus_manifest_sha256": "0a380d3ab8d9570c6686328d5ff6b05b1cac18686d2aa6173e2923b564942d18"
+  }
+}

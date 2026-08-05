@@ -7,6 +7,9 @@ import pytest
 from fastapi import HTTPException
 from hypothesis import given
 from hypothesis import strategies as st
+from needleproof_api import __version__
+from needleproof_api.absence import ABSENCE_PROTOCOL_SHA256, ABSENCE_PROTOCOL_VERSION
+from needleproof_api.binding import BINDING_CONTRACT_SHA256, NUMERIC_CONTRACT_SHA256
 from needleproof_api.main import _validated_receipt
 from needleproof_api.receipt import (
     TRUSTED_MIGRATION_RECORDS,
@@ -20,6 +23,7 @@ from needleproof_api.receipt import (
     validate_receipt,
 )
 from needleproof_api.util import canonical_json, sha256_text
+from needleproof_api.verification import EvidenceVerifier
 from pydantic import TypeAdapter
 
 
@@ -41,6 +45,35 @@ def test_featured_rehearsal_receipt_is_sealed(settings):
     assert receipt["provenance"]["receipt_derivation"] == "contract_migration"
     assert receipt["provenance"]["source_receipt_sha256"]
     assert receipt["provenance"]["source_verifier_version"]
+
+
+def test_v010_release_contract_and_live_reference_receipt_are_frozen():
+    freeze = json.loads(Path("docs/contracts/v0.1.0.json").read_text(encoding="utf-8"))
+    authority = freeze["authority_contracts"]
+    reference = freeze["reference_receipt"]
+    receipt = json.loads(Path(reference["path"]).read_text(encoding="utf-8"))
+
+    assert freeze["release_tag"] == "v0.1.0"
+    assert freeze["application_version"] == __version__ == "0.1.0"
+    assert authority == {
+        "receipt_schema_version": "1.4",
+        "verifier_version": EvidenceVerifier.version,
+        "binding_contract_sha256": BINDING_CONTRACT_SHA256,
+        "numeric_contract_sha256": NUMERIC_CONTRACT_SHA256,
+        "absence_protocol_version": ABSENCE_PROTOCOL_VERSION,
+        "absence_protocol_sha256": ABSENCE_PROTOCOL_SHA256,
+    }
+    assert validate_receipt(receipt) == []
+    assert receipt["status"] == "completed"
+    assert receipt["receipt_sha256"] == reference["receipt_sha256"]
+    assert receipt["run_id"] == reference["run_id"]
+    assert receipt["corpus_version"] == reference["corpus_version"]
+    assert receipt["corpus_manifest_sha256"] == reference["corpus_manifest_sha256"]
+    assert receipt["provenance"]["git_commit_sha"] == freeze["source_commit"]
+    assert receipt["provenance"]["verifier_version"] == authority["verifier_version"]
+    assert receipt["provenance"]["binding_contract_sha256"] == authority["binding_contract_sha256"]
+    assert receipt["provenance"]["numeric_contract_sha256"] == authority["numeric_contract_sha256"]
+    assert receipt["provenance"]["absence_protocol_sha256"] == authority["absence_protocol_sha256"]
 
 
 def test_trusted_migration_registry_binds_hash_addressed_source_and_complete_target(settings):
