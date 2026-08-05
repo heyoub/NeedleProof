@@ -232,6 +232,55 @@ def normalize_evidence_text(text: str) -> tuple[str, list[str]]:
     return folded, operations
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceTextMatch:
+    """A normalized, case-insensitive match expressed in source-text coordinates."""
+
+    text: str
+    span: tuple[int, int]
+
+
+def resolve_evidence_text_matches(needle: str, haystack: str) -> tuple[EvidenceTextMatch, ...]:
+    """Resolve normalized/case-folded evidence back to exact source-cased slices.
+
+    Unicode case-folding can change string length (for example, ``ß`` becomes
+    ``ss``). Matches are therefore accepted only when both folded offsets align to
+    original character boundaries, and every returned span remains in the
+    normalized haystack's coordinate space.
+    """
+
+    normalized_needle, _ = normalize_evidence_text(needle)
+    normalized_haystack, _ = normalize_evidence_text(haystack)
+    folded_needle = normalized_needle.casefold()
+    if not folded_needle:
+        return ()
+
+    folded_parts: list[str] = []
+    folded_boundaries = [0]
+    for character in normalized_haystack:
+        folded_parts.append(character.casefold())
+        folded_boundaries.append(folded_boundaries[-1] + len(folded_parts[-1]))
+    folded_haystack = "".join(folded_parts)
+    source_offset_by_folded = {
+        folded_offset: source_offset
+        for source_offset, folded_offset in enumerate(folded_boundaries)
+    }
+
+    matches: list[EvidenceTextMatch] = []
+    for occurrence in re.finditer(re.escape(folded_needle), folded_haystack):
+        source_start = source_offset_by_folded.get(occurrence.start())
+        source_end = source_offset_by_folded.get(occurrence.end())
+        if source_start is None or source_end is None:
+            continue
+        matches.append(
+            EvidenceTextMatch(
+                text=normalized_haystack[source_start:source_end],
+                span=(source_start, source_end),
+            )
+        )
+    return tuple(matches)
+
+
 def canonical_metric_key(value: str) -> str:
     """Serialize the shared typed identity for receipts, signatures, and map keys."""
 
@@ -269,11 +318,7 @@ def metric_fts_phrase_variants(
 def evidence_text_contains(needle: str, haystack: str) -> bool:
     """Apply the canonical evidence normalization and case-folding containment rule."""
 
-    normalized_needle, _ = normalize_evidence_text(needle)
-    if not normalized_needle:
-        return False
-    normalized_haystack, _ = normalize_evidence_text(haystack)
-    return normalized_needle.casefold() in normalized_haystack.casefold()
+    return bool(resolve_evidence_text_matches(needle, haystack))
 
 
 def estimate_tokens(text: str) -> int:

@@ -28,8 +28,10 @@ def _registry_errors(invariants: list[dict[str, object]], test_names: set[str]) 
             errors.append(f"invalid disposition for {identifier}: {disposition}")
         if re.fullmatch(r"PR\d+:(?:review-thread|review-memo):[A-Za-z0-9_.:-]+", source) is None:
             errors.append(f"invalid or missing review source for {identifier}: {source}")
-        if not item.get("owner") or not isinstance(tests, list) or not tests:
-            errors.append(f"owner and tests are required for {identifier}")
+        if not all(item.get(field) for field in ("family", "invariant", "finding", "owner")):
+            errors.append(f"descriptive invariant fields are required for {identifier}")
+        if not isinstance(tests, list) or not tests:
+            errors.append(f"tests are required for {identifier}")
         elif not set(map(str, tests)) <= test_names:
             errors.append(f"unknown test reference for {identifier}")
         if severity in {"P0", "P1"} and disposition not in {
@@ -79,8 +81,12 @@ def test_review_invariant_registry_rejects_schema_typos_that_bypass_policy():
         {**base, "severity": "p1"},
         {**base, "id": "INV-process-001"},
         {**base, "id": "INV-PROCESS-1"},
+        {key: value for key, value in base.items() if key != "family"},
+        {key: value for key, value in base.items() if key != "invariant"},
+        {key: value for key, value in base.items() if key != "finding"},
     )
 
+    assert _registry_errors([base], _test_names()) == []
     assert all(_registry_errors([mutation], _test_names()) for mutation in mutations)
 
 

@@ -149,6 +149,7 @@ tests = [
   "test_unknown_structural_reference_chain_never_becomes_not_found",
   "test_replacing_known_coreference_with_unknown_never_strengthens_absence",
   "test_only_named_benign_metric_profiles_can_authorize_absence",
+  "test_unknown_reference_shape_can_never_classify_as_benign",
 ]
 
 [[invariant]]
@@ -189,4 +190,19 @@ source = "PR4:review-memo:accepted-limitation-policy"
 tests = [
   "test_merge_blockers_cannot_be_blessed_as_accepted_limitations",
   "test_accepted_limitations_require_false_negative_only_proof",
+]
+
+[[invariant]]
+id = "INV-METRIC-007"
+family = "source-evidence-identity"
+severity = "P1"
+invariant = "Metric identity, evidence binding, and boundary spans are derived from corpus-resolved source text rather than model-supplied casing or case-folded coordinates."
+finding = "A draft could capitalize the source pronoun It as IT and manufacture an initialism binding; Unicode case-fold expansion could also shift later boundary offsets."
+disposition = "fixed"
+owner = "verification"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Wgox7"
+tests = [
+  "test_model_casing_cannot_turn_source_pronoun_into_metric_initialism",
+  "test_source_casing_controls_metric_identity_when_draft_changes_case",
+  "test_unicode_casefold_length_change_cannot_shift_evidence_boundaries",
 ]

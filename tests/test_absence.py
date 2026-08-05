@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from itertools import product
 
 import pytest
 from hypothesis import given
@@ -293,28 +294,27 @@ def test_metric_phrase_matching_does_not_match_inside_trauma():
     assert word_phrase_spans("AUM", "trauma") == []
 
 
-@given(
-    metric_sentence=st.sampled_from(
-        [
-            "Revenue.",
-            "Question: what was Revenue?",
-            "The rubric mentions Revenue.",
-            'Revenue - "source quote" is required.',
-        ]
+@pytest.mark.parametrize(
+    ("metric_sentence", "reference", "predicate", "punctuation"),
+    list(
+        product(
+            [
+                "Revenue.",
+                "Question: what was Revenue?",
+                "The rubric mentions Revenue.",
+                'Revenue - "source quote" is required.',
+            ],
+            [
+                "This value",
+                "That figure",
+                "Its value",
+                "Their recorded amount",
+                "The metric's value",
+            ],
+            ["was $2 million", "stood at $2 million", "remained stable", "became AA"],
+            [".", "!", "?", ""],
+        )
     ),
-    reference=st.sampled_from(
-        [
-            "This value",
-            "That figure",
-            "Its value",
-            "Their recorded amount",
-            "The metric's value",
-        ]
-    ),
-    predicate=st.sampled_from(
-        ["was $2 million", "stood at $2 million", "remained stable", "became AA"]
-    ),
-    punctuation=st.sampled_from([".", "!", "?", ""]),
 )
 def test_unknown_reference_shape_can_never_classify_as_benign(
     metric_sentence,
@@ -753,11 +753,11 @@ async def test_absence_probe_handles_metric_values_split_across_chunk_edges(
             )
 
         def get_chunks(self, chunk_ids, neighbor_radius=0):
-            if metric_id not in chunk_ids:
-                return []
-            if neighbor_radius and include_neighbor:
-                return [metric_chunk, value_chunk]
-            return [metric_chunk]
+            del neighbor_radius
+            available = {metric_id: metric_chunk}
+            if include_neighbor:
+                available[value_id] = value_chunk
+            return [available[chunk_id] for chunk_id in chunk_ids if chunk_id in available]
 
         def find_exact_metric_chunks(self, metric):
             del metric

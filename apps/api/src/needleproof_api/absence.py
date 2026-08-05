@@ -280,14 +280,13 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
 
 def _benign_metric_mention_profile(
     occurrence: MetricOccurrence,
+    structural_context: tuple[int, tuple[tuple[int, int], ...]] | None = None,
 ) -> BenignMentionProfile | None:
     """Recognize the closed set of non-evidentiary metric mention shapes."""
 
     metric_start, metric_end = occurrence.span
-    boundaries = punctuation_boundaries(occurrence.sentence)
-    metric_sentence_end = next(
-        (end for start, end in boundaries if start >= metric_end),
-        len(occurrence.sentence),
+    metric_sentence_end, _anaphoric_spans = structural_context or _structural_anaphoric_context(
+        occurrence
     )
     metric_sentence = occurrence.sentence[:metric_sentence_end]
     prefix = metric_sentence[:metric_start]
@@ -323,10 +322,11 @@ def _analyze_metric_occurrence(
 ) -> MetricOccurrenceAnalysis:
     """Classify one exact occurrence; unknown syntax never counts as benign."""
 
+    structural_context = _structural_anaphoric_context(proof_occurrence)
     reasons: list[MetricEvidenceReason] = []
-    if _metric_context_numeric_candidates(proof_occurrence):
+    if _metric_context_numeric_candidates(proof_occurrence, structural_context):
         reasons.append(MetricEvidenceReason.NUMERIC_CANDIDATE)
-    if _has_structural_anaphoric_qualitative_predicate(proof_occurrence):
+    if _has_structural_anaphoric_qualitative_predicate(proof_occurrence, structural_context):
         reasons.append(MetricEvidenceReason.QUALITATIVE_PREDICATE)
     if has_unresolved_metric_predicate(metric, proof_occurrence.sentence):
         reasons.append(MetricEvidenceReason.UNRESOLVED_PREDICATE)
@@ -335,11 +335,11 @@ def _analyze_metric_occurrence(
             occurrence=display_occurrence,
             reasons=list(dict.fromkeys(reasons)),
         )
-    profile = _benign_metric_mention_profile(proof_occurrence)
+    profile = _benign_metric_mention_profile(proof_occurrence, structural_context)
     if profile is not None:
         return BenignMetricMention(occurrence=display_occurrence, profile=profile)
 
-    metric_sentence_end, _structural_chain = _structural_anaphoric_context(proof_occurrence)
+    metric_sentence_end, _structural_chain = structural_context
     reason = (
         UnknownOccurrenceReason.UNKNOWN_STRUCTURAL_CONTINUATION
         if proof_occurrence.sentence[metric_sentence_end:].strip()
@@ -375,10 +375,13 @@ def _structural_anaphoric_context(
 
 def _has_structural_anaphoric_qualitative_predicate(
     occurrence: MetricOccurrence,
+    structural_context: tuple[int, tuple[tuple[int, int], ...]] | None = None,
 ) -> bool:
     """Detect a qualitative value in the same structural chain used for numbers."""
 
-    _metric_sentence_end, anaphoric_sentence_spans = _structural_anaphoric_context(occurrence)
+    _metric_sentence_end, anaphoric_sentence_spans = (
+        structural_context or _structural_anaphoric_context(occurrence)
+    )
     for start, end in anaphoric_sentence_spans:
         sentence = occurrence.sentence[start:end]
         relationship = _POTENTIAL_ANAPHORIC_PREDICATE_LEAD.match(sentence)
@@ -389,11 +392,14 @@ def _has_structural_anaphoric_qualitative_predicate(
 
 def _metric_context_numeric_candidates(
     occurrence: MetricOccurrence,
+    structural_context: tuple[int, tuple[tuple[int, int], ...]] | None = None,
 ) -> list[tuple[str, tuple[int, int]]]:
     """Return same-assertion, structural-anaphoric, and closed value-first values."""
 
     metric_start, metric_end = occurrence.span
-    metric_sentence_end, anaphoric_sentence_spans = _structural_anaphoric_context(occurrence)
+    metric_sentence_end, anaphoric_sentence_spans = (
+        structural_context or _structural_anaphoric_context(occurrence)
+    )
 
     candidates = []
     for value_text, value_span in numeric_value_candidates(occurrence.sentence):
@@ -674,8 +680,8 @@ async def probe_metric_absence(
             break
         expanded = await asyncio.to_thread(
             corpus.get_chunks,
-            list(chunks_by_id),
-            1,
+            list(linked_ids),
+            0,
         )
         added = False
         for expanded_chunk in expanded:

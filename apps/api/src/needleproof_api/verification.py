@@ -40,8 +40,8 @@ from .models import (
 )
 from .util import (
     canonical_metric_key,
-    evidence_text_contains,
     normalize_evidence_text,
+    resolve_evidence_text_matches,
     sentence_fragments,
 )
 
@@ -173,17 +173,17 @@ def _fragment_respects_context_boundaries(
 ) -> bool:
     """Reject a clean fragment cropped out of role-changing enclosing context."""
 
-    normalized_fragment = normalize_evidence_text(fragment)[0].casefold()
-    normalized_context = normalize_evidence_text(context)[0].casefold()
+    normalized_fragment = normalize_evidence_text(fragment)[0]
+    normalized_context = normalize_evidence_text(context)[0]
     return any(
         _occurrence_respects_context_boundaries(
             normalized_fragment,
             normalized_context,
             metric_span,
-            occurrence,
+            occurrence.span,
             requires_atomic_prefix=requires_atomic_prefix,
         )
-        for occurrence in re.finditer(re.escape(normalized_fragment), normalized_context)
+        for occurrence in resolve_evidence_text_matches(normalized_fragment, normalized_context)
     )
 
 
@@ -191,17 +191,22 @@ def _occurrence_respects_context_boundaries(
     normalized_fragment: str,
     normalized_context: str,
     metric_span: Span,
-    occurrence: re.Match[str],
+    occurrence_span: Span,
     *,
     requires_atomic_prefix: bool = False,
 ) -> bool:
     """Check one exact fragment occurrence so nested evidence spans cannot be mixed."""
 
     direct_metric_subject = bool(
-        re.fullmatch(r"\s*(?:the\s+)?", normalized_fragment[: metric_span[0]])
+        re.fullmatch(
+            r"\s*(?:the\s+)?",
+            normalized_fragment[: metric_span[0]],
+            re.IGNORECASE,
+        )
     )
-    prefix = normalized_context[: occurrence.start()].rstrip()
-    suffix = normalized_context[occurrence.end() :]
+    occurrence_start, occurrence_end = occurrence_span
+    prefix = normalized_context[:occurrence_start].rstrip()
+    suffix = normalized_context[occurrence_end:]
     if prefix and _DIRECT_ASSERTION_QUOTE_BOUNDARY.search(prefix) is None:
         if direct_metric_subject:
             return False
@@ -260,34 +265,37 @@ def _quote_respects_chunk_boundaries(
 ) -> bool:
     """Require the enclosing quote to preserve the chunk context around the same metric."""
 
-    normalized_assertion = normalize_evidence_text(assertion)[0].casefold()
-    normalized_quote = normalize_evidence_text(quote)[0].casefold()
-    normalized_chunk = normalize_evidence_text(chunk_text)[0].casefold()
-    for assertion_occurrence in re.finditer(
-        re.escape(normalized_assertion),
+    normalized_assertion = normalize_evidence_text(assertion)[0]
+    normalized_quote = normalize_evidence_text(quote)[0]
+    normalized_chunk = normalize_evidence_text(chunk_text)[0]
+    for assertion_occurrence in resolve_evidence_text_matches(
+        normalized_assertion,
         normalized_quote,
     ):
         if not _occurrence_respects_context_boundaries(
             normalized_assertion,
             normalized_quote,
             binding_boundary_span,
-            assertion_occurrence,
+            assertion_occurrence.span,
             requires_atomic_prefix=requires_atomic_prefix,
         ):
             continue
         quote_boundary_span = (
-            assertion_occurrence.start() + binding_boundary_span[0],
-            assertion_occurrence.start() + binding_boundary_span[1],
+            assertion_occurrence.span[0] + binding_boundary_span[0],
+            assertion_occurrence.span[0] + binding_boundary_span[1],
         )
         if any(
             _occurrence_respects_context_boundaries(
                 normalized_quote,
                 normalized_chunk,
                 quote_boundary_span,
-                quote_occurrence,
+                quote_occurrence.span,
                 requires_atomic_prefix=requires_atomic_prefix,
             )
-            for quote_occurrence in re.finditer(re.escape(normalized_quote), normalized_chunk)
+            for quote_occurrence in resolve_evidence_text_matches(
+                normalized_quote,
+                normalized_chunk,
+            )
         ):
             return True
     return False
@@ -765,7 +773,7 @@ def _authoritative_statement(
 
 
 class EvidenceVerifier:
-    version = "deterministic-verifier-v40-typed-absence-occurrences"
+    version = "deterministic-verifier-v41-source-resolved-evidence"
     binding_contract_sha256 = BINDING_CONTRACT_SHA256
 
     def __init__(self, corpus: VerificationCorpus):
@@ -834,73 +842,115 @@ class EvidenceVerifier:
             if chunk is None:
                 missing_chunk_ids.add(str(reference.chunk_id))
                 return None
-            normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
+            draft_normalized_quote, operations = normalize_evidence_text(reference.exact_quote)
             operations = [*operations, "unicode_casefold_comparison"]
-            quote_found = evidence_text_contains(
+            quote_matches = resolve_evidence_text_matches(
                 reference.exact_quote,
                 chunk.normalized_text,
             )
-            assertion_found = evidence_text_contains(
-                reference.exact_assertion,
-                reference.exact_quote,
-            )
-            metric_anchor_found = bool(
-                word_phrase_spans(reference.metric_anchor, reference.exact_assertion)
-            )
+            quote_found = bool(quote_matches)
+            source_quote = quote_matches[0].text if quote_matches else draft_normalized_quote
+            source_assertion = normalize_evidence_text(reference.exact_assertion)[0]
+            assertion_found = False
+            metric_anchor_found = False
             binding = None
             value_text_found = False
             failure_reason: str | None = None
-            if observation is not None:
-                result = bind_observation(
-                    metric_anchor=reference.metric_anchor,
-                    value_text=observation.value_text,
-                    kind=observation.kind,
-                    temporal_anchor=observation.temporal_anchor,
-                    assertion=reference.exact_assertion,
-                )
-                binding = result.match
-                value_text_found = result.value_text_found
-                failure_reason = result.failure_reason
-                if binding and not _binding_respects_quote_boundaries(
+            found_source_assertion = False
+            context_boundary_authorized = False
+            for quote_match in quote_matches:
+                for assertion_match in resolve_evidence_text_matches(
                     reference.exact_assertion,
-                    reference.exact_quote,
-                    binding,
+                    quote_match.text,
                 ):
-                    binding = None
-                    assertion_found = False
-                    failure_reason = "assertion_not_bound_to_quote_context"
-                elif binding and not _quote_respects_chunk_boundaries(
-                    reference.exact_assertion,
-                    reference.exact_quote,
-                    chunk.normalized_text,
-                    binding.metric_span,
-                    requires_atomic_prefix=True,
-                ):
-                    binding = None
-                    assertion_found = False
-                    failure_reason = "quote_not_bound_to_chunk_context"
-            elif observation is None and metric_anchor_found:
-                normalized_assertion = normalize_evidence_text(reference.exact_assertion)[0]
-                metric_spans = word_phrase_spans(reference.metric_anchor, normalized_assertion)
-                boundary_valid = any(
-                    _fragment_respects_context_boundaries(
-                        reference.exact_assertion,
-                        reference.exact_quote,
-                        metric_span,
-                        requires_atomic_prefix=True,
+                    candidate_assertion = assertion_match.text
+                    candidate_metric_spans = word_phrase_spans(
+                        reference.metric_anchor,
+                        candidate_assertion,
                     )
-                    and _quote_respects_chunk_boundaries(
-                        reference.exact_assertion,
-                        reference.exact_quote,
-                        chunk.normalized_text,
-                        metric_span,
-                        requires_atomic_prefix=True,
-                    )
-                    for metric_span in metric_spans
-                )
-                if not boundary_valid:
-                    assertion_found = False
-                    failure_reason = "evidence_context_boundaries_not_preserved"
+                    if not found_source_assertion:
+                        source_quote = quote_match.text
+                        source_assertion = candidate_assertion
+                    found_source_assertion = True
+                    assertion_found = True
+                    metric_anchor_found = metric_anchor_found or bool(candidate_metric_spans)
+
+                    if observation is not None:
+                        result = bind_observation(
+                            metric_anchor=reference.metric_anchor,
+                            value_text=observation.value_text,
+                            kind=observation.kind,
+                            temporal_anchor=observation.temporal_anchor,
+                            assertion=candidate_assertion,
+                        )
+                        value_text_found = value_text_found or result.value_text_found
+                        if failure_reason is None:
+                            failure_reason = result.failure_reason
+                        candidate_binding = result.match
+                        if candidate_binding and not _binding_respects_quote_boundaries(
+                            candidate_assertion,
+                            quote_match.text,
+                            candidate_binding,
+                        ):
+                            failure_reason = "assertion_not_bound_to_quote_context"
+                            continue
+                        if candidate_binding and not _quote_respects_chunk_boundaries(
+                            candidate_assertion,
+                            quote_match.text,
+                            chunk.normalized_text,
+                            candidate_binding.metric_span,
+                            requires_atomic_prefix=True,
+                        ):
+                            failure_reason = "quote_not_bound_to_chunk_context"
+                            continue
+                        if candidate_binding:
+                            source_quote = quote_match.text
+                            source_assertion = candidate_assertion
+                            binding = candidate_binding
+                            failure_reason = None
+                            break
+                    elif candidate_metric_spans:
+                        boundary_valid = any(
+                            _fragment_respects_context_boundaries(
+                                candidate_assertion,
+                                quote_match.text,
+                                metric_span,
+                                requires_atomic_prefix=True,
+                            )
+                            and _quote_respects_chunk_boundaries(
+                                candidate_assertion,
+                                quote_match.text,
+                                chunk.normalized_text,
+                                metric_span,
+                                requires_atomic_prefix=True,
+                            )
+                            for metric_span in candidate_metric_spans
+                        )
+                        if boundary_valid:
+                            source_quote = quote_match.text
+                            source_assertion = candidate_assertion
+                            failure_reason = None
+                            context_boundary_authorized = True
+                            break
+                        failure_reason = "evidence_context_boundaries_not_preserved"
+                if binding is not None or context_boundary_authorized:
+                    break
+
+            if not quote_found:
+                failure_reason = "quote_not_in_source_chunk"
+            elif not found_source_assertion:
+                failure_reason = "assertion_not_in_source_quote"
+            elif (
+                observation is not None
+                and failure_reason
+                in {
+                    "assertion_not_bound_to_quote_context",
+                    "quote_not_bound_to_chunk_context",
+                }
+            ) or (observation is None and failure_reason is not None):
+                assertion_found = False
+
+            normalized_quote = normalize_evidence_text(source_quote)[0]
             metric_matches_claim = _canonical_metric(reference.metric_anchor) == _canonical_metric(
                 claim.metric
             )
@@ -912,7 +962,7 @@ class EvidenceVerifier:
                 printed_page_label=chunk.printed_page_label,
                 metric_anchor=reference.metric_anchor,
                 metric_anchor_found=metric_anchor_found,
-                assertion=reference.exact_assertion,
+                assertion=source_assertion,
                 assertion_found=assertion_found,
                 temporal_anchor=observation.temporal_anchor if observation else None,
                 temporal_value_bound=bool(
@@ -923,7 +973,7 @@ class EvidenceVerifier:
                 ),
                 observation_kind=observation.kind if observation else None,
                 value_text=observation.value_text if observation else None,
-                quote=reference.exact_quote,
+                quote=source_quote,
                 normalized_quote=normalized_quote,
                 normalization_operations=operations,
                 relation=reference.relation,

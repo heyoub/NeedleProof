@@ -26,8 +26,10 @@ from needleproof_api.models import (
 from needleproof_api.service import compose_authoritative_answer
 from needleproof_api.util import (
     canonical_metric_key,
+    evidence_text_contains,
     metric_identity,
     normalize_evidence_text,
+    resolve_evidence_text_matches,
     sentence_fragments,
 )
 from needleproof_api.verification import (
@@ -101,6 +103,12 @@ def test_normalization_records_pdf_linebreak_and_whitespace_operations():
     normalized, operations = normalize_evidence_text("fee-earn-\ning   assets\tunder management")
     assert normalized == "fee-earning assets under management"
     assert operations == ["pdf_linebreak_dehyphenation", "whitespace_folding"]
+
+
+def test_casefolded_evidence_matches_only_complete_source_character_boundaries():
+    assert evidence_text_contains("STRASSE", "Straße")
+    assert resolve_evidence_text_matches("STRASSE", "Straße")[0].span == (0, 6)
+    assert not evidence_text_contains("s", "ß")
 
 
 def test_numeric_value_preserves_full_signature_and_sign():
@@ -861,6 +869,93 @@ def test_bare_compact_all_caps_ambiguity_cannot_become_authoritative():
         verified.evidence[0].binding_failure_reason
         == "ambiguous_bare_compact_metric_in_all_caps_assertion"
     )
+
+
+def test_model_casing_cannot_turn_source_pronoun_into_metric_initialism():
+    source = "It was $2 million."
+    draft = "IT was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9041),
+        document_id="doc_source_casing",
+        document_name="Source casing fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="b" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, draft, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert verified.evidence[0].quote_found
+    assert verified.evidence[0].assertion_found
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == source
+    assert not verified.evidence[0].metric_anchor_found
+    assert not verified.evidence[0].metric_value_bound
+
+
+def test_source_casing_controls_metric_identity_when_draft_changes_case():
+    source = "IT was $2 million."
+    draft = "It was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9042),
+        document_id="doc_source_initialism",
+        document_name="Source initialism fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="c" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, draft, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == source
+    assert verified.evidence[0].metric_value_bound
+
+
+def test_unicode_casefold_length_change_cannot_shift_evidence_boundaries():
+    source = "Straße context. Revenue was $2 million."
+    draft_quote = "STRASSE context. Revenue was $2 million."
+    assertion = "Revenue was $2 million."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9043),
+        document_id="doc_unicode_offsets",
+        document_name="Unicode offset fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=source,
+        normalized_text=source,
+        sha256="d" * 64,
+        token_estimate=7,
+    )
+    evidence = reference(
+        chunk.chunk_id,
+        draft_quote,
+        "Revenue",
+        assertion=assertion,
+    )
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("Revenue", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.VERIFIED
+    assert verified.evidence[0].quote == source
+    assert verified.evidence[0].assertion == assertion
+    assert verified.evidence[0].metric_value_bound
 
 
 @pytest.mark.parametrize(
