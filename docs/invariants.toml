@@ -1,5 +1,5 @@
 # Machine-readable adjudication registry for review-derived authority invariants.
-# P0/P1 findings must not remain open when a pull request is marked ready.
+# P0/P1 findings must be fixed, invalid, or superseded when a pull request is ready.
 
 [[invariant]]
 id = "INV-METRIC-004"
@@ -9,6 +9,7 @@ invariant = "Compact initialisms never equal ordinary words; compact and dotted 
 finding = "The metric IT matched the pronoun It after case folding."
 disposition = "fixed"
 owner = "binding"
+source = "PR4:review-memo:compact-initialism-identity"
 tests = [
   "test_compact_initialism_never_binds_to_ordinary_word",
   "test_compact_and_dotted_initialism_authorize_the_same_exact_metric",
@@ -24,6 +25,7 @@ invariant = "Longer all-caps ordinary-word typography remains case-insensitive; 
 finding = "REVENUE typography could be post-filtered from a Revenue absence scan while short initialisms still required kind preservation."
 disposition = "fixed"
 owner = "retrieval"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WejxM"
 tests = [
   "test_longer_all_caps_word_styling_preserves_ordinary_metric_identity",
   "test_exact_scan_matches_longer_all_caps_word_typography",
@@ -38,6 +40,7 @@ invariant = "Not-found authority requires complete analysis context around every
 finding = "A bounded display excerpt could hide a later value in the same source chunk."
 disposition = "fixed"
 owner = "absence"
+source = "PR4:review-memo:proof-context-completeness"
 tests = [
   "test_complete_same_chunk_context_blocks_absence_beyond_display_window",
   "test_ambiguous_abbreviation_punctuation_cannot_hide_same_chunk_value",
@@ -60,6 +63,7 @@ invariant = "Temporal anchors use case-folded word identity without inheriting m
 finding = "The temporal anchor FY 2025 failed to bind to its all-caps source spelling."
 disposition = "fixed"
 owner = "binding"
+source = "PR4:review-memo:temporal-token-kind"
 tests = ["test_temporal_anchor_casefolding_does_not_inherit_metric_initialism_identity"]
 
 [[invariant]]
@@ -70,6 +74,7 @@ invariant = "An exhaustive exact scan exceeding its breadth budget fails closed 
 finding = "A common metric could force an unbounded exact scan."
 disposition = "fixed"
 owner = "retrieval"
+source = "PR4:review-memo:exact-scan-breadth"
 tests = [
   "test_exact_metric_scan_counts_before_materializing_too_broad_result",
   "test_too_broad_exact_scan_is_typed_incomplete_not_absence",
@@ -82,7 +87,9 @@ severity = "P3"
 invariant = "Value-first collective conflict syntax remains unverified unless each operand has a local positive metric binding."
 finding = "A value-first collective conflict phrase is unsupported."
 disposition = "accepted_limitation"
+authority_effect = "false_negative_only"
 owner = "verification"
+source = "PR4:review-memo:value-first-conflict-syntax"
 tests = ["test_collective_conflict_profile_rejects_competing_subjects_and_tails"]
 
 [[invariant]]
@@ -93,6 +100,7 @@ invariant = "The shared embedding client closes exactly once only after service-
 finding = "CorpusStore retained its lazy client, and a bounded shutdown could close it while a run task remained alive."
 disposition = "fixed"
 owner = "retrieval"
+source = "PR4:review-memo:shared-client-lifecycle"
 tests = [
   "test_corpus_store_closes_shared_embedding_client_exactly_once",
   "test_shutdown_reports_pending_before_shared_dependencies_may_close",
@@ -110,6 +118,7 @@ invariant = "Qualitative values use case-folded word identity without weakening 
 finding = "The qualitative value AA was misclassified as an initialism and failed to bind to aa."
 disposition = "fixed"
 owner = "binding"
+source = "PR4:review-thread:PRRT_kwDOTnrM486WenWA"
 tests = [
   "test_qualitative_value_identity_is_casefolded_without_weakening_metric_identity",
   "test_qualitative_conflict_uses_the_same_casefolded_value_identity_as_binding",
@@ -123,4 +132,61 @@ invariant = "Unknown severities and malformed invariant IDs cannot bypass the me
 finding = "A severity typo such as P01 was accepted and escaped the open P0/P1 check."
 disposition = "fixed"
 owner = "quality"
+source = "PR4:review-memo:invariant-registry-schema"
 tests = ["test_review_invariant_registry_rejects_schema_typos_that_bypass_policy"]
+
+[[invariant]]
+id = "INV-ABSENCE-009"
+family = "occurrence-classification"
+severity = "P1"
+invariant = "Every exact metric occurrence must be positively classified as benign before it may authorize not-found; unknown syntax fails closed."
+finding = "Unknown structural references such as This value and possessive metric references could hide present evidence behind an authoritative absence conclusion."
+disposition = "fixed"
+owner = "absence"
+source = "PR4:review-thread:PRRT_kwDOTnrM486Wfpk-"
+tests = [
+  "test_unknown_structural_reference_never_authorizes_absence",
+  "test_unknown_structural_reference_chain_never_becomes_not_found",
+  "test_replacing_known_coreference_with_unknown_never_strengthens_absence",
+  "test_only_named_benign_metric_profiles_can_authorize_absence",
+]
+
+[[invariant]]
+id = "INV-METRIC-006"
+family = "metric-identity"
+severity = "P1"
+invariant = "A bare compact metric token in an all-caps assertion cannot authorize evidence without a dotted or multi-token disambiguator."
+finding = "In all-caps source typography, IT WAS could mean either the initialism IT or the pronoun It."
+disposition = "fixed"
+owner = "binding"
+source = "PR4:review-memo:compact-uppercase-ambiguity"
+tests = [
+  "test_bare_compact_initialism_in_all_caps_assertion_fails_closed",
+  "test_bare_compact_all_caps_ambiguity_cannot_become_authoritative",
+  "test_compact_initialism_requires_source_disambiguation_in_all_caps",
+]
+
+[[invariant]]
+id = "INV-RESOURCE-003"
+family = "resource-lifecycle"
+severity = "P2"
+invariant = "Corpus-build embedding calls use an explicitly closed client with hidden retries disabled and truthful retry provenance."
+finding = "CorpusBuilder retained implicit synchronous client ownership while recording an unconfigured retry count of zero."
+disposition = "fixed"
+owner = "corpus"
+source = "PR4:review-memo:builder-client-provenance"
+tests = ["test_corpus_builder_embedding_client_has_explicit_lifetime_and_retry_policy"]
+
+[[invariant]]
+id = "INV-PROCESS-002"
+family = "review-process"
+severity = "P1"
+invariant = "P0 and P1 findings cannot be marked accepted limitations; accepted lower-severity limitations must prove false-negative-only authority."
+finding = "The registry schema permitted a merge-blocking authority defect to be labeled accepted_limitation."
+disposition = "fixed"
+owner = "quality"
+source = "PR4:review-memo:accepted-limitation-policy"
+tests = [
+  "test_merge_blockers_cannot_be_blessed_as_accepted_limitations",
+  "test_accepted_limitations_require_false_negative_only_proof",
+]

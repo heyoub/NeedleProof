@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
+import needleproof_api.corpus as corpus_module
 import numpy as np
 import pytest
 from needleproof_api.chunk_ids import chunk_id_to_uint64
@@ -26,6 +28,53 @@ def test_manifest_is_canonical_and_seeded(settings):
     assert manifest["document_count"] == 1
     assert manifest["chunk_count"] == 5
     assert manifest["documents"][0]["included_pages"] == [3, 4, 5, 6]
+
+
+def test_corpus_builder_embedding_client_has_explicit_lifetime_and_retry_policy(
+    monkeypatch,
+    tmp_path,
+):
+    client_arguments: dict[str, object] = {}
+    exited = False
+
+    class Usage:
+        def model_dump(self):
+            return {"prompt_tokens": 1, "total_tokens": 1}
+
+    class Embeddings:
+        def create(self, **arguments):
+            assert arguments["dimensions"] == 8
+            return SimpleNamespace(
+                data=[SimpleNamespace(embedding=[1.0] * 8)],
+                usage=Usage(),
+                id="embed_test",
+                _request_id="req_test",
+            )
+
+    class Client:
+        def __init__(self, **arguments):
+            client_arguments.update(arguments)
+            self.embeddings = Embeddings()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            nonlocal exited
+            del exc_type, exc, traceback
+            exited = True
+
+    monkeypatch.setattr(corpus_module, "OpenAI", Client)
+    builder = CorpusBuilder(
+        Settings(data_dir=tmp_path, embedding_dimensions=8, soft_timeout_seconds=45.0)
+    )
+
+    vectors, calls = builder._embed(["one input"])
+
+    assert exited is True
+    assert client_arguments == {"max_retries": 0, "timeout": 30.0}
+    assert vectors.shape == (1, 8)
+    assert calls[0]["retry_count"] == 0
 
 
 def test_answer_key_is_not_in_seeded_source_selection():

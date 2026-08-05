@@ -23,10 +23,17 @@ from .exact_scan import (
 from .models import (
     AbsenceConclusion,
     AbsenceProbeResult,
+    BenignMentionProfile,
+    BenignMetricMention,
     ChunkRecord,
     CompletedSearchRecord,
+    MetricEvidenceCandidateOccurrence,
+    MetricEvidenceReason,
     MetricOccurrence,
+    MetricOccurrenceAnalysis,
     SearchResult,
+    UnknownMetricOccurrence,
+    UnknownOccurrenceReason,
     ValueCandidate,
 )
 from .util import (
@@ -37,7 +44,7 @@ from .util import (
     sha256_text,
 )
 
-ABSENCE_PROTOCOL_VERSION = "bounded-absence-v23-full-context-qualitative-chains"
+ABSENCE_PROTOCOL_VERSION = "bounded-absence-v24-typed-occurrence-classification"
 ABSENCE_METRIC_CONTEXT_CHARACTERS = 384
 ABSENCE_MIN_TOP_K = 8
 ABSENCE_CONTEXT_MAX_OPENED_CHUNKS = 50
@@ -56,6 +63,22 @@ _POTENTIAL_ANAPHORIC_PREDICATE_LEAD = re.compile(
     re.IGNORECASE,
 )
 _QUALITATIVE_WORD = re.compile(r"[^\W\d_]+")
+_BENIGN_RUBRIC_REFERENCE = re.compile(
+    r"\b(?:rubric|instruction|guide|prompt|request(?:ed)?|extract|"
+    r"mention(?:ed|s)?|list(?:ed|s)?)\b",
+    re.IGNORECASE,
+)
+_BENIGN_SOURCE_LABEL = re.compile(
+    r"^\s*[-—–:]\s*[\"'“‘]?(?:source\s+)?(?:quote|passage|text)\b",
+    re.IGNORECASE,
+)
+_BENIGN_STANDALONE_REMAINDER = re.compile(r"^[\s\d.)\]}>:—–-]*$")
+_POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD = re.compile(
+    r"\s*(?:(?:by|at|as\s+of|on|for|in|during|through)\b[^.!?]*?\s+)?"
+    r"(?:(?:this|that|these|those|its|their|his|her|such)\b|"
+    r"(?:the\s+)?(?:[^\W\d_]+(?:[-\s]+[^\W\d_]+){0,3})(?:'s|’s)\b)",
+    re.IGNORECASE,
+)
 AbsenceMode = Literal["lexical"]
 ABSENCE_PROBE_TEMPLATES: tuple[tuple[str, AbsenceMode], ...] = (
     ("{metric}", "lexical"),
@@ -89,6 +112,10 @@ ABSENCE_PROTOCOL_SPEC = {
     ),
     "qualitative_predicate_policy": (
         "known_positive_connector_after_bounded_punctuation_free_qualifiers_requires_review"
+    ),
+    "occurrence_authority_policy": (
+        "every_exact_occurrence_must_be_typed_benign;"
+        "reviewable_evidence_blocks_absence;unknown_structure_requires_review"
     ),
     "metric_context_characters": ABSENCE_METRIC_CONTEXT_CHARACTERS,
     "metric_context_policy": ("full_opened_source_chain_with_bounded_display_excerpt"),
@@ -239,6 +266,68 @@ def derive_absence_conclusion(probe: AbsenceProbeResult) -> AbsenceConclusion:
     return AbsenceConclusion.NOT_FOUND_IN_PROBE
 
 
+def _benign_metric_mention_profile(
+    occurrence: MetricOccurrence,
+) -> BenignMentionProfile | None:
+    """Recognize the closed set of non-evidentiary metric mention shapes."""
+
+    metric_start, metric_end = occurrence.span
+    boundaries = punctuation_boundaries(occurrence.sentence)
+    metric_sentence_end = next(
+        (end for start, end in boundaries if start >= metric_end),
+        len(occurrence.sentence),
+    )
+    metric_sentence = occurrence.sentence[:metric_sentence_end]
+    prefix = metric_sentence[:metric_start]
+    suffix = metric_sentence[metric_end:]
+    following = occurrence.sentence[metric_sentence_end:].strip()
+    if following and _POTENTIAL_UNKNOWN_STRUCTURAL_REFERENCE_LEAD.match(following):
+        return None
+    if "?" in metric_sentence:
+        return BenignMentionProfile.QUESTION
+    if _BENIGN_SOURCE_LABEL.match(suffix):
+        return BenignMentionProfile.SOURCE_LABEL
+    if _BENIGN_RUBRIC_REFERENCE.search(prefix) or _BENIGN_RUBRIC_REFERENCE.search(suffix):
+        return BenignMentionProfile.RUBRIC_REFERENCE
+    if not _BENIGN_STANDALONE_REMAINDER.fullmatch(prefix + suffix):
+        return None
+    if following:
+        return None
+    return BenignMentionProfile.STANDALONE_LABEL
+
+
+def _analyze_metric_occurrence(
+    metric: str,
+    display_occurrence: MetricOccurrence,
+    proof_occurrence: MetricOccurrence,
+) -> MetricOccurrenceAnalysis:
+    """Classify one exact occurrence; unknown syntax never counts as benign."""
+
+    reasons: list[MetricEvidenceReason] = []
+    if _metric_context_numeric_candidates(proof_occurrence):
+        reasons.append(MetricEvidenceReason.NUMERIC_CANDIDATE)
+    if _has_structural_anaphoric_qualitative_predicate(proof_occurrence):
+        reasons.append(MetricEvidenceReason.QUALITATIVE_PREDICATE)
+    if has_unresolved_metric_predicate(metric, proof_occurrence.sentence):
+        reasons.append(MetricEvidenceReason.UNRESOLVED_PREDICATE)
+    if reasons:
+        return MetricEvidenceCandidateOccurrence(
+            occurrence=display_occurrence,
+            reasons=list(dict.fromkeys(reasons)),
+        )
+    profile = _benign_metric_mention_profile(proof_occurrence)
+    if profile is not None:
+        return BenignMetricMention(occurrence=display_occurrence, profile=profile)
+
+    metric_sentence_end, _structural_chain = _structural_anaphoric_context(proof_occurrence)
+    reason = (
+        UnknownOccurrenceReason.UNKNOWN_STRUCTURAL_CONTINUATION
+        if proof_occurrence.sentence[metric_sentence_end:].strip()
+        else UnknownOccurrenceReason.UNCLASSIFIED_METRIC_CONTEXT
+    )
+    return UnknownMetricOccurrence(occurrence=display_occurrence, reason=reason)
+
+
 def _structural_anaphoric_context(
     occurrence: MetricOccurrence,
 ) -> tuple[int, tuple[tuple[int, int], ...]]:
@@ -322,6 +411,7 @@ def derive_absence_conclusion_against_corpus(
 
     expected_occurrences: set[tuple[ChunkId, str, tuple[int, int]]] = set()
     review_required = False
+    unknown_occurrence = False
     for chunk in chunks:
         for metric_start, metric_end in word_phrase_spans(probe.metric, chunk.normalized_text):
             analyzed = _metric_occurrence_with_open_neighbors(
@@ -334,14 +424,18 @@ def derive_absence_conclusion_against_corpus(
                 return AbsenceConclusion.INCOMPLETE_PROBE
             occurrence = analyzed.display_occurrence
             expected_occurrences.add((occurrence.chunk_id, occurrence.sentence, occurrence.span))
-            review_required = (
-                review_required
-                or has_unresolved_metric_predicate(
-                    probe.metric,
-                    analyzed.proof_occurrence.sentence,
-                )
-                or _has_structural_anaphoric_qualitative_predicate(analyzed.proof_occurrence)
-                or bool(_metric_context_numeric_candidates(analyzed.proof_occurrence))
+            occurrence_analysis = _analyze_metric_occurrence(
+                probe.metric,
+                analyzed.display_occurrence,
+                analyzed.proof_occurrence,
+            )
+            review_required = review_required or isinstance(
+                occurrence_analysis,
+                MetricEvidenceCandidateOccurrence,
+            )
+            unknown_occurrence = unknown_occurrence or isinstance(
+                occurrence_analysis,
+                UnknownMetricOccurrence,
             )
 
     recorded_occurrences = {
@@ -351,6 +445,8 @@ def derive_absence_conclusion_against_corpus(
     if recorded_occurrences != expected_occurrences:
         return AbsenceConclusion.INCOMPLETE_PROBE
     if review_required:
+        return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    if unknown_occurrence:
         return AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
     return AbsenceConclusion.NOT_FOUND_IN_PROBE
 
@@ -589,10 +685,19 @@ async def probe_metric_absence(
             )
             missing_open_edge_neighbor = missing_open_edge_neighbor or not analyzed.complete
             occurrences.append(analyzed.display_occurrence)
-            if has_unresolved_metric_predicate(
+            occurrence_analysis = _analyze_metric_occurrence(
                 metric,
-                analyzed.proof_occurrence.sentence,
-            ) or _has_structural_anaphoric_qualitative_predicate(analyzed.proof_occurrence):
+                analyzed.display_occurrence,
+                analyzed.proof_occurrence,
+            )
+            if (
+                isinstance(occurrence_analysis, UnknownMetricOccurrence)
+                or has_unresolved_metric_predicate(
+                    metric,
+                    analyzed.proof_occurrence.sentence,
+                )
+                or _has_structural_anaphoric_qualitative_predicate(analyzed.proof_occurrence)
+            ):
                 unresolved_predicates.append(analyzed.display_occurrence)
             for value_text, _span in _metric_context_numeric_candidates(analyzed.proof_occurrence):
                 candidate_key = (chunk.chunk_id, value_text)
@@ -615,7 +720,6 @@ async def probe_metric_absence(
         exact_metric_scan_error = (
             "ContextExpansionLimitExceeded" if context_expansion_limited else "NeighborChunkMissing"
         )
-
     probe = AbsenceProbeResult(
         protocol_version=ABSENCE_PROTOCOL_VERSION,
         metric=metric,

@@ -829,6 +829,52 @@ def test_compact_and_dotted_initialism_authorize_the_same_exact_metric(source_me
     assert reported_value_linked_to_metric("$2 million", "IT", assertion) is not None
 
 
+@pytest.mark.parametrize("metric", ["IT", "US", "AUM"])
+def test_bare_compact_initialism_in_all_caps_assertion_fails_closed(metric):
+    assertion = f"{metric} WAS $2 MILLION."
+
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is None
+
+
+def test_bare_compact_all_caps_ambiguity_cannot_become_authoritative():
+    quote = "IT WAS $2 MILLION."
+    chunk = ChunkRecord(
+        chunk_id=chunk_id_from_uint64(2**63 + 9040),
+        document_id="doc_all_caps_ambiguity",
+        document_name="All-caps ambiguity fixture",
+        physical_page_index=1,
+        chunk_position=0,
+        text=quote,
+        normalized_text=quote,
+        sha256="a" * 64,
+        token_estimate=4,
+    )
+    evidence = reference(chunk.chunk_id, quote, "IT")
+
+    verified = EvidenceVerifier(corpus_with_chunk(chunk)).verify_claim(
+        claim("IT", observation("$2 million", evidence))
+    )
+
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert not verified.evidence[0].metric_value_bound
+    assert (
+        verified.evidence[0].binding_failure_reason
+        == "ambiguous_bare_compact_metric_in_all_caps_assertion"
+    )
+
+
+@pytest.mark.parametrize(
+    ("metric", "assertion"),
+    [
+        ("IT", "IT was $2 million."),
+        ("IT", "I.T. WAS $2 MILLION."),
+        ("IT spending", "IT SPENDING WAS $2 MILLION."),
+    ],
+)
+def test_compact_initialism_requires_source_disambiguation_in_all_caps(metric, assertion):
+    assert reported_value_linked_to_metric("$2 million", metric, assertion) is not None
+
+
 def test_conflict_ownership_cannot_borrow_pronoun_value_for_initialism():
     sentence = "It was $2 million."
     measurements = [

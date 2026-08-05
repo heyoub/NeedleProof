@@ -18,6 +18,7 @@ def _registry_errors(invariants: list[dict[str, object]], test_names: set[str]) 
         identifier = str(item.get("id", ""))
         severity = str(item.get("severity", ""))
         disposition = str(item.get("disposition", ""))
+        source = str(item.get("source", ""))
         tests = item.get("tests")
         if re.fullmatch(r"INV-[A-Z]+-\d{3}", identifier) is None:
             errors.append(f"invalid invariant ID: {identifier}")
@@ -25,12 +26,24 @@ def _registry_errors(invariants: list[dict[str, object]], test_names: set[str]) 
             errors.append(f"invalid severity for {identifier}: {severity}")
         if disposition not in dispositions:
             errors.append(f"invalid disposition for {identifier}: {disposition}")
+        if re.fullmatch(r"PR\d+:(?:review-thread|review-memo):[A-Za-z0-9_.:-]+", source) is None:
+            errors.append(f"invalid or missing review source for {identifier}: {source}")
         if not item.get("owner") or not isinstance(tests, list) or not tests:
             errors.append(f"owner and tests are required for {identifier}")
         elif not set(map(str, tests)) <= test_names:
             errors.append(f"unknown test reference for {identifier}")
-        if severity in {"P0", "P1"} and disposition == "open":
-            errors.append(f"merge-blocking invariant remains open: {identifier}")
+        if severity in {"P0", "P1"} and disposition not in {
+            "fixed",
+            "invalid",
+            "superseded",
+        }:
+            errors.append(f"merge-blocking invariant is not closed safely: {identifier}")
+        if disposition == "accepted_limitation" and item.get("authority_effect") != (
+            "false_negative_only"
+        ):
+            errors.append(
+                f"accepted limitation must prove false-negative-only authority: {identifier}"
+            )
     return errors
 
 
@@ -58,6 +71,7 @@ def test_review_invariant_registry_rejects_schema_typos_that_bypass_policy():
         "finding": "Mutation fixture.",
         "disposition": "fixed",
         "owner": "quality",
+        "source": "PR4:review-memo:registry-mutation",
         "tests": ["test_review_invariant_registry_rejects_schema_typos_that_bypass_policy"],
     }
     mutations = (
@@ -68,3 +82,36 @@ def test_review_invariant_registry_rejects_schema_typos_that_bypass_policy():
     )
 
     assert all(_registry_errors([mutation], _test_names()) for mutation in mutations)
+
+
+def test_merge_blockers_cannot_be_blessed_as_accepted_limitations():
+    limitation: dict[str, object] = {
+        "id": "INV-PROCESS-002",
+        "family": "review-process",
+        "severity": "P1",
+        "invariant": "Authority-increasing limitations cannot bypass readiness.",
+        "finding": "Mutation fixture.",
+        "disposition": "accepted_limitation",
+        "authority_effect": "false_negative_only",
+        "owner": "quality",
+        "source": "PR4:review-memo:accepted-limitation-mutation",
+        "tests": ["test_merge_blockers_cannot_be_blessed_as_accepted_limitations"],
+    }
+
+    assert _registry_errors([limitation], _test_names())
+
+
+def test_accepted_limitations_require_false_negative_only_proof():
+    limitation: dict[str, object] = {
+        "id": "INV-PROCESS-003",
+        "family": "review-process",
+        "severity": "P3",
+        "invariant": "Accepted syntax limitations cannot increase authority.",
+        "finding": "Mutation fixture.",
+        "disposition": "accepted_limitation",
+        "owner": "quality",
+        "source": "PR4:review-memo:authority-effect-mutation",
+        "tests": ["test_accepted_limitations_require_false_negative_only_proof"],
+    }
+
+    assert _registry_errors([limitation], _test_names())

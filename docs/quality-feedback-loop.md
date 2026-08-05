@@ -55,6 +55,7 @@ The goal is cumulative: every real failure should permanently narrow the space i
 class of bug can return.
 
 Review-derived invariants and explicit limitations are adjudicated in
-[`invariants.toml`](./invariants.toml). A P0/P1 entry may not remain `open` when a pull request is
-marked ready; `invalid`, `superseded`, and `accepted_limitation` are legitimate outcomes when they
-are explicit and tested. The registry is a stopping rule, not a scoreboard for bot comment volume.
+[`invariants.toml`](./invariants.toml). A P0/P1 entry may be closed only as `fixed`, `invalid`, or
+`superseded` when a pull request is marked ready. `accepted_limitation` is reserved for P2/P3
+false-negative-only boundaries with an explicit authority-effect regression. Every entry names its
+review source. The registry is a stopping rule, not a scoreboard for bot comment volume.

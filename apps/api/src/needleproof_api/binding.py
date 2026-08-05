@@ -143,7 +143,7 @@ _EXPLICIT_QUALITATIVE_NEGATION = re.compile(
 )
 
 BINDING_CONTRACT_SPEC = {
-    "version": "positive-bindings-v16-separated-metric-value-temporal-identity",
+    "version": "positive-bindings-v17-all-caps-compact-disambiguation",
     "profiles": [profile.value for profile in BindingProfile],
     "authorized_observation_kinds": sorted(kind.value for kind in AUTHORIZED_OBSERVATION_KINDS),
     "copula_pattern": _COPULA.pattern,
@@ -176,6 +176,10 @@ BINDING_CONTRACT_SPEC = {
     "metric_phrase_separator_policy": (
         "shared_span_preserving_kind_aware_tokens_with_2_to_3_letter_compact_dotted_"
         "initialism_equivalence_and_longer_uppercase_word_typography"
+    ),
+    "bare_compact_all_caps_policy": (
+        "reject_single_compact_metric_in_all_caps_assertion_unless_source_is_dotted_or_metric_"
+        "phrase_has_multiple_tokens"
     ),
     "qualitative_value_identity": "normalized_casefolded_word_token_sequence",
     "qualitative_value_token_kind": "ignored_while_metric_token_kind_remains_authoritative",
@@ -572,6 +576,27 @@ def _metric_prefix_is_authorized(
     return bool(_DIRECT_METRIC_PREFIX.fullmatch(assertion[: metric_span[0]]))
 
 
+def _bare_compact_metric_is_ambiguous_all_caps(
+    metric: str,
+    assertion: str,
+    metric_span: Span,
+) -> bool:
+    """Reject a bare compact token whose all-caps source cannot disambiguate pronoun typography."""
+
+    metric_lexemes = metric_tokens(metric)
+    if (
+        len(metric_lexemes) != 1
+        or not metric_lexemes[0].is_initialism
+        or "." in metric
+        or "." in assertion[metric_span[0] : metric_span[1]]
+    ):
+        return False
+    cased_characters = [character for character in assertion if character.isalpha()]
+    return bool(cased_characters) and all(
+        character == character.upper() for character in cased_characters
+    )
+
+
 def bind_observation(
     *,
     metric_anchor: str,
@@ -606,7 +631,15 @@ def bind_observation(
     ):
         return BindingResult(None, True, "value_role_not_authorized")
 
+    ambiguous_compact_metric = False
     for metric_span in metric_spans:
+        if _bare_compact_metric_is_ambiguous_all_caps(
+            normalized_metric,
+            normalized_assertion,
+            metric_span,
+        ):
+            ambiguous_compact_metric = True
+            continue
         for value_span in value_spans:
             if value_span[0] < metric_span[1]:
                 continue
@@ -657,4 +690,12 @@ def bind_observation(
                 True,
                 None,
             )
-    return BindingResult(None, True, "no_positive_binding_profile")
+    return BindingResult(
+        None,
+        True,
+        (
+            "ambiguous_bare_compact_metric_in_all_caps_assertion"
+            if ambiguous_compact_metric
+            else "no_positive_binding_profile"
+        ),
+    )

@@ -6,6 +6,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from needleproof_api.absence import (
+    _analyze_metric_occurrence,
     _metric_context_numeric_candidates,
     derive_absence_conclusion,
     derive_absence_conclusion_against_corpus,
@@ -36,6 +37,59 @@ def exact_scan(*chunks: ChunkRecord) -> ExactMetricScanComplete:
         candidate_count=len(chunks),
         character_count=sum(len(chunk.normalized_text) for chunk in chunks),
     )
+
+
+class AbsenceShapeCorpus:
+    corpus_version = "v_0000000000000099"
+
+    def __init__(self, metric: str, *texts: str):
+        self.metric = metric
+        ids = [chunk_id_from_uint64(2**63 + 9000 + index) for index in range(len(texts))]
+        self.chunks = [
+            ChunkRecord(
+                chunk_id=chunk_id,
+                document_id="doc_absence_shape",
+                document_name="Absence shape fixture",
+                physical_page_index=1,
+                chunk_position=index,
+                text=text,
+                normalized_text=text,
+                previous_chunk_id=ids[index - 1] if index else None,
+                next_chunk_id=ids[index + 1] if index + 1 < len(ids) else None,
+                sha256=f"{index + 1:064x}",
+                token_estimate=max(1, len(text.split())),
+            )
+            for index, (chunk_id, text) in enumerate(zip(ids, texts, strict=True))
+        ]
+        self.by_id = {chunk.chunk_id: chunk for chunk in self.chunks}
+
+    async def search(self, query, *, mode, top_k, recorder=None):
+        del recorder, top_k
+        return SearchResult(
+            query=query,
+            mode=mode,
+            corpus_manifest_sha256="f" * 64,
+            results=[],
+        )
+
+    def get_chunks(self, chunk_ids, neighbor_radius=0):
+        selected = set(chunk_ids)
+        if neighbor_radius:
+            for chunk_id in tuple(selected):
+                chunk = self.by_id.get(chunk_id)
+                if chunk is None:
+                    continue
+                if chunk.previous_chunk_id is not None:
+                    selected.add(chunk.previous_chunk_id)
+                if chunk.next_chunk_id is not None:
+                    selected.add(chunk.next_chunk_id)
+        return [chunk for chunk in self.chunks if chunk.chunk_id in selected]
+
+    def find_exact_metric_chunks(self, metric):
+        assert metric == self.metric
+        return exact_scan(
+            *(chunk for chunk in self.chunks if word_phrase_spans(metric, chunk.normalized_text))
+        )
 
 
 @pytest.mark.asyncio
@@ -109,6 +163,121 @@ async def test_bounded_absence_probe_rejects_metric_with_returned_value(corpus):
     assert verified.status == ClaimStatus.UNVERIFIED
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metric", "continuation"),
+    [
+        ("Revenue", "This value was $2 million."),
+        ("Revenue", "That figure was $2 million."),
+        ("Revenue", "Its value was $2 million."),
+        ("Revenue", "Their value was $2 million."),
+        ("Revenue", "The metric's value was $2 million."),
+        ("Revenue", "This amount stood at $2 million."),
+        ("Revenue", "That reported figure remained stable."),
+        ("Credit rating", "Its rating became AA."),
+        ("Credit rating", "Their recorded status was unchanged."),
+    ],
+)
+@pytest.mark.parametrize("linked", [False, True])
+@pytest.mark.parametrize("terminal_punctuation", [False, True])
+async def test_unknown_structural_reference_never_authorizes_absence(
+    metric,
+    continuation,
+    linked,
+    terminal_punctuation,
+):
+    continuation = continuation if terminal_punctuation else continuation.rstrip(".")
+    texts = (f"{metric}.", continuation) if linked else (f"{metric}. {continuation}",)
+    corpus = AbsenceShapeCorpus(metric, *texts)
+
+    probe = await probe_metric_absence(corpus, metric)
+    recomputed = derive_absence_conclusion_against_corpus(probe, corpus)
+    forged = probe.model_copy(
+        update={
+            "conclusion": AbsenceConclusion.NOT_FOUND_IN_PROBE,
+            "exact_metric_scan_completed": True,
+            "exact_metric_scan_error": None,
+            "unresolved_predicate_occurrences": [],
+            "supporting_value_candidates": [],
+        }
+    )
+    forged_recomputed = derive_absence_conclusion_against_corpus(forged, corpus)
+    verified = EvidenceVerifier(corpus).verify_claim(
+        DraftClaim(metric=metric, request_absence_probe=True),
+        absence_probe=forged,
+    )
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert recomputed == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert forged_recomputed == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert verified.status == ClaimStatus.UNVERIFIED
+    assert probe.exact_metric_scan_completed is True
+    assert probe.exact_metric_scan_error is None
+
+
+@pytest.mark.asyncio
+async def test_unknown_structural_reference_chain_never_becomes_not_found():
+    corpus = AbsenceShapeCorpus(
+        "Revenue",
+        "Revenue. This value remained at the prior level. That figure was $2 million.",
+    )
+
+    probe = await probe_metric_absence(corpus, "Revenue")
+
+    assert probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert (
+        derive_absence_conclusion_against_corpus(probe, corpus)
+        == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recognized", "unknown"),
+    [
+        ("It was $2 million.", "This value was $2 million."),
+        ("They were $2 million.", "Their value was $2 million."),
+        ("The reported metric was stable.", "That reported figure was stable."),
+    ],
+)
+async def test_replacing_known_coreference_with_unknown_never_strengthens_absence(
+    recognized,
+    unknown,
+):
+    recognized_corpus = AbsenceShapeCorpus("Revenue", f"Revenue. {recognized}")
+    unknown_corpus = AbsenceShapeCorpus("Revenue", f"Revenue. {unknown}")
+
+    recognized_probe = await probe_metric_absence(recognized_corpus, "Revenue")
+    unknown_probe = await probe_metric_absence(unknown_corpus, "Revenue")
+
+    assert recognized_probe.conclusion == AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW
+    assert unknown_probe.conclusion in {
+        AbsenceConclusion.EVIDENCE_REQUIRES_REVIEW,
+        AbsenceConclusion.INCOMPLETE_PROBE,
+    }
+    assert unknown_probe.conclusion != AbsenceConclusion.NOT_FOUND_IN_PROBE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Question: what was Total headcount?",
+        "The rubric mentions Total headcount.",
+        'Total headcount - "source quote" is the exact sentence.',
+        "Total headcount.",
+    ],
+)
+async def test_only_named_benign_metric_profiles_can_authorize_absence(text):
+    corpus = AbsenceShapeCorpus("Total headcount", text)
+
+    probe = await probe_metric_absence(corpus, "Total headcount")
+
+    assert probe.conclusion == AbsenceConclusion.NOT_FOUND_IN_PROBE
+    assert probe.exact_metric_scan_completed is True
+    assert probe.exact_metric_scan_error is None
+
+
 def test_exact_metric_scan_normalizes_pdf_linebreak_dehyphenation(corpus):
     scan = corpus.find_exact_metric_chunks("Fee-earn-\ning AUM")
 
@@ -119,6 +288,48 @@ def test_exact_metric_scan_normalizes_pdf_linebreak_dehyphenation(corpus):
 
 def test_metric_phrase_matching_does_not_match_inside_trauma():
     assert word_phrase_spans("AUM", "trauma") == []
+
+
+@given(
+    metric_sentence=st.sampled_from(
+        [
+            "Revenue.",
+            "Question: what was Revenue?",
+            "The rubric mentions Revenue.",
+            'Revenue - "source quote" is required.',
+        ]
+    ),
+    reference=st.sampled_from(
+        [
+            "This value",
+            "That figure",
+            "Its value",
+            "Their recorded amount",
+            "The metric's value",
+        ]
+    ),
+    predicate=st.sampled_from(
+        ["was $2 million", "stood at $2 million", "remained stable", "became AA"]
+    ),
+    punctuation=st.sampled_from([".", "!", "?", ""]),
+)
+def test_unknown_reference_shape_can_never_classify_as_benign(
+    metric_sentence,
+    reference,
+    predicate,
+    punctuation,
+):
+    text = f"{metric_sentence} {reference} {predicate}{punctuation}"
+    metric_start = text.index("Revenue")
+    occurrence = MetricOccurrence(
+        chunk_id=chunk_id_from_uint64(2**63 + 9010),
+        sentence=text,
+        span=(metric_start, metric_start + len("Revenue")),
+    )
+
+    analysis = _analyze_metric_occurrence("Revenue", occurrence, occurrence)
+
+    assert analysis.kind != "benign"
 
 
 @given(

@@ -16,7 +16,7 @@ from openai import OpenAI
 from pypdf import PdfReader
 
 from .chunk_ids import ChunkId, chunk_id_from_uint64
-from .config import Settings
+from .config import OPENAI_CLIENT_MAX_RETRIES, Settings
 from .models import ChunkRecord, CorpusSummary
 from .util import (
     atomic_write_text,
@@ -257,40 +257,45 @@ class CorpusBuilder:
         self.settings = settings
 
     def _embed(self, texts: list[str]) -> tuple[np.ndarray, list[dict[str, Any]]]:
-        client = OpenAI()
         vectors: list[list[float]] = []
         calls: list[dict[str, Any]] = []
         batch_size = 100
-        for start in range(0, len(texts), batch_size):
-            batch = texts[start : start + batch_size]
-            started_at = utc_now_iso()
-            import time
+        with OpenAI(
+            max_retries=OPENAI_CLIENT_MAX_RETRIES,
+            timeout=min(30.0, self.settings.soft_timeout_seconds),
+        ) as client:
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
+                started_at = utc_now_iso()
+                import time
 
-            clock = time.perf_counter()
-            response = client.embeddings.create(
-                model=self.settings.embedding_model,
-                input=batch,
-                dimensions=self.settings.embedding_dimensions,
-                encoding_format="float",
-            )
-            ended_at = utc_now_iso()
-            vectors.extend(item.embedding for item in response.data)
-            usage = response.usage.model_dump() if response.usage else {}
-            calls.append(
-                {
-                    "operation": "embedding",
-                    "model": self.settings.embedding_model,
-                    "response_id": getattr(response, "id", None),
-                    "request_id": getattr(response, "_request_id", None),
-                    "started_at": started_at,
-                    "ended_at": ended_at,
-                    "duration_ms": round((time.perf_counter() - clock) * 1000, 3),
-                    "token_usage": usage,
-                    "retry_count": 0,
-                    "error": None,
-                    "input_count": len(batch),
-                }
-            )
+                clock = time.perf_counter()
+                response = client.embeddings.create(
+                    model=self.settings.embedding_model,
+                    input=batch,
+                    dimensions=self.settings.embedding_dimensions,
+                    encoding_format="float",
+                )
+                ended_at = utc_now_iso()
+                vectors.extend(item.embedding for item in response.data)
+                usage = response.usage.model_dump() if response.usage else {}
+                calls.append(
+                    {
+                        "operation": "embedding",
+                        "model": self.settings.embedding_model,
+                        "response_id": getattr(response, "id", None),
+                        "request_id": getattr(response, "_request_id", None),
+                        "started_at": started_at,
+                        "ended_at": ended_at,
+                        "duration_ms": round((time.perf_counter() - clock) * 1000, 3),
+                        "token_usage": usage,
+                        # Hidden client retries are disabled, so this is the
+                        # observed retry count rather than a configured limit.
+                        "retry_count": 0,
+                        "error": None,
+                        "input_count": len(batch),
+                    }
+                )
         return l2_normalize(np.asarray(vectors, dtype=np.float32)), calls
 
     def build(self) -> CorpusSummary:

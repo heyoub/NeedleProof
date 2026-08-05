@@ -121,6 +121,12 @@ Proof analysis uses that full opened source chain; only the separate fixed 384-c
 both sides of every complete metric occurrence is bounded for the receipt and UI. A missing link,
 cycle, or context-budget overflow makes the probe incomplete. This deliberately accepts some
 false-negative review outcomes rather than treating an omitted source tail as proof of absence.
+Every exact occurrence is then classified into one closed typed outcome: a named benign mention,
+a reviewable evidence candidate, or unknown structure. Only questions, source labels, rubric or
+instruction references, and terminal standalone labels are currently benign. Reviewable evidence
+and unknown structure both require review. The classifier therefore proves a
+mention harmless rather than treating an unrecognized reference such as `This value`, `Its value`,
+or `The metric's value` as evidence of absence.
 Values before the metric require a closed
 `VALUE in/of METRIC` bridge. Forward values require either the metric's own assertion or a
 contiguous chain of structurally recognized anaphoric reporting assertions; reference phrases are
@@ -133,6 +139,9 @@ not attempt sentence parsing, so punctuation inside abbreviations such as
 “U.S.” cannot hide a metric/value candidate. Compact initialisms retain their token kind, so `IT`
 matches `I.T.` but never the pronoun `It`. If all-caps typography creates a word/initialism
 ambiguity, the exact scan fails closed instead of post-filtering the candidate into `not_found`.
+For positive evidence, a bare compact metric inside an entirely all-caps assertion is also
+ambiguous and cannot authorize a value; an explicit dotted source form, ordinary mixed-case
+predicate, or complete multi-token metric phrase disambiguates it.
 Failed probes, a failed or over-broad exact scan, scoped searches,
 duplicate wording, uninspected candidates, or plausible metric-adjacent values cannot authorize
 absence. An exact metric occurrence with a numeric candidate or known positive qualitative
